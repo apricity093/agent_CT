@@ -24,3 +24,8 @@ examples/*.png
 # Optional virtualenv
 .venv/
 venv/
+
+# else
+plan.md
+AGENTS.md
+report.md
