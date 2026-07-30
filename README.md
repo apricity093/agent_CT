@@ -31,7 +31,9 @@
 ForwardOperator (ABC)          ← 通用基类(线性 + 非线性)
   └── LinearOperator (ABC)     ← 线性算子,附带 adjoint / pseudo_inverse
         ├── ParallelBeamRadon2D
-        └── ASTRAOperator3D
+        ├── ASTRAOperator3D
+        ├── ASTRAFDKOperator3D
+        └── LEAPOperator3D
 ```
 
 求解器据其需求选取算子类型:
@@ -49,7 +51,7 @@ ForwardOperator (ABC)          ← 通用基类(线性 + 非线性)
 
 依赖:
 - 必需: `torch >= 2.0`
-- 可选: `matplotlib`(画图)、`diffusers >= 0.30`(扩散类求解器换更强 UNet / scheduler 时需要)、`astra-toolbox`(3D CT 后端)
+- 可选: `matplotlib`(画图)、`diffusers >= 0.30`(扩散类求解器换更强 UNet / scheduler 时需要)、`astra-toolbox`(ASTRA 3D/FDK CUDA 后端)、LLNL LEAP(`leapctype`,另一套 3D/FDK 后端)
 
 ```bash
 cd /path/to/inv_framework
@@ -74,7 +76,9 @@ inv_framework/
 │   │   ├── noise.py                             # NoiseModel + GaussianNoise / PoissonLogDomainNoise / NoNoise
 │   │   └── ct/                                  # CT 域算子
 │   │       ├── radon_torch.py                   # ParallelBeamRadon2D (纯 torch,默认)
-│   │       └── astra_adapter.py                 # ASTRAOperator3D (可选,需 astra-toolbox)
+│   │       ├── astra_adapter.py                 # ASTRAOperator3D (冻结实现)
+│   │       ├── astra_fdk_adapter.py             # ASTRAFDKOperator3D (完整 FDK_CUDA)
+│   │       └── leap_adapter.py                  # LEAPOperator3D (可选,需 LEAP)
 │   ├── solvers/                                 # 求解器层
 │   │   ├── base.py                              # InverseProblemSolver (ABC)
 │   │   ├── classical.py                         # fbp / sirt / landweber 函数 + 同名 Solver 类
@@ -263,6 +267,7 @@ x_dip  = DIPSolver(num_iterations=1000, lr=1e-3).solve(y, A)
 | `FBPSolver` | `solvers/classical.py` | `scale` | 仅适用 parallel-beam Radon 及自定义 BP 算子 |
 | `SIRTSolver` | 同上 | `num_iterations`, `min_value`, `max_value` | 经典迭代,行/列归一化 |
 | `LandweberSolver` | 同上 | `num_iterations`, `step_size` | 普通梯度下降 |
+| `FDKSolver` | 同上 | backend-specific kwargs | 调用 `ASTRAFDKOperator3D.fdk()` 或 `LEAPOperator3D.fdk()`；普通 operator 明确拒绝 |
 | `DIPSolver` | `solvers/dip.py` | `num_iterations`, `lr`, `input_channels`, `model_factory` | 默认用 `SkipUNet`,可注入自定义网络 |
 | `INRSolver` | `solvers/inr.py` | `num_iterations`, `lr`, `hidden_features`, `hidden_layers` | 默认用 `SIREN` |
 | `DPSSolver` | `solvers/diffusion/dps.py` | `model`, `schedule`, `num_inference_steps`, `scale`, `eta` | 需要训练好的 ε-预测器 |
@@ -422,6 +427,7 @@ class SaltPepperNoise(NoiseModel):
 ```bash
 python tests/test_radon_adjoint.py
 python tests/test_nonlinear_operator.py
+python -m pytest -q test/test_fdk_backend_adapters.py
 ```
 
 测试内容:
@@ -434,6 +440,11 @@ python tests/test_nonlinear_operator.py
   - 非线性 `ForwardOperator` 子类可正常实例化与前传
   - `fbp` / `sirt` / `landweber` 对非线性算子均抛出 `TypeError` 并附说明
   - `DIPSolver` 在非线性算子上能将测量残差降低 10× 以上
+
+- **`test_fdk_backend_adapters.py`**
+  - ASTRA/LEAP fake backend 的 batch、shape、dtype、选项门控与异常清理
+  - LEAP forward autograd backward 与显式 adjoint 一致
+  - ASTRA CUDA 可用时运行真实 cone forward、adjoint 和 FDK 小体积重建
 
 ---
 

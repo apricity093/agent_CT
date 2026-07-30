@@ -14,8 +14,9 @@ inv_framework/
 │   └── ct/
 │       ├── __init__.py
 │       ├── radon_torch.py
-│       ├── astra_adapter.py      # upstream path when merged into original repo
-│       └── astra_3d.py           # local fallback placeholder
+│       ├── astra_adapter.py      # 冻结的 ASTRA 3D 投影适配器
+│       ├── astra_fdk_adapter.py  # ASTRA FP3D/BP3D/FDK_CUDA 完整后端
+│       └── leap_adapter.py       # LEAP project/backproject/FBP 适配器
 ├── regularizers/
 │   ├── __init__.py
 │   ├── base.py
@@ -38,8 +39,9 @@ inv_framework/
 | `operators/base.py` | 定义 `ForwardOperator` 和 `LinearOperator`，是所有正向算子/线性算子的框架接口。 |
 | `operators/noise.py` | 定义噪声模型，包括无噪声、高斯噪声、Poisson log-domain CT 噪声。 |
 | `operators/ct/radon_torch.py` | 纯 PyTorch 2D parallel-beam Radon 算子，支持 forward、adjoint、subset。 |
-| `operators/ct/astra_adapter.py` | 原仓库 ASTRA CUDA3D backend 路径；合入原仓库时应优先保留该文件。 |
-| `operators/ct/astra_3d.py` | 当前本地 fallback 占位接口，用于未来 cone-beam / 3D CT backend。 |
+| `operators/ct/astra_adapter.py` | 2026-06-08 冻结的 ASTRA CUDA3D 投影适配器。 |
+| `operators/ct/astra_fdk_adapter.py` | `ASTRAFDKOperator3D`；通过 ASTRA `FP3D_CUDA`、`BP3D_CUDA` 和 `FDK_CUDA` 提供可执行的完整锥束流程。 |
+| `operators/ct/leap_adapter.py` | `LEAPOperator3D`；包装已配置的 LEAP model，提供 batched PyTorch forward、adjoint 和 cone FDK。 |
 | `regularizers/base.py` | 定义正则项和 proximal operator 抽象。 |
 | `regularizers/tikhonov.py` | 定义恒等或广义线性正则算子下的二次 Tikhonov 正则项。 |
 | `regularizers/tv.py` | 定义二维 isotropic/anisotropic TV 及纯 PyTorch 双变量 FGP proximal。 |
@@ -68,7 +70,9 @@ inv_framework/
 | `ParallelBeamRadon2D` | `operators/ct/radon_torch.py` | 86 | 2D parallel-beam Radon `LinearOperator`，提供 `forward`、`adjoint`、`pseudo_inverse`、`subset`。 |
 | `_RadonFunction` | `operators/ct/radon_torch.py` | 58 | Radon forward 的自定义 autograd function。 |
 | `_RadonAdjointFunction` | `operators/ct/radon_torch.py` | 72 | Radon adjoint 的自定义 autograd function。 |
-| `ASTRAOperator3D` | `operators/ct/astra_adapter.py` 或本地 fallback `operators/ct/astra_3d.py:26` | 26 | 原仓库真实 ASTRA backend 应来自 `astra_adapter.py`；本地 `astra_3d.py` 只是占位 fallback。 |
+| `ASTRAOperator3D` | `operators/ct/astra_adapter.py` | 74 | 冻结的 ASTRA 3D 投影适配器；不提供 `fdk()`。 |
+| `ASTRAFDKOperator3D` | `operators/ct/astra_fdk_adapter.py` | - | 常规 circular `cone` + cubic voxel 门控；支持原生 Ram-Lak、Parker short-scan、voxel supersampling 和 CUDA Tensor 直连。 |
+| `LEAPOperator3D` | `operators/ct/leap_adapter.py` | - | 包装 LEAP `tomographicModels`；内部 float32，返回原 dtype/device；model 有状态，单实例不可跨线程并发。 |
 | `NoiseModel` | `operators/noise.py` | 10 | 噪声模型基类。 |
 | `NoNoise` | `operators/noise.py` | 18 | 恒等噪声模型。 |
 | `GaussianNoise` | `operators/noise.py` | 25 | 加性高斯噪声。 |
@@ -98,7 +102,7 @@ inv_framework/
 | Landweber | 经典 Landweber；`LinearOperator.pseudo_inverse()` 默认方法 | `solvers/classical.py:126` `landweber()` | `solvers/classical.py:315` `LandweberSolver` | Yes | 支持 batch、`x_init`、device/dtype、min/max clamp。 |
 | **CGLS** | `algorithms/cil/CGLS.py` | `solvers/classical.py:149` `cgls()` | `solvers/classical.py:334` `CGLSSolver` | Yes | 保留 CIL CGLS 的 residual、`A^T r`、`alpha/beta` 更新。 |
 | **LSQR** | `algorithms/cil/LSQR.py` | `solvers/classical.py:183` `lsqr()` | `solvers/classical.py:351` `LSQRSolver` | Yes | 保留 Golub-Kahan bidiagonalization，并支持可选 `reg_alpha`。 |
-| **FDK** | TIGRE `FDK` | `solvers/classical.py:244` `fdk()` | `solvers/classical.py:388` `FDKSolver` | Yes | backend-gated；要求 operator 提供 `fdk(y, **kwargs)`，无 backend 时抛 `NotImplementedError`。 |
+| **FDK** | ASTRA `FDK_CUDA`；LEAP `FBP` cone path | `solvers/classical.py:292` `fdk()` | `solvers/classical.py:359` `FDKSolver` | Yes | `ASTRAFDKOperator3D` 提供 ASTRA 完整 weighting/filter/cone-backprojection；`LEAPOperator3D` 提供 LEAP FDK。普通 operator 无 backend 时仍抛 `NotImplementedError`。 |
 
 ### Subset solvers
 
@@ -131,6 +135,17 @@ inv_framework/
 - Regularized: `tikhonov`, `tv_fista`, `TikhonovSolver`, `TVFISTASolver`
 - Statistical: `mlem`, `osem`, `MLEMSolver`, `OSEMSolver`
 
+CT operator 公开导出包括 `ParallelBeamRadon2D`、`ASTRAOperator3D`、
+`ASTRAFDKOperator3D` 和 `LEAPOperator3D`。ASTRA 来源仓库采用 GPL-3.0，
+LEAP 来源仓库采用 MIT；两者均为可选的外部数值后端。
+
+## FDK 后端能力边界
+
+- `ASTRAFDKOperator3D` 只接受 ASTRA regular `cone` geometry 和 cubic voxels；不把 `parallel3d` 或任意 `cone_vec` 几何伪装成已支持。
+- ASTRA adapter 使用官方 `FDK_CUDA` 完成 cone weighting、可选 Parker short-scan weighting、原生 Ram-Lak filter 和 cone backprojection；按 batch 逐样本执行，并在成功或异常时释放临时 algorithm/data IDs。其他 filter 会明确拒绝，不会把 ASTRA 2.2.0 忽略的选项伪装成生效。
+- `LEAPOperator3D` 要求传入已配置 geometry 的 `leapctype.tomographicModels`；只有 `get_geometry()` 返回 `CONE` 时才把 `model.FBP(..., inplace=False)` 暴露为 FDK，其他 geometry 显式拒绝。LEAP model 有状态，同一 adapter 实例不保证线程安全。
+- 两个 adapter 都保持 `(B, *range_shape) -> (B, *domain_shape)`、原始 dtype/device，以及 forward autograd backward 与显式 adjoint 的一致接口。
+
 ## 尚未完整保真适配的算法
 
 以下算法在迁移矩阵或审计文档中已经记录，但当前 `inv_framework` 目录内未实现完整保真版本：
@@ -144,10 +159,7 @@ inv_framework/
 | Tomopy `ospml_*` / `pml_*` | 未实现 | 需要 penalized likelihood 正则模型。 |
 | Tomopy `tv` / `tikh` 的 C backend 数值等价版本 | 未实现 | 当前已有框架原生 Tikhonov 与 TV-FISTA，但 Tomopy 的几何、插值及 `reg_par` / `reg_data` 精确语义仍需专门 backend。 |
 
-## 相关说明文档
+## FDK 公开来源
 
-仓库根目录下还有三份辅助文档：
-
-- `MIGRATION_MATRIX.md`：原始算法到目标 solver 的保真迁移矩阵。
-- `TOMOPY_AUDIT.md`：Tomopy `recon(..., algorithm=...)` 入口逐项审计。
-- `BACKEND_BOUNDARY.md`：FBP / FDK / ASTRA backend 边界说明。
+- ASTRA Toolbox: https://github.com/astra-toolbox/astra-toolbox （GPL-3.0）
+- LLNL LEAP: https://github.com/LLNL/LEAP （MIT）
