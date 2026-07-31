@@ -1,0 +1,71 @@
+{
+  "cgls": {
+    "algorithm": "cgls",
+    "data_residual": 0.017375599592924118,
+    "psnr": 25.445844650268555,
+    "relative_error": 0.139928936958313,
+    "runtime_seconds": 0.13656880000053206,
+    "ssim": 0.9177684187889099,
+    "zero_psnr": 8.363996505737305
+  },
+  "fdk": {
+    "algorithm": "fdk",
+    "backend": "astra",
+    "cnr": 7.839421272277832,
+    "contrast_recovery": 0.9040275812149048,
+    "projection_norm_ratio": 288.1630859375,
+    "projection_scale": 0.0024583020713180304,
+    "psnr": 30.935266494750977,
+    "raw_data_residual": 287.45556640625,
+    "relative_error": 0.16429640352725983,
+    "runtime_seconds": 0.029516499998862855,
+    "scale_aligned_data_residual": 0.7058192491531372,
+    "status": "success",
+    "zero_psnr": 15.247827529907227
+  },
+  "lsqr": {
+    "algorithm": "lsqr",
+    "data_residual": 0.04425937309861183,
+    "psnr": 26.097858428955078,
+    "relative_error": 0.12980963289737701,
+    "runtime_seconds": 0.16461749999871245,
+    "ssim": 0.6963186860084534,
+    "zero_psnr": 8.363996505737305
+  },
+  "os_sart": {
+    "algorithm": "os_sart",
+    "data_residual": 0.10442452877759933,
+    "psnr": 18.650991439819336,
+    "relative_error": 0.305949866771698,
+    "runtime_seconds": 0.04511540000021341,
+    "ssim": 0.5050991773605347,
+    "zero_psnr": 8.363996505737305
+  },
+  "sart": {
+    "algorithm": "sart",
+    "data_residual": 0.030822614207863808,
+    "psnr": 23.924442291259766,
+    "relative_error": 0.16671618819236755,
+    "runtime_seconds": 0.04894059999787714,
+    "ssim": 0.8216241002082825,
+    "zero_psnr": 8.363996505737305
+  },
+  "tikhonov": {
+    "algorithm": "tikhonov",
+    "data_residual": 0.017223866656422615,
+    "psnr": 28.469266891479492,
+    "relative_error": 0.0987953469157219,
+    "runtime_seconds": 0.23150710000118124,
+    "ssim": 0.8361572623252869,
+    "zero_psnr": 8.363996505737305
+  },
+  "tv_fista": {
+    "algorithm": "tv_fista",
+    "data_residual": 0.01882181316614151,
+    "psnr": 25.289798736572266,
+    "relative_error": 0.14246559143066406,
+    "runtime_seconds": 0.17815779999727965,
+    "ssim": 0.9140456318855286,
+    "zero_psnr": 8.363996505737305
+  }
+}
