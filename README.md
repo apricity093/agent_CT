@@ -448,6 +448,34 @@ python -m pytest -q test/test_fdk_backend_adapters.py
 
 ---
 
+## 版本化 CT benchmark case
+
+`inv_framework.benchmarks` 为测试、示例和反问题 agent 提供统一的数据入口：
+
+```python
+from inv_framework.benchmarks import (
+    evaluate_ct_case,
+    list_ct_cases,
+    load_ct_case,
+)
+
+records = list_ct_cases({"tags": ["2d", "parallel", "noisy"]})
+case = load_ct_case(records[0]["case_id"], device="cpu")
+result = evaluate_ct_case(solver, operator, case)
+```
+
+标准案例位于 `test/data/`：JSON 保存几何、单位、噪声、来源和能力标签，
+HDF5 保存 truth、clean/observed measurement 与 mask。`analytic_independent`
+案例用于独立检查 operator；`model_matched` 案例用于 solver/interface 回归；
+`backend_reference` 案例用于跨后端或跨版本对照。大型真实数据只登记在
+`test/data/external_catalog.json`，默认测试不会下载。
+
+```bash
+python -m pytest -q test/ct_cases
+```
+
+---
+
 ## License
 
 MIT

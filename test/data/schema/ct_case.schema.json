@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://invframework.local/schema/ct_case-1.0.json",
+  "title": "invframework CT benchmark case",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "case_id",
+    "modality",
+    "dimension",
+    "geometry",
+    "ground_truth",
+    "measurement",
+    "provenance",
+    "capability_tags",
+    "sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "case_id": {"type": "string", "minLength": 1},
+    "modality": {"const": "xray_ct"},
+    "dimension": {"enum": [2, 3]},
+    "geometry": {
+      "type": "object",
+      "required": ["type", "domain_shape", "range_shape"],
+      "properties": {
+        "type": {"enum": ["parallel_2d", "fan_2d", "cone_3d", "parallel_3d"]},
+        "domain_shape": {"type": "array", "items": {"type": "integer", "minimum": 1}},
+        "range_shape": {"type": "array", "items": {"type": "integer", "minimum": 1}}
+      }
+    },
+    "ground_truth": {"type": "object"},
+    "measurement": {
+      "type": "object",
+      "required": ["kind", "noise_model", "parameters"]
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["reference_kind", "generator", "license"]
+    },
+    "capability_tags": {
+      "type": "array",
+      "items": {"type": "string"},
+      "uniqueItems": true
+    },
+    "sha256": {
+      "type": "object",
+      "required": ["arrays.h5"],
+      "properties": {
+        "arrays.h5": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    }
+  }
+}

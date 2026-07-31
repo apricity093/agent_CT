@@ -1,0 +1,101 @@
+{
+  "capability_tags": [
+    "3d",
+    "cone",
+    "astra",
+    "clean",
+    "ground_truth",
+    "fdk"
+  ],
+  "case_id": "cone_3d/spheres_astra_12",
+  "dimension": 3,
+  "geometry": {
+    "angles_rad": [
+      0.0,
+      0.1745329201221466,
+      0.3490658402442932,
+      0.5235987901687622,
+      0.6981316804885864,
+      0.8726645708084106,
+      1.0471975803375244,
+      1.2217304706573486,
+      1.3962633609771729,
+      1.570796251296997,
+      1.7453291416168213,
+      1.919862151145935,
+      2.094395160675049,
+      2.268928050994873,
+      2.4434609413146973,
+      2.6179938316345215,
+      2.7925267219543457,
+      2.96705961227417,
+      3.141592502593994,
+      3.3161253929138184,
+      3.4906582832336426,
+      3.665191411972046,
+      3.83972430229187,
+      4.014256954193115,
+      4.188790321350098,
+      4.363323211669922,
+      4.537856101989746,
+      4.71238899230957,
+      4.8869218826293945,
+      5.061454772949219,
+      5.235987663269043,
+      5.410520553588867,
+      5.585053443908691,
+      5.759586334228516,
+      5.93411922454834,
+      6.108652114868164
+    ],
+    "detector_cols": 24,
+    "detector_rows": 24,
+    "detector_spacing_col": 1.0,
+    "detector_spacing_row": 1.0,
+    "domain_shape": [
+      12,
+      12,
+      12
+    ],
+    "image_layout": [
+      "z",
+      "y",
+      "x"
+    ],
+    "length_unit": "astra_geometry_unit",
+    "measurement_layout": [
+      "detector_row",
+      "angle",
+      "detector_col"
+    ],
+    "origin_detector_distance": 60.0,
+    "range_shape": [
+      24,
+      36,
+      24
+    ],
+    "source_origin_distance": 60.0,
+    "type": "cone_3d"
+  },
+  "ground_truth": {
+    "data_range": 0.02,
+    "quantity": "linear_attenuation",
+    "unit": "normalized_inverse_length"
+  },
+  "measurement": {
+    "kind": "line_integral",
+    "noise_model": "none",
+    "parameters": {},
+    "seed": null
+  },
+  "modality": "xray_ct",
+  "provenance": {
+    "generator": "ASTRA 2.2.0 FDK geometry FP3D_CUDA",
+    "license": "project-generated arrays; ASTRA GPL-3.0 backend",
+    "reference_kind": "backend_reference"
+  },
+  "schema_version": "1.0",
+  "sha256": {
+    "arrays.h5": "0c1061a73fabe99a311ad61a63dc89e4858bd073e1d6cd8f7925bc63880c295c"
+  }
+}

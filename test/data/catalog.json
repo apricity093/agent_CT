@@ -1,0 +1,102 @@
+{
+  "cases": [
+    {
+      "capability_tags": [
+        "3d",
+        "cone",
+        "astra",
+        "clean",
+        "ground_truth",
+        "fdk"
+      ],
+      "case_id": "cone_3d/spheres_astra_12",
+      "dimension": 3,
+      "geometry_type": "cone_3d",
+      "measurement_kind": "line_integral",
+      "noise_model": "none",
+      "path": "cases/cone_3d__spheres_astra_12",
+      "reference_kind": "backend_reference"
+    },
+    {
+      "capability_tags": [
+        "2d",
+        "parallel",
+        "analytic",
+        "clean",
+        "ground_truth"
+      ],
+      "case_id": "parallel_2d/disk_analytic_32",
+      "dimension": 2,
+      "geometry_type": "parallel_2d",
+      "measurement_kind": "line_integral",
+      "noise_model": "none",
+      "path": "cases/parallel_2d__disk_analytic_32",
+      "reference_kind": "analytic_independent"
+    },
+    {
+      "capability_tags": [
+        "2d",
+        "parallel",
+        "ground_truth",
+        "clean"
+      ],
+      "case_id": "parallel_2d/shepp_logan_dense_clean_32",
+      "dimension": 2,
+      "geometry_type": "parallel_2d",
+      "measurement_kind": "line_integral",
+      "noise_model": "none",
+      "path": "cases/parallel_2d__shepp_logan_dense_clean_32",
+      "reference_kind": "model_matched"
+    },
+    {
+      "capability_tags": [
+        "2d",
+        "parallel",
+        "ground_truth",
+        "sparse_view",
+        "limited_angle",
+        "clean"
+      ],
+      "case_id": "parallel_2d/shepp_logan_limited_angle_32",
+      "dimension": 2,
+      "geometry_type": "parallel_2d",
+      "measurement_kind": "line_integral",
+      "noise_model": "none",
+      "path": "cases/parallel_2d__shepp_logan_limited_angle_32",
+      "reference_kind": "model_matched"
+    },
+    {
+      "capability_tags": [
+        "2d",
+        "parallel",
+        "ground_truth",
+        "sparse_view",
+        "noisy"
+      ],
+      "case_id": "parallel_2d/shepp_logan_sparse_gaussian_32",
+      "dimension": 2,
+      "geometry_type": "parallel_2d",
+      "measurement_kind": "line_integral",
+      "noise_model": "gaussian_relative",
+      "path": "cases/parallel_2d__shepp_logan_sparse_gaussian_32",
+      "reference_kind": "model_matched"
+    },
+    {
+      "capability_tags": [
+        "2d",
+        "parallel",
+        "ground_truth",
+        "sparse_view",
+        "noisy"
+      ],
+      "case_id": "parallel_2d/shepp_logan_sparse_poisson_32",
+      "dimension": 2,
+      "geometry_type": "parallel_2d",
+      "measurement_kind": "line_integral",
+      "noise_model": "poisson_log",
+      "path": "cases/parallel_2d__shepp_logan_sparse_poisson_32",
+      "reference_kind": "model_matched"
+    }
+  ],
+  "schema_version": "1.0"
+}

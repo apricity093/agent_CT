@@ -1,0 +1,85 @@
+{
+  "capability_tags": [
+    "2d",
+    "parallel",
+    "ground_truth",
+    "sparse_view",
+    "limited_angle",
+    "clean"
+  ],
+  "case_id": "parallel_2d/shepp_logan_limited_angle_32",
+  "dimension": 2,
+  "geometry": {
+    "angles_rad": [
+      0.0,
+      0.09106066077947617,
+      0.18212132155895233,
+      0.2731819748878479,
+      0.36424264311790466,
+      0.4553033113479614,
+      0.5463639497756958,
+      0.637424647808075,
+      0.7284852862358093,
+      0.8195459246635437,
+      0.9106066226959229,
+      1.0016672611236572,
+      1.0927278995513916,
+      1.183788537979126,
+      1.2748491764068604,
+      1.3659098148345947,
+      1.456970453262329,
+      1.548031210899353,
+      1.6390918493270874,
+      1.7301524877548218,
+      1.8212132453918457,
+      1.91227388381958,
+      2.0033345222473145,
+      2.094395160675049
+    ],
+    "detector_count": 32,
+    "detector_spacing": 0.0625,
+    "domain_shape": [
+      1,
+      32,
+      32
+    ],
+    "image_layout": [
+      "channel",
+      "y",
+      "x"
+    ],
+    "length_unit": "normalized_image_coordinate",
+    "measurement_layout": [
+      "channel",
+      "angle",
+      "detector"
+    ],
+    "range_shape": [
+      1,
+      24,
+      32
+    ],
+    "type": "parallel_2d"
+  },
+  "ground_truth": {
+    "data_range": 0.02,
+    "quantity": "linear_attenuation",
+    "unit": "normalized_inverse_length"
+  },
+  "measurement": {
+    "kind": "line_integral",
+    "noise_model": "none",
+    "parameters": {},
+    "seed": null
+  },
+  "modality": "xray_ct",
+  "provenance": {
+    "generator": "inv_framework.operators.ct.ParallelBeamRadon2D",
+    "license": "project-generated",
+    "reference_kind": "model_matched"
+  },
+  "schema_version": "1.0",
+  "sha256": {
+    "arrays.h5": "8653209d5468c21f1571af9cfd032c5475c1edf569bafdc5997f133f9cc7948d"
+  }
+}

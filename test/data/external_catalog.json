@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0",
+  "datasets": [
+    {
+      "dataset_id": "2detect",
+      "modality": "xray_ct",
+      "dimension": 2,
+      "role": "external_real_projection_benchmark",
+      "homepage": "https://zenodo.org/records/6802615",
+      "local_root_env": "INVFRAMEWORK_2DETECT_ROOT",
+      "license": "CC BY 4.0; verify the selected release metadata",
+      "bundled": false,
+      "capability_tags": ["2d", "fan", "real_measurement", "external"]
+    },
+    {
+      "dataset_id": "walnut_ct",
+      "modality": "xray_ct",
+      "dimension": 3,
+      "role": "external_real_cone_beam_benchmark",
+      "homepage": "https://fips.fi/dataset.php",
+      "local_root_env": "INVFRAMEWORK_WALNUT_ROOT",
+      "license": "Use the terms distributed with the FIPS Walnut dataset",
+      "bundled": false,
+      "capability_tags": ["3d", "cone", "real_measurement", "external"]
+    }
+  ]
+}
