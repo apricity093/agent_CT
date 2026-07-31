@@ -21,3 +21,9 @@ Case provenance has three meanings:
 
 Large or license-constrained real datasets are described in
 `external_catalog.json` and are never downloaded by default CI.
+
+The `quality` cases are 128 x 128 synthetic tissue phantoms authored with an
+independent ASTRA line projector.  They are kept separate from the 32 x 32 CI
+smoke cases and cover dense clean, sparse-view Poisson, and limited-angle
+acquisition.  Their manifests explicitly say that they are synthetic rather
+than patient data and record the display conversion to linear attenuation.

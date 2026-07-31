@@ -1,0 +1,125 @@
+{
+  "capability_tags": [
+    "2d",
+    "parallel",
+    "quality",
+    "synthetic_tissue",
+    "backend_reference",
+    "ground_truth",
+    "noisy",
+    "sparse_view"
+  ],
+  "case_id": "parallel_2d/tissue_breast_sparse_poisson_128",
+  "dimension": 2,
+  "geometry": {
+    "angles_rad": [
+      0.0,
+      0.06544984877109528,
+      0.13089969754219055,
+      0.19634954631328583,
+      0.2617993950843811,
+      0.3272492587566376,
+      0.39269909262657166,
+      0.4581489562988281,
+      0.5235987901687622,
+      0.5890486240386963,
+      0.6544985175132751,
+      0.7199483513832092,
+      0.7853981852531433,
+      0.8508480191230774,
+      0.9162979125976562,
+      0.9817476868629456,
+      1.0471975803375244,
+      1.1126474142074585,
+      1.1780972480773926,
+      1.2435470819473267,
+      1.3089970350265503,
+      1.3744468688964844,
+      1.4398967027664185,
+      1.505346417427063,
+      1.5707963705062866,
+      1.6362462043762207,
+      1.7016960382461548,
+      1.7671459913253784,
+      1.8325958251953125,
+      1.898045539855957,
+      1.9634953737258911,
+      2.028945207595825,
+      2.094395160675049,
+      2.1598451137542725,
+      2.225294828414917,
+      2.2907447814941406,
+      2.356194496154785,
+      2.421644449234009,
+      2.4870941638946533,
+      2.552544116973877,
+      2.6179940700531006,
+      2.683443784713745,
+      2.7488937377929688,
+      2.8143434524536133,
+      2.879793405532837,
+      2.9452431201934814,
+      3.010692834854126,
+      3.0761430263519287
+    ],
+    "angular_coverage_deg": 176.25,
+    "detector_count": 128,
+    "detector_spacing_pixels": 1.0,
+    "domain_shape": [
+      1,
+      128,
+      128
+    ],
+    "image_layout": [
+      "channel",
+      "y",
+      "x"
+    ],
+    "length_unit": "pixel",
+    "measurement_layout": [
+      "channel",
+      "angle",
+      "detector"
+    ],
+    "pixel_spacing_cm": 0.1,
+    "range_shape": [
+      1,
+      48,
+      128
+    ],
+    "type": "parallel_2d"
+  },
+  "ground_truth": {
+    "data_range": 0.004,
+    "display_scale_to_cm_inverse": 10.0,
+    "display_window_cm_inverse": [
+      0.0175,
+      0.0255
+    ],
+    "origin": "deterministic synthetic tissue phantom; not patient data",
+    "pixel_spacing_cm": 0.1,
+    "quantity": "voxel_line_attenuation",
+    "unit": "dimensionless_per_pixel"
+  },
+  "measurement": {
+    "kind": "line_integral",
+    "noise_model": "poisson_log",
+    "parameters": {
+      "incident_photon_count": 2000000.0
+    },
+    "seed": 20260731
+  },
+  "modality": "xray_ct",
+  "provenance": {
+    "generator": "ASTRA 2.4.1 2D line projector",
+    "inverse_crime_control": "reference measurements use ASTRA ray-driven line projection; reconstruction uses invframework grid-sample rotation projection",
+    "license": "project-generated synthetic arrays; ASTRA GPL-3.0 backend",
+    "phantom_generator": "deterministic_multiscale_breast_tissue_v1",
+    "reconstruction_operator_under_test": "inv_framework.operators.ct.ParallelBeamRadon2D",
+    "reference_kind": "backend_reference"
+  },
+  "schema_version": "1.0",
+  "sha256": {
+    "arrays.h5": "7bd2662a6c5c32a9a559ef73e8c427e2590dc599d0df21113c553c451c21a8e2"
+  }
+}

@@ -96,6 +96,62 @@
       "noise_model": "poisson_log",
       "path": "cases/parallel_2d__shepp_logan_sparse_poisson_32",
       "reference_kind": "model_matched"
+    },
+    {
+      "capability_tags": [
+        "2d",
+        "parallel",
+        "quality",
+        "synthetic_tissue",
+        "backend_reference",
+        "ground_truth",
+        "clean"
+      ],
+      "case_id": "parallel_2d/tissue_breast_dense_clean_128",
+      "dimension": 2,
+      "geometry_type": "parallel_2d",
+      "measurement_kind": "line_integral",
+      "noise_model": "none",
+      "path": "quality_cases/parallel_2d__tissue_breast_dense_clean_128",
+      "reference_kind": "backend_reference"
+    },
+    {
+      "capability_tags": [
+        "2d",
+        "parallel",
+        "quality",
+        "synthetic_tissue",
+        "backend_reference",
+        "ground_truth",
+        "clean",
+        "limited_angle"
+      ],
+      "case_id": "parallel_2d/tissue_breast_limited_angle_128",
+      "dimension": 2,
+      "geometry_type": "parallel_2d",
+      "measurement_kind": "line_integral",
+      "noise_model": "none",
+      "path": "quality_cases/parallel_2d__tissue_breast_limited_angle_128",
+      "reference_kind": "backend_reference"
+    },
+    {
+      "capability_tags": [
+        "2d",
+        "parallel",
+        "quality",
+        "synthetic_tissue",
+        "backend_reference",
+        "ground_truth",
+        "noisy",
+        "sparse_view"
+      ],
+      "case_id": "parallel_2d/tissue_breast_sparse_poisson_128",
+      "dimension": 2,
+      "geometry_type": "parallel_2d",
+      "measurement_kind": "line_integral",
+      "noise_model": "poisson_log",
+      "path": "quality_cases/parallel_2d__tissue_breast_sparse_poisson_128",
+      "reference_kind": "backend_reference"
     }
   ],
   "schema_version": "1.0"
