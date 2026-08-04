@@ -8,8 +8,7 @@ from typing import Any
 
 import torch
 
-from inv_framework.operators.ct import ASTRAFDKOperator3D, ParallelBeamRadon2D
-from inv_framework.operators.ct import astra_adapter as astra_backend
+from inv_framework.operators.ct import ParallelBeamRadon2D
 from inv_framework.regularizers import TVRegularizer
 from inv_framework.solvers import (
     CGLSSolver,
@@ -18,7 +17,6 @@ from inv_framework.solvers import (
     SARTSolver,
     TVFISTASolver,
     TikhonovSolver,
-    FDKSolver,
 )
 from inv_framework.utils.metrics import psnr, ssim
 
@@ -197,46 +195,3 @@ def fdk_metrics(
         "cnr": float(cnr.item()),
         "runtime_seconds": float(runtime_seconds),
     }
-
-
-def jsonable_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
-    converted = {}
-    for key, value in metrics.items():
-        if isinstance(value, torch.Tensor):
-            converted[key] = value.detach().cpu().tolist()
-        elif isinstance(value, (str, int, float, bool)) or value is None:
-            converted[key] = value
-        else:
-            converted[key] = str(value)
-    return converted
-
-
-def run_optional_astra_fdk_benchmark():
-    if not astra_backend._HAS_ASTRA:
-        return None, {"algorithm": "fdk", "status": "skipped", "reason": "astra-toolbox is not installed"}
-    astra = astra_backend.astra
-    if not astra.use_cuda() or not torch.cuda.is_available():
-        return None, {"algorithm": "fdk", "status": "skipped", "reason": "ASTRA CUDA and PyTorch CUDA are required"}
-
-    import numpy as np
-
-    size = 16
-    angles = np.arange(60, dtype=np.float32) * (2.0 * np.pi / 60.0)
-    volume_geometry = astra.create_vol_geom(size, size, size)
-    projection_geometry = astra.create_proj_geom(
-        "cone", 1.0, 1.0, 32, 32, angles, 100.0, 100.0
-    )
-    operator = ASTRAFDKOperator3D(volume_geometry, projection_geometry)
-    truth = make_phantom_3d(operator.domain_shape, device="cuda")
-    measurement = operator.forward(truth).detach()
-    started = time.perf_counter()
-    reconstruction = FDKSolver().solve(measurement, operator)
-    metrics = fdk_metrics(
-        truth,
-        measurement,
-        reconstruction,
-        operator,
-        time.perf_counter() - started,
-    )
-    metrics.update({"algorithm": "fdk", "backend": "astra", "status": "success"})
-    return reconstruction.detach().cpu(), metrics

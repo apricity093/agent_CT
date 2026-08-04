@@ -1,0 +1,585 @@
+{
+  "algorithm_ids": [
+    "fbp",
+    "sirt",
+    "landweber",
+    "cgls",
+    "lsqr",
+    "sart",
+    "os_sart",
+    "mlem",
+    "osem",
+    "tikhonov",
+    "tv_fista",
+    "fdk"
+  ],
+  "records": [
+    {
+      "algorithm": "fbp",
+      "case_id": "parallel_2d/tissue_breast_dense_clean_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "FBP",
+      "measurement_min": 0.0,
+      "parameters": {},
+      "psnr": 19.167774200439453,
+      "runtime_seconds": 0.03419476468116045,
+      "ssim": 0.7218565344810486,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "sirt",
+      "case_id": "parallel_2d/tissue_breast_dense_clean_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "SIRT",
+      "measurement_min": 0.0,
+      "parameters": {
+        "num_iterations": 100
+      },
+      "psnr": 19.652172088623047,
+      "runtime_seconds": 5.432484742254019,
+      "ssim": 0.7582916021347046,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "landweber",
+      "case_id": "parallel_2d/tissue_breast_dense_clean_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "Landweber",
+      "measurement_min": 0.0,
+      "parameters": {
+        "num_iterations": 200,
+        "step_size": 0.0001
+      },
+      "psnr": 19.067312240600586,
+      "runtime_seconds": 10.810562303289771,
+      "ssim": 0.7199844121932983,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "cgls",
+      "case_id": "parallel_2d/tissue_breast_dense_clean_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "CGLS",
+      "measurement_min": 0.0,
+      "parameters": {
+        "num_iterations": 100
+      },
+      "psnr": 19.955371856689453,
+      "runtime_seconds": 8.050154967233539,
+      "ssim": 0.7629448175430298,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "lsqr",
+      "case_id": "parallel_2d/tissue_breast_dense_clean_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "LSQR",
+      "measurement_min": 0.0,
+      "parameters": {
+        "num_iterations": 25
+      },
+      "psnr": 18.62164306640625,
+      "runtime_seconds": 2.057490272447467,
+      "ssim": 0.4053688049316406,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "sart",
+      "case_id": "parallel_2d/tissue_breast_dense_clean_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "SART",
+      "measurement_min": 0.0,
+      "parameters": {
+        "block_size": 1,
+        "num_iterations": 20,
+        "relaxation": 0.5
+      },
+      "psnr": 18.804887771606445,
+      "runtime_seconds": 3.4239760767668486,
+      "ssim": 0.6716572046279907,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "os_sart",
+      "case_id": "parallel_2d/tissue_breast_dense_clean_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "OS-SART",
+      "measurement_min": 0.0,
+      "parameters": {
+        "num_iterations": 20,
+        "relaxation": 0.5,
+        "subset_count": 10
+      },
+      "psnr": 19.633132934570312,
+      "runtime_seconds": 2.243755294010043,
+      "ssim": 0.7527433633804321,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "mlem",
+      "case_id": "parallel_2d/tissue_breast_dense_clean_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "MLEM",
+      "measurement_handling": "solver_internal_nonnegative_clamp",
+      "measurement_min": 0.0,
+      "parameters": {
+        "num_iterations": 100
+      },
+      "psnr": 18.814054489135742,
+      "runtime_seconds": 5.41513920109719,
+      "ssim": 0.7489628791809082,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "osem",
+      "case_id": "parallel_2d/tissue_breast_dense_clean_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "OSEM",
+      "measurement_handling": "solver_internal_nonnegative_clamp",
+      "measurement_min": 0.0,
+      "parameters": {
+        "num_iterations": 25,
+        "subset_count": 10
+      },
+      "psnr": 18.61773681640625,
+      "runtime_seconds": 2.1093266317620873,
+      "ssim": 0.7267062664031982,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "tikhonov",
+      "case_id": "parallel_2d/tissue_breast_dense_clean_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "Tikhonov",
+      "measurement_min": 0.0,
+      "parameters": {
+        "num_iterations": 100,
+        "reg_strength": 0.001
+      },
+      "psnr": 18.439598083496094,
+      "runtime_seconds": 5.673502620309591,
+      "ssim": 0.3672652244567871,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "tv_fista",
+      "case_id": "parallel_2d/tissue_breast_dense_clean_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "TV-FISTA",
+      "measurement_min": 0.0,
+      "parameters": {
+        "num_iterations": 50,
+        "reg_strength": 0.0001
+      },
+      "psnr": 18.824695587158203,
+      "runtime_seconds": 3.266069296747446,
+      "ssim": 0.7182425260543823,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "fbp",
+      "case_id": "parallel_2d/tissue_breast_sparse_poisson_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "FBP",
+      "measurement_min": -0.002203062642365694,
+      "parameters": {},
+      "psnr": 18.754207611083984,
+      "runtime_seconds": 0.010036000981926918,
+      "ssim": 0.4520725607872009,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "sirt",
+      "case_id": "parallel_2d/tissue_breast_sparse_poisson_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "SIRT",
+      "measurement_min": -0.002203062642365694,
+      "parameters": {
+        "num_iterations": 100
+      },
+      "psnr": 19.610307693481445,
+      "runtime_seconds": 1.5429277839139104,
+      "ssim": 0.6761044859886169,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "landweber",
+      "case_id": "parallel_2d/tissue_breast_sparse_poisson_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "Landweber",
+      "measurement_min": -0.002203062642365694,
+      "parameters": {
+        "num_iterations": 200,
+        "step_size": 0.0001
+      },
+      "psnr": 19.70613670349121,
+      "runtime_seconds": 3.041458999738097,
+      "ssim": 0.6813000440597534,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "cgls",
+      "case_id": "parallel_2d/tissue_breast_sparse_poisson_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "CGLS",
+      "measurement_min": -0.002203062642365694,
+      "parameters": {
+        "num_iterations": 100
+      },
+      "psnr": 20.008010864257812,
+      "runtime_seconds": 2.3199678836390376,
+      "ssim": 0.7106550931930542,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "lsqr",
+      "case_id": "parallel_2d/tissue_breast_sparse_poisson_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "LSQR",
+      "measurement_min": -0.002203062642365694,
+      "parameters": {
+        "num_iterations": 25
+      },
+      "psnr": 18.823572158813477,
+      "runtime_seconds": 0.5945548452436924,
+      "ssim": 0.31724807620048523,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "sart",
+      "case_id": "parallel_2d/tissue_breast_sparse_poisson_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "SART",
+      "measurement_min": -0.002203062642365694,
+      "parameters": {
+        "block_size": 1,
+        "num_iterations": 20,
+        "relaxation": 0.5
+      },
+      "psnr": 18.85494613647461,
+      "runtime_seconds": 0.971806425601244,
+      "ssim": 0.5995905995368958,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "os_sart",
+      "case_id": "parallel_2d/tissue_breast_sparse_poisson_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "OS-SART",
+      "measurement_min": -0.002203062642365694,
+      "parameters": {
+        "num_iterations": 20,
+        "relaxation": 0.5,
+        "subset_count": 10
+      },
+      "psnr": 19.461563110351562,
+      "runtime_seconds": 0.7061561811715364,
+      "ssim": 0.6663742065429688,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "mlem",
+      "case_id": "parallel_2d/tissue_breast_sparse_poisson_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "MLEM",
+      "measurement_handling": "solver_internal_nonnegative_clamp",
+      "measurement_min": -0.002203062642365694,
+      "parameters": {
+        "num_iterations": 100
+      },
+      "psnr": 18.75014305114746,
+      "runtime_seconds": 1.547845191322267,
+      "ssim": 0.6539000272750854,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "osem",
+      "case_id": "parallel_2d/tissue_breast_sparse_poisson_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "OSEM",
+      "measurement_handling": "solver_internal_nonnegative_clamp",
+      "measurement_min": -0.002203062642365694,
+      "parameters": {
+        "num_iterations": 25,
+        "subset_count": 10
+      },
+      "psnr": 18.370187759399414,
+      "runtime_seconds": 0.6518117822706699,
+      "ssim": 0.5759670734405518,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "tikhonov",
+      "case_id": "parallel_2d/tissue_breast_sparse_poisson_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "Tikhonov",
+      "measurement_min": -0.002203062642365694,
+      "parameters": {
+        "num_iterations": 100,
+        "reg_strength": 0.001
+      },
+      "psnr": 18.777706146240234,
+      "runtime_seconds": 1.5930219069123268,
+      "ssim": 0.30311793088912964,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "tv_fista",
+      "case_id": "parallel_2d/tissue_breast_sparse_poisson_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "TV-FISTA",
+      "measurement_min": -0.002203062642365694,
+      "parameters": {
+        "num_iterations": 50,
+        "reg_strength": 0.0001
+      },
+      "psnr": 18.809118270874023,
+      "runtime_seconds": 0.9578460045158863,
+      "ssim": 0.5920843482017517,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "fbp",
+      "case_id": "parallel_2d/tissue_breast_limited_angle_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "FBP",
+      "measurement_min": 0.0,
+      "parameters": {},
+      "psnr": 14.785329818725586,
+      "runtime_seconds": 0.022099017165601254,
+      "ssim": 0.5735411047935486,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "sirt",
+      "case_id": "parallel_2d/tissue_breast_limited_angle_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "SIRT",
+      "measurement_min": 0.0,
+      "parameters": {
+        "num_iterations": 100
+      },
+      "psnr": 19.263242721557617,
+      "runtime_seconds": 3.895553981885314,
+      "ssim": 0.6688990592956543,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "landweber",
+      "case_id": "parallel_2d/tissue_breast_limited_angle_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "Landweber",
+      "measurement_min": 0.0,
+      "parameters": {
+        "num_iterations": 200,
+        "step_size": 0.0001
+      },
+      "psnr": 19.139745712280273,
+      "runtime_seconds": 7.754047265276313,
+      "ssim": 0.6782151460647583,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "cgls",
+      "case_id": "parallel_2d/tissue_breast_limited_angle_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "CGLS",
+      "measurement_min": 0.0,
+      "parameters": {
+        "num_iterations": 100
+      },
+      "psnr": 19.414737701416016,
+      "runtime_seconds": 5.727681921795011,
+      "ssim": 0.6456969976425171,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "lsqr",
+      "case_id": "parallel_2d/tissue_breast_limited_angle_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "LSQR",
+      "measurement_min": 0.0,
+      "parameters": {
+        "num_iterations": 25
+      },
+      "psnr": 18.29281997680664,
+      "runtime_seconds": 1.5251217680051923,
+      "ssim": 0.377363920211792,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "sart",
+      "case_id": "parallel_2d/tissue_breast_limited_angle_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "SART",
+      "measurement_min": 0.0,
+      "parameters": {
+        "block_size": 1,
+        "num_iterations": 20,
+        "relaxation": 0.5
+      },
+      "psnr": 18.967178344726562,
+      "runtime_seconds": 2.5576526131480932,
+      "ssim": 0.6493352651596069,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "os_sart",
+      "case_id": "parallel_2d/tissue_breast_limited_angle_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "OS-SART",
+      "measurement_min": 0.0,
+      "parameters": {
+        "num_iterations": 20,
+        "relaxation": 0.5,
+        "subset_count": 10
+      },
+      "psnr": 19.270389556884766,
+      "runtime_seconds": 1.68805430829525,
+      "ssim": 0.6649171710014343,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "mlem",
+      "case_id": "parallel_2d/tissue_breast_limited_angle_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "MLEM",
+      "measurement_handling": "solver_internal_nonnegative_clamp",
+      "measurement_min": 0.0,
+      "parameters": {
+        "num_iterations": 100
+      },
+      "psnr": 18.87672233581543,
+      "runtime_seconds": 3.8861409230157733,
+      "ssim": 0.7110728025436401,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "osem",
+      "case_id": "parallel_2d/tissue_breast_limited_angle_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "OSEM",
+      "measurement_handling": "solver_internal_nonnegative_clamp",
+      "measurement_min": 0.0,
+      "parameters": {
+        "num_iterations": 25,
+        "subset_count": 10
+      },
+      "psnr": 18.718360900878906,
+      "runtime_seconds": 1.5058924481272697,
+      "ssim": 0.6906865239143372,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "tikhonov",
+      "case_id": "parallel_2d/tissue_breast_limited_angle_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "Tikhonov",
+      "measurement_min": 0.0,
+      "parameters": {
+        "num_iterations": 100,
+        "reg_strength": 0.001
+      },
+      "psnr": 18.31571388244629,
+      "runtime_seconds": 3.923567428253591,
+      "ssim": 0.2798812985420227,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "tv_fista",
+      "case_id": "parallel_2d/tissue_breast_limited_angle_128",
+      "data_range": 0.004,
+      "dimension": 2,
+      "display_name": "TV-FISTA",
+      "measurement_min": 0.0,
+      "parameters": {
+        "num_iterations": 50,
+        "reg_strength": 0.0001
+      },
+      "psnr": 19.013612747192383,
+      "runtime_seconds": 2.293877643533051,
+      "ssim": 0.6844879984855652,
+      "ssim_definition": "2d_ssim",
+      "status": "success"
+    },
+    {
+      "algorithm": "fdk",
+      "case_id": "cone_3d/spheres_astra_12",
+      "data_range": 0.02,
+      "dimension": 3,
+      "display_name": "FDK",
+      "measurement_min": -0.0020850463770329952,
+      "parameters": {},
+      "psnr": 23.72310447692871,
+      "runtime_seconds": 0.004256084561347961,
+      "ssim": 0.8402237296104431,
+      "ssim_definition": "axial_mean_ssim",
+      "status": "success"
+    }
+  ],
+  "schema_version": 1
+}

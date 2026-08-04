@@ -1,0 +1,581 @@
+{
+  "calibration": {
+    "candidates": {
+      "cgls": [
+        {
+          "mean_psnr": 29.903239568074543,
+          "mean_ssim": 0.8511175910631815,
+          "parameters": {
+            "num_iterations": 25
+          },
+          "runtime_seconds": 2.01558989379555
+        },
+        {
+          "mean_psnr": 30.306336720784504,
+          "mean_ssim": 0.8548254172007242,
+          "parameters": {
+            "num_iterations": 50
+          },
+          "runtime_seconds": 3.9854961186647415
+        },
+        {
+          "mean_psnr": 30.602197647094727,
+          "mean_ssim": 0.8567556341489156,
+          "parameters": {
+            "num_iterations": 100
+          },
+          "runtime_seconds": 7.9310252806171775
+        }
+      ],
+      "fbp": [
+        {
+          "mean_psnr": 21.13670476277669,
+          "mean_ssim": 0.6522985895474752,
+          "parameters": {},
+          "runtime_seconds": 0.2456908505409956
+        }
+      ],
+      "landweber": [
+        {
+          "mean_psnr": 23.028353373209637,
+          "mean_ssim": 0.7131645480791727,
+          "parameters": {
+            "num_iterations": 50,
+            "step_size": 0.0001
+          },
+          "runtime_seconds": 2.6508491542190313
+        },
+        {
+          "mean_psnr": 19.80125109354655,
+          "mean_ssim": 0.5311989126882205,
+          "parameters": {
+            "num_iterations": 50,
+            "step_size": 0.0005
+          },
+          "runtime_seconds": 2.926742447540164
+        },
+        {
+          "mean_psnr": 14.876598358154297,
+          "mean_ssim": 0.27354672566677135,
+          "parameters": {
+            "num_iterations": 50,
+            "step_size": 0.001
+          },
+          "runtime_seconds": 2.639641677029431
+        },
+        {
+          "mean_psnr": 7.866889953613281,
+          "mean_ssim": 0.0007184299174696207,
+          "parameters": {
+            "num_iterations": 50,
+            "step_size": 0.005
+          },
+          "runtime_seconds": 2.7141664875671268
+        },
+        {
+          "mean_psnr": 25.2040958404541,
+          "mean_ssim": 0.7858356436093649,
+          "parameters": {
+            "num_iterations": 100,
+            "step_size": 0.0001
+          },
+          "runtime_seconds": 5.332624085247517
+        },
+        {
+          "mean_psnr": 20.636292616526287,
+          "mean_ssim": 0.5392551408343328,
+          "parameters": {
+            "num_iterations": 100,
+            "step_size": 0.0005
+          },
+          "runtime_seconds": 5.273729101754725
+        },
+        {
+          "mean_psnr": 14.951153437296549,
+          "mean_ssim": 0.26561416204397875,
+          "parameters": {
+            "num_iterations": 100,
+            "step_size": 0.001
+          },
+          "runtime_seconds": 5.528259161859751
+        },
+        {
+          "mean_psnr": 7.866889953613281,
+          "mean_ssim": 0.0007184299174696207,
+          "parameters": {
+            "num_iterations": 100,
+            "step_size": 0.005
+          },
+          "runtime_seconds": 5.290119110606611
+        },
+        {
+          "mean_psnr": 27.511926015218098,
+          "mean_ssim": 0.8399264017740885,
+          "parameters": {
+            "num_iterations": 200,
+            "step_size": 0.0001
+          },
+          "runtime_seconds": 10.763677469454706
+        },
+        {
+          "mean_psnr": 20.927847385406494,
+          "mean_ssim": 0.5340772767085582,
+          "parameters": {
+            "num_iterations": 200,
+            "step_size": 0.0005
+          },
+          "runtime_seconds": 10.669066164642572
+        },
+        {
+          "mean_psnr": 14.894209543863932,
+          "mean_ssim": 0.2593597473266224,
+          "parameters": {
+            "num_iterations": 200,
+            "step_size": 0.001
+          },
+          "runtime_seconds": 10.690445814281702
+        },
+        {
+          "mean_psnr": 7.866889953613281,
+          "mean_ssim": 0.0007184299174696207,
+          "parameters": {
+            "num_iterations": 200,
+            "step_size": 0.005
+          },
+          "runtime_seconds": 10.505474455654621
+        }
+      ],
+      "lsqr": [
+        {
+          "mean_psnr": 30.168028513590496,
+          "mean_ssim": 0.8405670126279196,
+          "parameters": {
+            "num_iterations": 25
+          },
+          "runtime_seconds": 2.0376390758901834
+        },
+        {
+          "mean_psnr": 30.05836232503255,
+          "mean_ssim": 0.8213428854942322,
+          "parameters": {
+            "num_iterations": 50
+          },
+          "runtime_seconds": 4.106178168207407
+        },
+        {
+          "mean_psnr": 29.427298227945965,
+          "mean_ssim": 0.7889070510864258,
+          "parameters": {
+            "num_iterations": 100
+          },
+          "runtime_seconds": 7.970363761298358
+        }
+      ],
+      "mlem": [
+        {
+          "mean_psnr": 26.92588170369466,
+          "mean_ssim": 0.8480730454126993,
+          "parameters": {
+            "num_iterations": 25
+          },
+          "runtime_seconds": 1.344545771367848
+        },
+        {
+          "mean_psnr": 28.094189325968426,
+          "mean_ssim": 0.8557597796122233,
+          "parameters": {
+            "num_iterations": 50
+          },
+          "runtime_seconds": 2.6505936719477177
+        },
+        {
+          "mean_psnr": 29.063683191935223,
+          "mean_ssim": 0.8536486426989237,
+          "parameters": {
+            "num_iterations": 100
+          },
+          "runtime_seconds": 5.273117502219975
+        }
+      ],
+      "os_sart": [
+        {
+          "mean_psnr": 20.984949111938477,
+          "mean_ssim": 0.6474922696749369,
+          "parameters": {
+            "num_iterations": 5,
+            "relaxation": 0.1,
+            "subset_count": 10
+          },
+          "runtime_seconds": 0.5812566578388214
+        },
+        {
+          "mean_psnr": 23.935901006062824,
+          "mean_ssim": 0.7538024187088013,
+          "parameters": {
+            "num_iterations": 5,
+            "relaxation": 0.25,
+            "subset_count": 10
+          },
+          "runtime_seconds": 0.5824602898210287
+        },
+        {
+          "mean_psnr": 26.38012758890788,
+          "mean_ssim": 0.8137416442235311,
+          "parameters": {
+            "num_iterations": 5,
+            "relaxation": 0.5,
+            "subset_count": 10
+          },
+          "runtime_seconds": 0.581148044206202
+        },
+        {
+          "mean_psnr": 22.977035522460938,
+          "mean_ssim": 0.723973015944163,
+          "parameters": {
+            "num_iterations": 10,
+            "relaxation": 0.1,
+            "subset_count": 10
+          },
+          "runtime_seconds": 1.161106826737523
+        },
+        {
+          "mean_psnr": 26.11182912190755,
+          "mean_ssim": 0.8063385685284933,
+          "parameters": {
+            "num_iterations": 10,
+            "relaxation": 0.25,
+            "subset_count": 10
+          },
+          "runtime_seconds": 1.1607980765402317
+        },
+        {
+          "mean_psnr": 27.749553044637043,
+          "mean_ssim": 0.831939697265625,
+          "parameters": {
+            "num_iterations": 10,
+            "relaxation": 0.5,
+            "subset_count": 10
+          },
+          "runtime_seconds": 1.1666462495923042
+        },
+        {
+          "mean_psnr": 25.26286252339681,
+          "mean_ssim": 0.7885275085767111,
+          "parameters": {
+            "num_iterations": 20,
+            "relaxation": 0.1,
+            "subset_count": 10
+          },
+          "runtime_seconds": 2.3237275956198573
+        },
+        {
+          "mean_psnr": 27.61559295654297,
+          "mean_ssim": 0.8280501564343771,
+          "parameters": {
+            "num_iterations": 20,
+            "relaxation": 0.25,
+            "subset_count": 10
+          },
+          "runtime_seconds": 2.3283952651545405
+        },
+        {
+          "mean_psnr": 28.593741099039715,
+          "mean_ssim": 0.8318049709002177,
+          "parameters": {
+            "num_iterations": 20,
+            "relaxation": 0.5,
+            "subset_count": 10
+          },
+          "runtime_seconds": 2.3250921349972486
+        }
+      ],
+      "osem": [
+        {
+          "mean_psnr": 19.37946383158366,
+          "mean_ssim": 0.5802872975667318,
+          "parameters": {
+            "num_iterations": 25,
+            "subset_count": 10
+          },
+          "runtime_seconds": 2.151623715646565
+        },
+        {
+          "mean_psnr": 18.872767130533855,
+          "mean_ssim": 0.558644711971283,
+          "parameters": {
+            "num_iterations": 50,
+            "subset_count": 10
+          },
+          "runtime_seconds": 4.3091495130211115
+        },
+        {
+          "mean_psnr": 18.245787302652996,
+          "mean_ssim": 0.5214775005976359,
+          "parameters": {
+            "num_iterations": 100,
+            "subset_count": 10
+          },
+          "runtime_seconds": 8.712923489511013
+        }
+      ],
+      "sart": [
+        {
+          "mean_psnr": 25.214367548624676,
+          "mean_ssim": 0.7910119891166687,
+          "parameters": {
+            "block_size": 1,
+            "num_iterations": 5,
+            "relaxation": 0.1
+          },
+          "runtime_seconds": 0.8581686904653907
+        },
+        {
+          "mean_psnr": 27.82943280537923,
+          "mean_ssim": 0.8472495476404825,
+          "parameters": {
+            "block_size": 1,
+            "num_iterations": 5,
+            "relaxation": 0.25
+          },
+          "runtime_seconds": 0.8249353282153606
+        },
+        {
+          "mean_psnr": 28.09200096130371,
+          "mean_ssim": 0.8419870138168335,
+          "parameters": {
+            "block_size": 1,
+            "num_iterations": 5,
+            "relaxation": 0.5
+          },
+          "runtime_seconds": 0.8278534738346934
+        },
+        {
+          "mean_psnr": 27.425870895385742,
+          "mean_ssim": 0.8434381484985352,
+          "parameters": {
+            "block_size": 1,
+            "num_iterations": 10,
+            "relaxation": 0.1
+          },
+          "runtime_seconds": 1.6595685258507729
+        },
+        {
+          "mean_psnr": 29.42370859781901,
+          "mean_ssim": 0.8565035661061605,
+          "parameters": {
+            "block_size": 1,
+            "num_iterations": 10,
+            "relaxation": 0.25
+          },
+          "runtime_seconds": 1.6612605983391404
+        },
+        {
+          "mean_psnr": 29.803482055664062,
+          "mean_ssim": 0.8414698441823324,
+          "parameters": {
+            "block_size": 1,
+            "num_iterations": 10,
+            "relaxation": 0.5
+          },
+          "runtime_seconds": 1.6588757261633873
+        },
+        {
+          "mean_psnr": 29.182857513427734,
+          "mean_ssim": 0.861111064751943,
+          "parameters": {
+            "block_size": 1,
+            "num_iterations": 20,
+            "relaxation": 0.1
+          },
+          "runtime_seconds": 3.308098578825593
+        },
+        {
+          "mean_psnr": 30.17911211649577,
+          "mean_ssim": 0.84913303454717,
+          "parameters": {
+            "block_size": 1,
+            "num_iterations": 20,
+            "relaxation": 0.25
+          },
+          "runtime_seconds": 3.2780078314244747
+        },
+        {
+          "mean_psnr": 30.368794123331707,
+          "mean_ssim": 0.8373906413714091,
+          "parameters": {
+            "block_size": 1,
+            "num_iterations": 20,
+            "relaxation": 0.5
+          },
+          "runtime_seconds": 3.279038996435702
+        }
+      ],
+      "sirt": [
+        {
+          "mean_psnr": 25.72213872273763,
+          "mean_ssim": 0.8103771607081095,
+          "parameters": {
+            "num_iterations": 25
+          },
+          "runtime_seconds": 1.383334869518876
+        },
+        {
+          "mean_psnr": 26.881004969278973,
+          "mean_ssim": 0.8257192770640055,
+          "parameters": {
+            "num_iterations": 50
+          },
+          "runtime_seconds": 2.751410803757608
+        },
+        {
+          "mean_psnr": 27.833084106445312,
+          "mean_ssim": 0.8261423110961914,
+          "parameters": {
+            "num_iterations": 100
+          },
+          "runtime_seconds": 5.363702863454819
+        }
+      ],
+      "tikhonov": [
+        {
+          "mean_psnr": 29.711493174235027,
+          "mean_ssim": 0.7891651391983032,
+          "parameters": {
+            "num_iterations": 100,
+            "reg_strength": 1e-07
+          },
+          "runtime_seconds": 5.430418920703232
+        },
+        {
+          "mean_psnr": 29.707666397094727,
+          "mean_ssim": 0.7891320983568827,
+          "parameters": {
+            "num_iterations": 100,
+            "reg_strength": 1e-06
+          },
+          "runtime_seconds": 5.41918804589659
+        },
+        {
+          "mean_psnr": 29.705516815185547,
+          "mean_ssim": 0.7890853683153788,
+          "parameters": {
+            "num_iterations": 100,
+            "reg_strength": 1e-05
+          },
+          "runtime_seconds": 5.425400041043758
+        },
+        {
+          "mean_psnr": 29.69588851928711,
+          "mean_ssim": 0.7889002561569214,
+          "parameters": {
+            "num_iterations": 100,
+            "reg_strength": 0.0001
+          },
+          "runtime_seconds": 5.431762318126857
+        },
+        {
+          "mean_psnr": 29.74047342936198,
+          "mean_ssim": 0.7900863091150919,
+          "parameters": {
+            "num_iterations": 100,
+            "reg_strength": 0.001
+          },
+          "runtime_seconds": 5.445520997978747
+        }
+      ],
+      "tv_fista": [
+        {
+          "mean_psnr": 30.241480509440105,
+          "mean_ssim": 0.8397185802459717,
+          "parameters": {
+            "num_iterations": 50,
+            "reg_strength": 1e-07
+          },
+          "runtime_seconds": 3.217390812933445
+        },
+        {
+          "mean_psnr": 30.24632962544759,
+          "mean_ssim": 0.8399189114570618,
+          "parameters": {
+            "num_iterations": 50,
+            "reg_strength": 1e-06
+          },
+          "runtime_seconds": 3.2150830905884504
+        },
+        {
+          "mean_psnr": 30.293675740559895,
+          "mean_ssim": 0.8418429096539816,
+          "parameters": {
+            "num_iterations": 50,
+            "reg_strength": 1e-05
+          },
+          "runtime_seconds": 3.254996136762202
+        },
+        {
+          "mean_psnr": 30.74845250447591,
+          "mean_ssim": 0.8593455155690511,
+          "parameters": {
+            "num_iterations": 50,
+            "reg_strength": 0.0001
+          },
+          "runtime_seconds": 3.217113041318953
+        }
+      ]
+    },
+    "pilot_case_ids": [
+      "pilot_dense_clean",
+      "pilot_sparse_poisson",
+      "pilot_limited_angle"
+    ],
+    "selection_order": [
+      "mean_psnr",
+      "mean_ssim",
+      "lower_runtime_seconds"
+    ]
+  },
+  "schema_version": 1,
+  "seed": 20260804,
+  "solvers": {
+    "cgls": {
+      "num_iterations": 100
+    },
+    "fbp": {},
+    "fdk": {},
+    "landweber": {
+      "num_iterations": 200,
+      "step_size": 0.0001
+    },
+    "lsqr": {
+      "num_iterations": 25
+    },
+    "mlem": {
+      "num_iterations": 100
+    },
+    "os_sart": {
+      "num_iterations": 20,
+      "relaxation": 0.5,
+      "subset_count": 10
+    },
+    "osem": {
+      "num_iterations": 25,
+      "subset_count": 10
+    },
+    "sart": {
+      "block_size": 1,
+      "num_iterations": 20,
+      "relaxation": 0.5
+    },
+    "sirt": {
+      "num_iterations": 100
+    },
+    "tikhonov": {
+      "num_iterations": 100,
+      "reg_strength": 0.001
+    },
+    "tv_fista": {
+      "num_iterations": 50,
+      "reg_strength": 0.0001
+    }
+  },
+  "source": "held_out_64x64_pilot"
+}
