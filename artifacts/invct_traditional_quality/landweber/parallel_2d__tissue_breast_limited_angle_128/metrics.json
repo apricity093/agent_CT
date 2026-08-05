@@ -1,0 +1,14 @@
+{
+  "case_id": "parallel_2d/tissue_breast_limited_angle_128",
+  "data_residual": 0.012441440485417843,
+  "dimension": 2,
+  "psnr": 19.363920211791992,
+  "relative_error": 0.28514569997787476,
+  "rmse": 0.0004303917521610856,
+  "runtime_seconds": 1.9168405001983047,
+  "schema_version": 1,
+  "solver": "landweber",
+  "ssim": 0.6546709537506104,
+  "ssim_definition": "2d_ssim",
+  "status": "success"
+}

@@ -1,0 +1,21 @@
+schema_version: 1
+name: traditional_ct_quality
+expected_statuses: [success]
+min_records: 34
+required_metrics:
+  - relative_error
+  - rmse
+  - psnr
+  - ssim
+  - data_residual
+  - runtime_seconds
+thresholds:
+  psnr:
+    min: 0.0
+  ssim:
+    min: -1.0
+    max: 1.0
+  relative_error:
+    max: 1000000.0
+  data_residual:
+    max: 1000000.0

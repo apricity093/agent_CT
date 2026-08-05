@@ -1,0 +1,14 @@
+{
+  "case_id": "parallel_2d/tissue_breast_sparse_poisson_128",
+  "data_residual": 0.02022729627788067,
+  "dimension": 2,
+  "psnr": 20.670059204101562,
+  "relative_error": 0.24533525109291077,
+  "rmse": 0.00037030287785455585,
+  "runtime_seconds": 0.2453338075429201,
+  "schema_version": 1,
+  "solver": "sart",
+  "ssim": 0.7164647579193115,
+  "ssim_definition": "2d_ssim",
+  "status": "success"
+}

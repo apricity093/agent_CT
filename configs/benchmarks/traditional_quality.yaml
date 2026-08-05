@@ -1,0 +1,29 @@
+schema_version: 1
+name: traditional_ct_quality
+data_root: ../../test/data
+output_root: ../../artifacts/invct_traditional_quality
+device: cuda
+overwrite: false
+continue_on_error: true
+protocol: ../protocols/traditional_quality.yaml
+groups:
+  - algorithms:
+      - {name: fbp, config: ../algorithms/fbp.yaml}
+      - {name: sirt, config: ../algorithms/sirt.yaml}
+      - {name: landweber, config: ../algorithms/landweber.yaml}
+      - {name: cgls, config: ../algorithms/cgls.yaml}
+      - {name: lsqr, config: ../algorithms/lsqr.yaml}
+      - {name: sart, config: ../algorithms/sart.yaml}
+      - {name: os_sart, config: ../algorithms/os_sart.yaml}
+      - {name: mlem, config: ../algorithms/mlem.yaml}
+      - {name: osem, config: ../algorithms/osem.yaml}
+      - {name: tikhonov, config: ../algorithms/tikhonov.yaml}
+      - {name: tv_fista, config: ../algorithms/tv_fista.yaml}
+    cases:
+      - parallel_2d/tissue_breast_dense_clean_128
+      - parallel_2d/tissue_breast_sparse_poisson_128
+      - parallel_2d/tissue_breast_limited_angle_128
+  - algorithms:
+      - {name: fdk, config: ../algorithms/fdk.yaml}
+    cases:
+      - cone_3d/spheres_astra_12

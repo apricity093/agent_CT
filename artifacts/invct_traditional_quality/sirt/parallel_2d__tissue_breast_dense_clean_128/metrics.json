@@ -1,0 +1,14 @@
+{
+  "case_id": "parallel_2d/tissue_breast_dense_clean_128",
+  "data_residual": 0.019590171054005623,
+  "dimension": 2,
+  "psnr": 20.688282012939453,
+  "relative_error": 0.24482105672359467,
+  "rmse": 0.0003695267951115966,
+  "runtime_seconds": 1.4953311728313565,
+  "schema_version": 1,
+  "solver": "sirt",
+  "ssim": 0.7532662153244019,
+  "ssim_definition": "2d_ssim",
+  "status": "success"
+}

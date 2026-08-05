@@ -1,0 +1,41 @@
+{
+  "artifacts": {
+    "comparison.png": "ecfaa548bd6c488584e92a5e425db397a20eb67bd8d072c68b5bc8982cb5c691",
+    "metrics.json": "13f5c81a648a40a4689341cd88247ab650172162dd94de58573b2af9c4b0ec9d",
+    "reconstruction.pt": "c65e80cb8ee4bee58471d0027c78ffad04b17a24fe6d565d1e8a5f6f3c833338"
+  },
+  "case_id": "parallel_2d/tissue_breast_limited_angle_128",
+  "case_source": "/home/gaodongxu/autodl-tmp/ct_agent/test/data/quality_cases/parallel_2d__tissue_breast_limited_angle_128",
+  "config_source": "/home/gaodongxu/autodl-tmp/ct_agent/configs/algorithms/sirt.yaml",
+  "data_root": "/home/gaodongxu/autodl-tmp/ct_agent/test/data",
+  "device": "cuda",
+  "environment": {
+    "cuda_available": true,
+    "git_revision": null,
+    "platform": "Linux-5.15.0-139-generic-x86_64-with-glibc2.31",
+    "python": "3.10.20 (main, Mar 11 2026, 17:46:40) [GCC 14.3.0]",
+    "torch": "1.12.1"
+  },
+  "parameters": {
+    "num_iterations": 25
+  },
+  "schema_version": 1,
+  "solver": {
+    "backend": null,
+    "description": "Simultaneous iterative reconstruction.",
+    "dimensions": [
+      2
+    ],
+    "display_name": "SIRT",
+    "geometry_types": [
+      "parallel_2d"
+    ],
+    "name": "sirt",
+    "parameter_names": [
+      "num_iterations",
+      "min_value",
+      "max_value"
+    ]
+  },
+  "status": "success"
+}

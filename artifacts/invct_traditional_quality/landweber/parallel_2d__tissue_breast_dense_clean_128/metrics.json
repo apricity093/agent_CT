@@ -1,0 +1,14 @@
+{
+  "case_id": "parallel_2d/tissue_breast_dense_clean_128",
+  "data_residual": 0.381543904542923,
+  "dimension": 2,
+  "psnr": 15.479887008666992,
+  "relative_error": 0.44593188166618347,
+  "rmse": 0.000673078466206789,
+  "runtime_seconds": 2.866796512156725,
+  "schema_version": 1,
+  "solver": "landweber",
+  "ssim": 0.7176437377929688,
+  "ssim_definition": "2d_ssim",
+  "status": "success"
+}

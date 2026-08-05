@@ -1,0 +1,50 @@
+{
+  "artifacts": {
+    "comparison.png": "ea7974c48e4e02b056e88f5492a0dba460b7334924c3fc8bf7fdf314ba92dac9",
+    "metrics.json": "3fe3106d34071fe9bd878c7f48c25137dcde76f42c4dd4c26f77fb4814e2ffd9",
+    "reconstruction.pt": "a72bb39aae9d856bec9ede8d56addc6d23131a6c62e41c87b1537703a81ad517"
+  },
+  "case_id": "parallel_2d/tissue_breast_dense_clean_128",
+  "case_source": "/home/gaodongxu/autodl-tmp/ct_agent/test/data/quality_cases/parallel_2d__tissue_breast_dense_clean_128",
+  "config_source": "/home/gaodongxu/autodl-tmp/ct_agent/configs/algorithms/os_sart.yaml",
+  "data_root": "/home/gaodongxu/autodl-tmp/ct_agent/test/data",
+  "device": "cuda",
+  "environment": {
+    "cuda_available": true,
+    "git_revision": null,
+    "platform": "Linux-5.15.0-139-generic-x86_64-with-glibc2.31",
+    "python": "3.10.20 (main, Mar 11 2026, 17:46:40) [GCC 14.3.0]",
+    "torch": "1.12.1"
+  },
+  "parameters": {
+    "num_iterations": 5,
+    "order_strategy": "ordered",
+    "relaxation": 0.1,
+    "subset_count": 10
+  },
+  "schema_version": 1,
+  "solver": {
+    "backend": null,
+    "description": "Ordered-subsets SART.",
+    "dimensions": [
+      2
+    ],
+    "display_name": "OS-SART",
+    "geometry_types": [
+      "parallel_2d"
+    ],
+    "name": "os_sart",
+    "parameter_names": [
+      "num_iterations",
+      "min_value",
+      "max_value",
+      "block_size",
+      "subset_count",
+      "order_strategy",
+      "seed",
+      "relaxation",
+      "eps"
+    ]
+  },
+  "status": "success"
+}

@@ -1,0 +1,7 @@
+schema_version: 1
+name: sart
+parameters:
+  num_iterations: 5
+  block_size: 1
+  order_strategy: ordered
+  relaxation: 0.1

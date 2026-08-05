@@ -1,0 +1,7 @@
+schema_version: 1
+name: os_sart
+parameters:
+  num_iterations: 5
+  subset_count: 10
+  order_strategy: ordered
+  relaxation: 0.1

@@ -1,0 +1,6 @@
+schema_version: 1
+name: tikhonov
+parameters:
+  reg_strength: 1.0e-7
+  num_iterations: 100
+  tolerance: 1.0e-7

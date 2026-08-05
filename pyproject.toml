@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "inv-framework"
+version = "0.1.0"
+description = "Inverse-problem framework with CT reconstruction operators and solvers."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = [
+  "torch>=1.12",
+  "numpy>=1.21",
+  "h5py>=3.7",
+  "PyYAML>=6.0",
+  "matplotlib>=3.5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+diffusion = ["diffusers>=0.30"]
+
+[project.scripts]
+invct = "inv_framework.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["inv_framework*"]
+
+[tool.pytest.ini_options]
+testpaths = ["test", "tests"]

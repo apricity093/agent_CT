@@ -1,0 +1,43 @@
+{
+  "artifacts": {
+    "comparison.png": "35f8f8de9752b9d2ce3aad37e497135b20a4564289bf989b4232a9c604db8016",
+    "metrics.json": "37cd2f24321d9bf372f3859b5decfd99c0fc4f7733d8e29c07ac998f5c812508",
+    "reconstruction.pt": "5f3d2dfdc948b8cc6fb00508a8b2dc21ceac843221a09975c4101a1643d9d0fc"
+  },
+  "case_id": "parallel_2d/tissue_breast_sparse_poisson_128",
+  "case_source": "/home/gaodongxu/autodl-tmp/ct_agent/test/data/quality_cases/parallel_2d__tissue_breast_sparse_poisson_128",
+  "config_source": "/home/gaodongxu/autodl-tmp/ct_agent/configs/algorithms/mlem.yaml",
+  "data_root": "/home/gaodongxu/autodl-tmp/ct_agent/test/data",
+  "device": "cuda",
+  "environment": {
+    "cuda_available": true,
+    "git_revision": null,
+    "platform": "Linux-5.15.0-139-generic-x86_64-with-glibc2.31",
+    "python": "3.10.20 (main, Mar 11 2026, 17:46:40) [GCC 14.3.0]",
+    "torch": "1.12.1"
+  },
+  "parameters": {
+    "num_iterations": 25
+  },
+  "schema_version": 1,
+  "solver": {
+    "backend": null,
+    "description": "Maximum-likelihood expectation maximization.",
+    "dimensions": [
+      2
+    ],
+    "display_name": "MLEM",
+    "geometry_types": [
+      "parallel_2d"
+    ],
+    "name": "mlem",
+    "parameter_names": [
+      "num_iterations",
+      "min_value",
+      "max_value",
+      "initial_value",
+      "eps"
+    ]
+  },
+  "status": "success"
+}

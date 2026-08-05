@@ -1,0 +1,37 @@
+{
+  "artifacts": {
+    "comparison.png": "487bfaed849de66fca6931cecd3c16e5bfd268b9e8135cd4b87920bb9e6289bd",
+    "metrics.json": "818c5614f573830f611c50bbf87df69042b36e968d59c7ed392004e2dfde58f2",
+    "reconstruction.pt": "97a938e43fdcab58f407c8104303762cd7508cc80150c84d33b8580670eeeeb0"
+  },
+  "case_id": "parallel_2d/tissue_breast_dense_clean_128",
+  "case_source": "/home/gaodongxu/autodl-tmp/ct_agent/test/data/quality_cases/parallel_2d__tissue_breast_dense_clean_128",
+  "config_source": "/home/gaodongxu/autodl-tmp/ct_agent/configs/algorithms/fbp.yaml",
+  "data_root": "/home/gaodongxu/autodl-tmp/ct_agent/test/data",
+  "device": "cuda",
+  "environment": {
+    "cuda_available": true,
+    "git_revision": null,
+    "platform": "Linux-5.15.0-139-generic-x86_64-with-glibc2.31",
+    "python": "3.10.20 (main, Mar 11 2026, 17:46:40) [GCC 14.3.0]",
+    "torch": "1.12.1"
+  },
+  "parameters": {},
+  "schema_version": 1,
+  "solver": {
+    "backend": null,
+    "description": "Filtered backprojection.",
+    "dimensions": [
+      2
+    ],
+    "display_name": "FBP",
+    "geometry_types": [
+      "parallel_2d"
+    ],
+    "name": "fbp",
+    "parameter_names": [
+      "scale"
+    ]
+  },
+  "status": "success"
+}

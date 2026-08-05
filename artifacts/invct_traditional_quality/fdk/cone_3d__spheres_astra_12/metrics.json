@@ -1,0 +1,14 @@
+{
+  "case_id": "cone_3d/spheres_astra_12",
+  "data_residual": 133.3218994140625,
+  "dimension": 3,
+  "psnr": 24.136646270751953,
+  "relative_error": 0.22139620780944824,
+  "rmse": 0.001242217724211514,
+  "runtime_seconds": 0.004394244402647018,
+  "schema_version": 1,
+  "solver": "fdk",
+  "ssim": 0.8448407649993896,
+  "ssim_definition": "axial_mean_ssim",
+  "status": "success"
+}

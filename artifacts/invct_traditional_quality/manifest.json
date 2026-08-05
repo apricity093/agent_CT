@@ -1,0 +1,89 @@
+{
+  "device": "cuda",
+  "environment": {
+    "git_revision": null,
+    "platform": "Linux-5.15.0-139-generic-x86_64-with-glibc2.31",
+    "python": "3.10.20 (main, Mar 11 2026, 17:46:40) [GCC 14.3.0]",
+    "torch": "1.12.1"
+  },
+  "passed": true,
+  "record_count": 34,
+  "schema_version": 1,
+  "suite": {
+    "continue_on_error": true,
+    "data_root": "../../test/data",
+    "device": "cuda",
+    "groups": [
+      {
+        "algorithms": [
+          {
+            "config": "../algorithms/fbp.yaml",
+            "name": "fbp"
+          },
+          {
+            "config": "../algorithms/sirt.yaml",
+            "name": "sirt"
+          },
+          {
+            "config": "../algorithms/landweber.yaml",
+            "name": "landweber"
+          },
+          {
+            "config": "../algorithms/cgls.yaml",
+            "name": "cgls"
+          },
+          {
+            "config": "../algorithms/lsqr.yaml",
+            "name": "lsqr"
+          },
+          {
+            "config": "../algorithms/sart.yaml",
+            "name": "sart"
+          },
+          {
+            "config": "../algorithms/os_sart.yaml",
+            "name": "os_sart"
+          },
+          {
+            "config": "../algorithms/mlem.yaml",
+            "name": "mlem"
+          },
+          {
+            "config": "../algorithms/osem.yaml",
+            "name": "osem"
+          },
+          {
+            "config": "../algorithms/tikhonov.yaml",
+            "name": "tikhonov"
+          },
+          {
+            "config": "../algorithms/tv_fista.yaml",
+            "name": "tv_fista"
+          }
+        ],
+        "cases": [
+          "parallel_2d/tissue_breast_dense_clean_128",
+          "parallel_2d/tissue_breast_sparse_poisson_128",
+          "parallel_2d/tissue_breast_limited_angle_128"
+        ]
+      },
+      {
+        "algorithms": [
+          {
+            "config": "../algorithms/fdk.yaml",
+            "name": "fdk"
+          }
+        ],
+        "cases": [
+          "cone_3d/spheres_astra_12"
+        ]
+      }
+    ],
+    "name": "traditional_ct_quality",
+    "output_root": "../../artifacts/invct_traditional_quality",
+    "overwrite": false,
+    "protocol": "../protocols/traditional_quality.yaml",
+    "schema_version": 1
+  },
+  "suite_source": "/home/gaodongxu/autodl-tmp/ct_agent/configs/benchmarks/traditional_quality.yaml"
+}

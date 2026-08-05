@@ -1,0 +1,46 @@
+{
+  "artifacts": {
+    "comparison.png": "51c46a9c621edb0afe8c08b334283cffaca7ac53a5a8e6aa4c4926cb69aaed73",
+    "metrics.json": "e67d3514336a996e56255c589e8ef9ea46de5da61f6f8ec35b34bac9537ad99a",
+    "reconstruction.pt": "33f5699fa757be8d7dc814e0df4d0e6405ed4b83749ae5b560bc9a1225be710c"
+  },
+  "case_id": "parallel_2d/tissue_breast_dense_clean_128",
+  "case_source": "/home/gaodongxu/autodl-tmp/ct_agent/test/data/quality_cases/parallel_2d__tissue_breast_dense_clean_128",
+  "config_source": "/home/gaodongxu/autodl-tmp/ct_agent/configs/algorithms/lsqr.yaml",
+  "data_root": "/home/gaodongxu/autodl-tmp/ct_agent/test/data",
+  "device": "cuda",
+  "environment": {
+    "cuda_available": true,
+    "git_revision": null,
+    "platform": "Linux-5.15.0-139-generic-x86_64-with-glibc2.31",
+    "python": "3.10.20 (main, Mar 11 2026, 17:46:40) [GCC 14.3.0]",
+    "torch": "1.12.1"
+  },
+  "parameters": {
+    "atol": 0.0,
+    "btol": 0.0,
+    "num_iterations": 25
+  },
+  "schema_version": 1,
+  "solver": {
+    "backend": null,
+    "description": "Golub-Kahan LSQR.",
+    "dimensions": [
+      2
+    ],
+    "display_name": "LSQR",
+    "geometry_types": [
+      "parallel_2d"
+    ],
+    "name": "lsqr",
+    "parameter_names": [
+      "num_iterations",
+      "min_value",
+      "max_value",
+      "damping",
+      "atol",
+      "btol"
+    ]
+  },
+  "status": "success"
+}

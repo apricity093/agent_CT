@@ -1,0 +1,45 @@
+{
+  "artifacts": {
+    "comparison.png": "67de8deee1d33332a76875b47552261e150c313d4734edd9a85e5a942b387adc",
+    "metrics.json": "268fdccb0a8b75dd5cf895ae35b94dfd832564a25f6535b66dff50d91977c288",
+    "reconstruction.pt": "b62f27011696ab45a8c1a178e2196e7607b524722617c7fa89944b9fee95b6e3"
+  },
+  "case_id": "parallel_2d/tissue_breast_sparse_poisson_128",
+  "case_source": "/home/gaodongxu/autodl-tmp/ct_agent/test/data/quality_cases/parallel_2d__tissue_breast_sparse_poisson_128",
+  "config_source": "/home/gaodongxu/autodl-tmp/ct_agent/configs/algorithms/tikhonov.yaml",
+  "data_root": "/home/gaodongxu/autodl-tmp/ct_agent/test/data",
+  "device": "cuda",
+  "environment": {
+    "cuda_available": true,
+    "git_revision": null,
+    "platform": "Linux-5.15.0-139-generic-x86_64-with-glibc2.31",
+    "python": "3.10.20 (main, Mar 11 2026, 17:46:40) [GCC 14.3.0]",
+    "torch": "1.12.1"
+  },
+  "parameters": {
+    "num_iterations": 100,
+    "reg_strength": 1e-07,
+    "tolerance": 1e-07
+  },
+  "schema_version": 1,
+  "solver": {
+    "backend": null,
+    "description": "Quadratic Tikhonov reconstruction.",
+    "dimensions": [
+      2
+    ],
+    "display_name": "Tikhonov",
+    "geometry_types": [
+      "parallel_2d"
+    ],
+    "name": "tikhonov",
+    "parameter_names": [
+      "num_iterations",
+      "min_value",
+      "max_value",
+      "reg_strength",
+      "tolerance"
+    ]
+  },
+  "status": "success"
+}

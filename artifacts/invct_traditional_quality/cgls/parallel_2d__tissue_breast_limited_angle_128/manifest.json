@@ -1,0 +1,43 @@
+{
+  "artifacts": {
+    "comparison.png": "de87ea52482464e489de3b1fddf695b7c9c4ec91f082cc32b9163c3d2a858f1d",
+    "metrics.json": "390ac4933f82ab35a5a5ad98054ec60ff56c4de6fb92f4f2c3a876ba1fbc0955",
+    "reconstruction.pt": "63fc68ab622157b805c7d9148a1b20dcdd419b88b658414dcbae406b8e2e55cd"
+  },
+  "case_id": "parallel_2d/tissue_breast_limited_angle_128",
+  "case_source": "/home/gaodongxu/autodl-tmp/ct_agent/test/data/quality_cases/parallel_2d__tissue_breast_limited_angle_128",
+  "config_source": "/home/gaodongxu/autodl-tmp/ct_agent/configs/algorithms/cgls.yaml",
+  "data_root": "/home/gaodongxu/autodl-tmp/ct_agent/test/data",
+  "device": "cuda",
+  "environment": {
+    "cuda_available": true,
+    "git_revision": null,
+    "platform": "Linux-5.15.0-139-generic-x86_64-with-glibc2.31",
+    "python": "3.10.20 (main, Mar 11 2026, 17:46:40) [GCC 14.3.0]",
+    "torch": "1.12.1"
+  },
+  "parameters": {
+    "num_iterations": 25,
+    "tol": 0.0
+  },
+  "schema_version": 1,
+  "solver": {
+    "backend": null,
+    "description": "Conjugate-gradient least squares.",
+    "dimensions": [
+      2
+    ],
+    "display_name": "CGLS",
+    "geometry_types": [
+      "parallel_2d"
+    ],
+    "name": "cgls",
+    "parameter_names": [
+      "num_iterations",
+      "min_value",
+      "max_value",
+      "tol"
+    ]
+  },
+  "status": "success"
+}

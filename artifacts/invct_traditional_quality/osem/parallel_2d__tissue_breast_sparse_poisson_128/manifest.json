@@ -1,0 +1,49 @@
+{
+  "artifacts": {
+    "comparison.png": "81641fd36cf222b2ef02f4758cdec97d27df91c63fa6cc8ed74f12b1e9f1afb0",
+    "metrics.json": "ce879e63f9a96318ba16eb23fc4daa512bb9555925f81cba530ea3c7a96573b4",
+    "reconstruction.pt": "6841365858ee29edd4e4e62d3a730b4448c3bf26a484807bd1d9025002f0acaf"
+  },
+  "case_id": "parallel_2d/tissue_breast_sparse_poisson_128",
+  "case_source": "/home/gaodongxu/autodl-tmp/ct_agent/test/data/quality_cases/parallel_2d__tissue_breast_sparse_poisson_128",
+  "config_source": "/home/gaodongxu/autodl-tmp/ct_agent/configs/algorithms/osem.yaml",
+  "data_root": "/home/gaodongxu/autodl-tmp/ct_agent/test/data",
+  "device": "cuda",
+  "environment": {
+    "cuda_available": true,
+    "git_revision": null,
+    "platform": "Linux-5.15.0-139-generic-x86_64-with-glibc2.31",
+    "python": "3.10.20 (main, Mar 11 2026, 17:46:40) [GCC 14.3.0]",
+    "torch": "1.12.1"
+  },
+  "parameters": {
+    "num_iterations": 25,
+    "order_strategy": "ordered",
+    "subset_count": 10
+  },
+  "schema_version": 1,
+  "solver": {
+    "backend": null,
+    "description": "Ordered-subsets expectation maximization.",
+    "dimensions": [
+      2
+    ],
+    "display_name": "OSEM",
+    "geometry_types": [
+      "parallel_2d"
+    ],
+    "name": "osem",
+    "parameter_names": [
+      "num_iterations",
+      "min_value",
+      "max_value",
+      "block_size",
+      "subset_count",
+      "order_strategy",
+      "seed",
+      "initial_value",
+      "eps"
+    ]
+  },
+  "status": "success"
+}

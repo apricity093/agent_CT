@@ -1,0 +1,43 @@
+{
+  "artifacts": {
+    "comparison.png": "17c41b8f52eac06743ee6970308f0a33ae6f92637ff4dd6e8b55fca55fb20166",
+    "metrics.json": "c67f95fd0e8d4a3adf4ef72a3997448bb29a34dee9d19ffbbf08a937292809e9",
+    "reconstruction.pt": "abc015a3547f6df02a4caa63aa4d045a56a27489de713090d708ab34cd85c7ae"
+  },
+  "case_id": "parallel_2d/tissue_breast_dense_clean_128",
+  "case_source": "/home/gaodongxu/autodl-tmp/ct_agent/test/data/quality_cases/parallel_2d__tissue_breast_dense_clean_128",
+  "config_source": "/home/gaodongxu/autodl-tmp/ct_agent/configs/algorithms/landweber.yaml",
+  "data_root": "/home/gaodongxu/autodl-tmp/ct_agent/test/data",
+  "device": "cuda",
+  "environment": {
+    "cuda_available": true,
+    "git_revision": null,
+    "platform": "Linux-5.15.0-139-generic-x86_64-with-glibc2.31",
+    "python": "3.10.20 (main, Mar 11 2026, 17:46:40) [GCC 14.3.0]",
+    "torch": "1.12.1"
+  },
+  "parameters": {
+    "num_iterations": 50,
+    "step_size": 0.0001
+  },
+  "schema_version": 1,
+  "solver": {
+    "backend": null,
+    "description": "Landweber iteration.",
+    "dimensions": [
+      2
+    ],
+    "display_name": "Landweber",
+    "geometry_types": [
+      "parallel_2d"
+    ],
+    "name": "landweber",
+    "parameter_names": [
+      "num_iterations",
+      "min_value",
+      "max_value",
+      "step_size"
+    ]
+  },
+  "status": "success"
+}

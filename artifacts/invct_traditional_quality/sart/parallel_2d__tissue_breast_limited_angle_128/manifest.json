@@ -1,0 +1,49 @@
+{
+  "artifacts": {
+    "comparison.png": "c335ae41e2f6d37147fb609eeabc9545a0c8c4217fbb94088bc5c5d1ecc8fae3",
+    "metrics.json": "187748ecb60cf7de01a1be943c09f9934a24984e9cad9338dc4551bfd7ff85c4",
+    "reconstruction.pt": "697c40f5df5f7fc46e2b72ad37f8b47cc680ec6ec78d6b7d5cfe99121e16a53d"
+  },
+  "case_id": "parallel_2d/tissue_breast_limited_angle_128",
+  "case_source": "/home/gaodongxu/autodl-tmp/ct_agent/test/data/quality_cases/parallel_2d__tissue_breast_limited_angle_128",
+  "config_source": "/home/gaodongxu/autodl-tmp/ct_agent/configs/algorithms/sart.yaml",
+  "data_root": "/home/gaodongxu/autodl-tmp/ct_agent/test/data",
+  "device": "cuda",
+  "environment": {
+    "cuda_available": true,
+    "git_revision": null,
+    "platform": "Linux-5.15.0-139-generic-x86_64-with-glibc2.31",
+    "python": "3.10.20 (main, Mar 11 2026, 17:46:40) [GCC 14.3.0]",
+    "torch": "1.12.1"
+  },
+  "parameters": {
+    "block_size": 1,
+    "num_iterations": 5,
+    "order_strategy": "ordered",
+    "relaxation": 0.1
+  },
+  "schema_version": 1,
+  "solver": {
+    "backend": null,
+    "description": "Ordered row-action reconstruction.",
+    "dimensions": [
+      2
+    ],
+    "display_name": "SART",
+    "geometry_types": [
+      "parallel_2d"
+    ],
+    "name": "sart",
+    "parameter_names": [
+      "num_iterations",
+      "min_value",
+      "max_value",
+      "block_size",
+      "order_strategy",
+      "seed",
+      "relaxation",
+      "eps"
+    ]
+  },
+  "status": "success"
+}

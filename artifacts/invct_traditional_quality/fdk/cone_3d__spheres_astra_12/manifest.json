@@ -1,0 +1,43 @@
+{
+  "artifacts": {
+    "comparison.png": "f0987af0b75d33d48cadd10ccda1401c950ea60fcb15c55443304336d49694ea",
+    "metrics.json": "e24f6cb026cc27b026991a62afa309f911bdf9060d6c95a514c2a6f243b53868",
+    "reconstruction.pt": "cc149595110af3d5ac9a0bd10ab2e854dfff853f97f91b4f16ca91353b74ba02"
+  },
+  "case_id": "cone_3d/spheres_astra_12",
+  "case_source": "/home/gaodongxu/autodl-tmp/ct_agent/test/data/cases/cone_3d__spheres_astra_12",
+  "config_source": "/home/gaodongxu/autodl-tmp/ct_agent/configs/algorithms/fdk.yaml",
+  "data_root": "/home/gaodongxu/autodl-tmp/ct_agent/test/data",
+  "device": "cuda",
+  "environment": {
+    "cuda_available": true,
+    "git_revision": null,
+    "platform": "Linux-5.15.0-139-generic-x86_64-with-glibc2.31",
+    "python": "3.10.20 (main, Mar 11 2026, 17:46:40) [GCC 14.3.0]",
+    "torch": "1.12.1"
+  },
+  "parameters": {
+    "filter_type": "ram-lak",
+    "short_scan": false,
+    "voxel_supersampling": 1
+  },
+  "schema_version": 1,
+  "solver": {
+    "backend": "ASTRA CUDA",
+    "description": "Cone-beam Feldkamp-Davis-Kress reconstruction.",
+    "dimensions": [
+      3
+    ],
+    "display_name": "FDK",
+    "geometry_types": [
+      "cone_3d"
+    ],
+    "name": "fdk",
+    "parameter_names": [
+      "filter_type",
+      "short_scan",
+      "voxel_supersampling"
+    ]
+  },
+  "status": "success"
+}

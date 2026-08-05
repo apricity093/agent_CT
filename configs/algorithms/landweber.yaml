@@ -1,0 +1,5 @@
+schema_version: 1
+name: landweber
+parameters:
+  num_iterations: 50
+  step_size: 0.0001

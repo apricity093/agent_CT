@@ -1,0 +1,49 @@
+{
+  "artifacts": {
+    "comparison.png": "e4372dea5503ebe2909d8cc6b07ac06bd8ddc47eebc134cbb68d0f33ce3e9835",
+    "metrics.json": "ef9aaaf7f9606df497ee72df471ab8bcb8992e15510460e23558897ea5919049",
+    "reconstruction.pt": "fc0a1935417c503aa68c5602faa274ff3296657707f1289bd3a6509dab81d911"
+  },
+  "case_id": "parallel_2d/tissue_breast_limited_angle_128",
+  "case_source": "/home/gaodongxu/autodl-tmp/ct_agent/test/data/quality_cases/parallel_2d__tissue_breast_limited_angle_128",
+  "config_source": "/home/gaodongxu/autodl-tmp/ct_agent/configs/algorithms/osem.yaml",
+  "data_root": "/home/gaodongxu/autodl-tmp/ct_agent/test/data",
+  "device": "cuda",
+  "environment": {
+    "cuda_available": true,
+    "git_revision": null,
+    "platform": "Linux-5.15.0-139-generic-x86_64-with-glibc2.31",
+    "python": "3.10.20 (main, Mar 11 2026, 17:46:40) [GCC 14.3.0]",
+    "torch": "1.12.1"
+  },
+  "parameters": {
+    "num_iterations": 25,
+    "order_strategy": "ordered",
+    "subset_count": 10
+  },
+  "schema_version": 1,
+  "solver": {
+    "backend": null,
+    "description": "Ordered-subsets expectation maximization.",
+    "dimensions": [
+      2
+    ],
+    "display_name": "OSEM",
+    "geometry_types": [
+      "parallel_2d"
+    ],
+    "name": "osem",
+    "parameter_names": [
+      "num_iterations",
+      "min_value",
+      "max_value",
+      "block_size",
+      "subset_count",
+      "order_strategy",
+      "seed",
+      "initial_value",
+      "eps"
+    ]
+  },
+  "status": "success"
+}

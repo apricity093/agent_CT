@@ -1,0 +1,49 @@
+{
+  "artifacts": {
+    "comparison.png": "3ea1832f652d338fda8754087dd74457fe2d69586c7d8e5fb4cc0b091dede08e",
+    "metrics.json": "8fdffc611755306f74c36ebafb7f9100a59aa8bf4b986fa3f2df0dd91ae42768",
+    "reconstruction.pt": "7d9653e3cf447a7ccef3730b5769e169ecd08e47432ea209fbf96de056981722"
+  },
+  "case_id": "parallel_2d/tissue_breast_sparse_poisson_128",
+  "case_source": "/home/gaodongxu/autodl-tmp/ct_agent/test/data/quality_cases/parallel_2d__tissue_breast_sparse_poisson_128",
+  "config_source": "/home/gaodongxu/autodl-tmp/ct_agent/configs/algorithms/sart.yaml",
+  "data_root": "/home/gaodongxu/autodl-tmp/ct_agent/test/data",
+  "device": "cuda",
+  "environment": {
+    "cuda_available": true,
+    "git_revision": null,
+    "platform": "Linux-5.15.0-139-generic-x86_64-with-glibc2.31",
+    "python": "3.10.20 (main, Mar 11 2026, 17:46:40) [GCC 14.3.0]",
+    "torch": "1.12.1"
+  },
+  "parameters": {
+    "block_size": 1,
+    "num_iterations": 5,
+    "order_strategy": "ordered",
+    "relaxation": 0.1
+  },
+  "schema_version": 1,
+  "solver": {
+    "backend": null,
+    "description": "Ordered row-action reconstruction.",
+    "dimensions": [
+      2
+    ],
+    "display_name": "SART",
+    "geometry_types": [
+      "parallel_2d"
+    ],
+    "name": "sart",
+    "parameter_names": [
+      "num_iterations",
+      "min_value",
+      "max_value",
+      "block_size",
+      "order_strategy",
+      "seed",
+      "relaxation",
+      "eps"
+    ]
+  },
+  "status": "success"
+}

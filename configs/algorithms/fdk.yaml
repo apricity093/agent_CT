@@ -1,0 +1,6 @@
+schema_version: 1
+name: fdk
+parameters:
+  filter_type: ram-lak
+  short_scan: false
+  voxel_supersampling: 1
