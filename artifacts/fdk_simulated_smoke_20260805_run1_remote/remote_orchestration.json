@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "remote_host": "202.121.181.119",
+  "remote_project_directory": "/home/gaodongxu/autodl-tmp/ct_agent",
+  "remote_python": "/home/gaodongxu/miniconda3/envs/fno/bin/python",
+  "remote_artifact_directory": "/home/gaodongxu/autodl-tmp/ct_agent/artifacts/fdk_simulated_smoke_20260805_run1",
+  "device": "cuda",
+  "worktree_sha256": "ddae782dc2b0d317116fce87f3404a3516a401cea1ea9e6c805c4bff93c2a92e",
+  "artifacts_sha256_verified": true
+}

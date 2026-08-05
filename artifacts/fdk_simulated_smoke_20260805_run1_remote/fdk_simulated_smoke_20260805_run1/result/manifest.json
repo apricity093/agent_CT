@@ -1,0 +1,30 @@
+{
+  "artifact_kind": "simulated_fdk_smoke",
+  "case_id": "cone_3d/modified_shepp_logan_64_clean",
+  "config": {
+    "attenuation_scale": 0.02,
+    "detector_cols": 128,
+    "detector_rows": 128,
+    "detector_spacing_col": 1.0,
+    "detector_spacing_row": 1.0,
+    "num_angles": 180,
+    "origin_detector_distance": 320.0,
+    "source_origin_distance": 320.0,
+    "volume_size": 64
+  },
+  "environment": {
+    "astra": "2.4.1",
+    "cuda_device": "NVIDIA A100-SXM4-80GB",
+    "platform": "Linux-5.15.0-139-generic-x86_64-with-glibc2.31",
+    "python": "3.10.20 (main, Mar 11 2026, 17:46:40) [GCC 14.3.0]",
+    "torch": "1.12.1"
+  },
+  "files": {
+    "comparison.png": "266886654d06d98f4379a32a7da876cd989b36f9a0289251dd783a324ce90a00",
+    "geometry.json": "7c6bdb226151f74839b7eeb74756570eaf8aac9d6e7745630f379b6a38d1c283",
+    "metrics.json": "c38527473a13455a9d57e7ec1726711f9c6b93f07b2c179e5aae62c21253f00f",
+    "reconstruction_axial.npy": "3cd2da682536089e153b18ad4df6fe458c7f6694c8d74d63bcedaf4a07efe3c6",
+    "truth_axial.npy": "bb3e7ff2d0b2a2f35b3dd6d7e6f5df628937f084338dfe66e169f56eefcce29e"
+  },
+  "schema_version": 1
+}
