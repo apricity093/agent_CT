@@ -439,7 +439,12 @@ class IterationRecorder:
         # the generic trajectory classifier here would turn an admissible
         # non-monotone segment into a false divergence.
         classifier_safe_algorithms = {"sirt", "landweber", "sart", "os_sart", "mlem", "osem"}
-        if self.records and effective_status in {"max_iterations", "partial"} and self.algorithm in classifier_safe_algorithms:
+        if (
+            self.records
+            and effective_status in {"max_iterations", "partial"}
+            and self.algorithm in classifier_safe_algorithms
+            and not bool((metadata or {}).get("native_termination_managed", False))
+        ):
             try:
                 from ..convergence import classify_trajectory
 

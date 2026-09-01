@@ -149,6 +149,17 @@ def _policy_active(control: SolveControl) -> bool:
     return (
         control.discrepancy_target is not None
         or (control.metadata or {}).get("effective_stopping_policy") is not None
+        or any(
+            getattr(control, name, None) is not None
+            for name in (
+                "relative_iterate_tolerance",
+                "normalized_normal_residual_tolerance",
+                "relative_objective_tolerance",
+                "prox_gradient_mapping_tolerance",
+            )
+        )
+        or control.stall_enabled
+        or control.divergence_enabled
     )
 
 
@@ -226,7 +237,10 @@ def _parameter_failure_result(
 ) -> SolveResult:
     """Return a structured no-loop result for direct detailed callers."""
 
-    x = prepare_initial_image(measurement, operator, x_init=x_init, initial_value=0.0)
+    try:
+        x = prepare_initial_image(measurement, operator, x_init=x_init, initial_value=0.0)
+    except (AttributeError, TypeError, ValueError):
+        x = _placeholder_reconstruction(measurement, operator)
     return SolveResult(
         reconstruction=x,
         actual_iterations=0,
@@ -255,7 +269,10 @@ def _numerical_result(
 ) -> SolveResult:
     """Return a structured pre-loop numerical failure without hiding it."""
 
-    x = prepare_initial_image(measurement, operator, x_init=x_init, initial_value=0.0)
+    try:
+        x = prepare_initial_image(measurement, operator, x_init=x_init, initial_value=0.0)
+    except (AttributeError, TypeError, ValueError):
+        x = _placeholder_reconstruction(measurement, operator)
     return SolveResult(
         reconstruction=x,
         actual_iterations=0,
@@ -268,6 +285,35 @@ def _numerical_result(
             "parameters": dict(parameters),
         },
     )
+
+
+def _placeholder_reconstruction(
+    measurement: Any,
+    operator: Any,
+) -> torch.Tensor:
+    """Build a safe tensor for structured pre-loop failures.
+
+    Detailed solver entry points report validation failures as ``SolveResult``
+    values.  The placeholder is never presented as a reconstruction; it only
+    keeps that error result serializable when the input itself has a bad shape
+    or dtype.
+    """
+
+    try:
+        batch = int(measurement.shape[0]) if isinstance(measurement, torch.Tensor) and measurement.ndim else 1
+    except (AttributeError, TypeError, ValueError):
+        batch = 1
+    try:
+        domain_shape = tuple(int(value) for value in operator.domain_shape)
+    except (AttributeError, TypeError, ValueError):
+        domain_shape = ()
+    if isinstance(measurement, torch.Tensor):
+        device = measurement.device
+        dtype = measurement.dtype if measurement.dtype.is_floating_point else torch.float32
+    else:
+        device = torch.device("cpu")
+        dtype = torch.float32
+    return torch.zeros((max(1, batch), *domain_shape), device=device, dtype=dtype)
 
 
 def _native_tolerance(control: SolveControl) -> float | None:
@@ -488,6 +534,36 @@ def _landweber_step_preflight(
     return step, float(norm_squared), errors, estimates
 
 
+def _direct_result(
+    algorithm: str,
+    measurement: Any,
+    operator: Any,
+    *,
+    status: str,
+    stopping_reason: str,
+    parameters: Mapping[str, Any],
+    error: BaseException | None = None,
+) -> SolveResult:
+    """Return a structured direct-solver outcome without entering a loop."""
+
+    metadata: dict[str, Any] = {
+        "algorithm": algorithm,
+        "direct": True,
+        "max_iterations": 1,
+        "parameters": dict(parameters),
+    }
+    if error is not None:
+        metadata["failure_reason"] = str(error)
+    return SolveResult(
+        reconstruction=_placeholder_reconstruction(measurement, operator),
+        actual_iterations=0,
+        status=status,
+        stopping_reason=stopping_reason,
+        resources={"trajectory_available": False, **_operator_stats(operator)},
+        metadata=metadata,
+    )
+
+
 def solve_fbp_detailed(
     operator: LinearOperator,
     measurement: torch.Tensor,
@@ -500,16 +576,66 @@ def solve_fbp_detailed(
     from .classical import fbp
 
     _ = kwargs
-    control = resolve_control(control, default_iterations=1, callback=callback)
+    parameters = {"scale": scale}
+    try:
+        require_linear_operator(operator, "fbp")
+        validate_measurement_shape(measurement, operator, "fbp")
+    except (TypeError, ValueError) as error:
+        return _direct_result(
+            "fbp", measurement, operator, status="invalid_parameters",
+            stopping_reason="parameter_validation_failed", parameters=parameters,
+            error=error,
+        )
+    if scale is not None and not _finite_positive(scale):
+        return _direct_result(
+            "fbp", measurement, operator, status="invalid_parameters",
+            stopping_reason="invalid_scale", parameters=parameters,
+            error=ValueError("scale must be a finite positive number or None"),
+        )
+    if not _finite_tensor(measurement):
+        return _direct_result(
+            "fbp", measurement, operator, status="numerical_error",
+            stopping_reason="non_finite_measurement", parameters=parameters,
+            error=FloatingPointError("FBP measurement contains NaN or Inf"),
+        )
+    try:
+        control = resolve_control(control, default_iterations=1, callback=callback)
+    except (TypeError, ValueError) as error:
+        return _direct_result(
+            "fbp", measurement, operator, status="invalid_parameters",
+            stopping_reason="invalid_control", parameters=parameters, error=error,
+        )
+    try:
+        reconstruction = fbp(operator, measurement, scale=scale)
+    except Exception as error:
+        return _direct_result(
+            "fbp", measurement, operator, status="numerical_error",
+            stopping_reason="fbp_execution_failed", parameters=parameters, error=error,
+        )
+    expected = (measurement.shape[0], *tuple(operator.domain_shape))
+    if not isinstance(reconstruction, torch.Tensor) or tuple(reconstruction.shape) != expected:
+        return _direct_result(
+            "fbp", measurement, operator, status="numerical_error",
+            stopping_reason="invalid_reconstruction_shape", parameters=parameters,
+            error=ValueError(
+                f"FBP returned {type(reconstruction).__name__} with shape "
+                f"{getattr(reconstruction, 'shape', None)}; expected {expected}"
+            ),
+        )
+    if not _finite_tensor(reconstruction):
+        return _direct_result(
+            "fbp", measurement, operator, status="numerical_error",
+            stopping_reason="non_finite_reconstruction", parameters=parameters,
+            error=FloatingPointError("FBP returned NaN or Inf"),
+        )
     recorder = IterationRecorder(control, measurement, operator, algorithm="fbp")
-    reconstruction = fbp(operator, measurement, scale=scale)
     return recorder.finish(
         reconstruction,
         actual_iterations=0,
-        status="not_applicable",
-        stopping_reason="direct_reconstruction",
-        resources={"trajectory_available": False},
-        metadata={"direct": True},
+        status="completed_valid",
+        stopping_reason="direct_reconstruction_valid",
+        resources={"trajectory_available": False, "direct": True},
+        metadata={"direct": True, "parameters": parameters, "completed_valid": True},
     )
 
 
@@ -523,16 +649,143 @@ def solve_fdk_detailed(
 ) -> SolveResult:
     from .classical import fdk
 
-    control = resolve_control(control, default_iterations=1, callback=callback)
+    parameters = dict(kwargs)
+    for name, value in (
+        ("filter_type", parameters.get("filter_type", "ram-lak")),
+        ("filter", parameters.get("filter")),
+    ):
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            return _direct_result(
+                "fdk", measurement, operator, status="invalid_parameters",
+                stopping_reason=f"invalid_{name}", parameters=parameters,
+                error=ValueError(f"{name} must be a non-empty string"),
+            )
+    filter_type = str(parameters.get("filter_type", "ram-lak")).strip().lower().replace("_", "-")
+    filter_alias = parameters.get("filter")
+    if filter_type in {"ramp", "ramlak"}:
+        filter_type = "ram-lak"
+    if filter_alias is not None:
+        filter_alias = str(filter_alias).strip().lower().replace("_", "-")
+        if filter_alias in {"ramp", "ramlak"}:
+            filter_alias = "ram-lak"
+    if filter_type != "ram-lak" or (
+        filter_alias is not None and filter_alias != filter_type
+    ):
+        return _direct_result(
+            "fdk", measurement, operator, status="invalid_parameters",
+            stopping_reason="invalid_filter", parameters=parameters,
+            error=ValueError(
+                "FDK supports only the native Ram-Lak filter and compatible aliases"
+            ),
+        )
+    short_scan = parameters.get("short_scan", False)
+    if not isinstance(short_scan, bool):
+        return _direct_result(
+            "fdk", measurement, operator, status="invalid_parameters",
+            stopping_reason="invalid_short_scan", parameters=parameters,
+            error=TypeError("short_scan must be a bool"),
+        )
+    supersampling = parameters.get("voxel_supersampling", 1)
+    if (
+        isinstance(supersampling, bool)
+        or not isinstance(supersampling, int)
+        or supersampling <= 0
+    ):
+        return _direct_result(
+            "fdk", measurement, operator, status="invalid_parameters",
+            stopping_reason="invalid_voxel_supersampling", parameters=parameters,
+            error=ValueError("voxel_supersampling must be a positive integer"),
+        )
+    try:
+        require_linear_operator(operator, "fdk")
+        validate_measurement_shape(measurement, operator, "fdk")
+    except (TypeError, ValueError) as error:
+        return _direct_result(
+            "fdk", measurement, operator, status="invalid_parameters",
+            stopping_reason="parameter_validation_failed", parameters=parameters,
+            error=error,
+        )
+    if not _finite_tensor(measurement):
+        return _direct_result(
+            "fdk", measurement, operator, status="numerical_error",
+            stopping_reason="non_finite_measurement", parameters=parameters,
+            error=FloatingPointError("FDK measurement contains NaN or Inf"),
+        )
+    try:
+        control = resolve_control(control, default_iterations=1, callback=callback)
+    except (TypeError, ValueError) as error:
+        return _direct_result(
+            "fdk", measurement, operator, status="invalid_parameters",
+            stopping_reason="invalid_control", parameters=parameters, error=error,
+        )
+    try:
+        reconstruction = fdk(operator, measurement, **parameters)
+    except ImportError as error:
+        return _direct_result(
+            "fdk", measurement, operator, status="unavailable",
+            stopping_reason="backend_unavailable", parameters=parameters, error=error,
+        )
+    except NotImplementedError as error:
+        message = str(error).lower()
+        invalid_backend_options = (
+            "would be ignored",
+            "requires cone geometry",
+            "unsupported",
+            "filter",
+        )
+        status = "invalid_parameters" if any(token in message for token in invalid_backend_options) else "unavailable"
+        return _direct_result(
+            "fdk", measurement, operator, status=status,
+            stopping_reason="parameter_validation_failed" if status == "invalid_parameters" else "backend_unavailable",
+            parameters=parameters, error=error,
+        )
+    except RuntimeError as error:
+        message = str(error).lower()
+        unavailable_tokens = ("cuda", "astra", "not installed", "unavailable", "no fdk backend")
+        status = "unavailable" if any(token in message for token in unavailable_tokens) else "numerical_error"
+        return _direct_result(
+            "fdk", measurement, operator, status=status,
+            stopping_reason="backend_unavailable" if status == "unavailable" else "fdk_execution_failed",
+            parameters=parameters, error=error,
+        )
+    except (TypeError, ValueError) as error:
+        message = str(error).lower()
+        # The wrapper's own return-contract errors describe an invalid
+        # backend result, while adapter option/geometry errors are invalid
+        # parameters.  Preserve that distinction in the detailed API.
+        output_error = "must return" in message or "returned shape" in message
+        return _direct_result(
+            "fdk", measurement, operator,
+            status="numerical_error" if output_error else "invalid_parameters",
+            stopping_reason="invalid_reconstruction_output" if output_error else "parameter_validation_failed",
+            parameters=parameters, error=error,
+        )
+    except Exception as error:
+        return _direct_result(
+            "fdk", measurement, operator, status="numerical_error",
+            stopping_reason="fdk_execution_failed", parameters=parameters, error=error,
+        )
+    expected = (measurement.shape[0], *tuple(operator.domain_shape))
+    if not isinstance(reconstruction, torch.Tensor) or tuple(reconstruction.shape) != expected:
+        return _direct_result(
+            "fdk", measurement, operator, status="numerical_error",
+            stopping_reason="invalid_reconstruction_shape", parameters=parameters,
+            error=ValueError(f"FDK returned shape {getattr(reconstruction, 'shape', None)}; expected {expected}"),
+        )
+    if not _finite_tensor(reconstruction):
+        return _direct_result(
+            "fdk", measurement, operator, status="numerical_error",
+            stopping_reason="non_finite_reconstruction", parameters=parameters,
+            error=FloatingPointError("FDK returned NaN or Inf"),
+        )
     recorder = IterationRecorder(control, measurement, operator, algorithm="fdk")
-    reconstruction = fdk(operator, measurement, **kwargs)
     return recorder.finish(
         reconstruction,
         actual_iterations=0,
-        status="not_applicable",
-        stopping_reason="direct_reconstruction",
-        resources={"trajectory_available": False},
-        metadata={"direct": True},
+        status="completed_valid",
+        stopping_reason="direct_reconstruction_valid",
+        resources={"trajectory_available": False, "direct": True},
+        metadata={"direct": True, "parameters": parameters, "completed_valid": True},
     )
 
 
@@ -2049,6 +2302,18 @@ def _poisson_deviance(prediction: torch.Tensor, measurement: torch.Tensor, eps: 
     return float((2.0 * value).sum().item())
 
 
+def _normalized_poisson_deviance(
+    prediction: torch.Tensor,
+    measurement: torch.Tensor,
+    eps: float,
+) -> float:
+    """Return dimensionless Poisson deviance normalized by ``2*sum(y)``."""
+
+    raw = _poisson_deviance(prediction, measurement, eps)
+    normalizer = max(2.0 * float(measurement.detach().sum().item()), float(eps))
+    return raw / normalizer
+
+
 def _validate_count_data(measurement: torch.Tensor, solver: str) -> None:
     if not torch.isfinite(measurement).all():
         raise ValueError(f"{solver} requires finite observations")
@@ -2057,6 +2322,518 @@ def _validate_count_data(measurement: torch.Tensor, solver: str) -> None:
             f"{solver} requires nonnegative emission/count observations; "
             "log-domain or signed line-integral data are incompatible"
         )
+
+
+def _statistical_parameter_errors(
+    num_iterations: Any,
+    initial_value: Any,
+    min_value: Any,
+    max_value: Any,
+    eps: Any,
+    *,
+    block_size: Any = None,
+    order_strategy: Any = "ordered",
+    seed: Any = None,
+) -> list[str]:
+    errors = _common_parameter_errors(num_iterations, min_value, max_value)
+    if not _finite_positive(initial_value):
+        errors.append("initial_value must be a finite positive number")
+    if min_value is not None and _finite_scalar(min_value) and float(min_value) < 0.0:
+        errors.append("min_value must be nonnegative")
+    if max_value is not None and _finite_scalar(max_value) and float(max_value) < 0.0:
+        errors.append("max_value must be nonnegative")
+    if not _finite_positive(eps):
+        errors.append("eps must be a finite positive number")
+    if block_size is not None and (
+        isinstance(block_size, bool) or not isinstance(block_size, int) or block_size <= 0
+    ):
+        errors.append("block_size must be a positive integer or None")
+    if not isinstance(order_strategy, str) or order_strategy not in {"ordered", "random"}:
+        errors.append("order_strategy must be 'ordered' or 'random'")
+    if seed is not None and (isinstance(seed, bool) or not isinstance(seed, int)):
+        errors.append("seed must be an integer or None")
+    return errors
+
+
+def _is_valid_em_prediction(
+    value: Any,
+    expected_shape: tuple[int, ...],
+) -> bool:
+    return (
+        isinstance(value, torch.Tensor)
+        and tuple(value.shape) == expected_shape
+        and _finite_tensor(value)
+        and not bool(torch.any(value < 0.0))
+    )
+
+
+def _statistical_tolerance(control: SolveControl, name: str) -> float:
+    explicit = getattr(control, name, None)
+    if explicit is not None:
+        return float(explicit)
+    if control.tolerance is not None:
+        return float(control.tolerance)
+    return 1e-5
+
+
+def _solve_em_detailed(
+    algorithm: str,
+    operator: LinearOperator,
+    measurement: torch.Tensor,
+    *,
+    num_iterations: int = 50,
+    block_size: int | None = None,
+    subset_indices: Optional[Iterable[Sequence[int]]] = None,
+    order_strategy: str = "ordered",
+    seed: int | None = None,
+    x_init: torch.Tensor | None = None,
+    initial_value: float = 1e-6,
+    min_value: float = 0.0,
+    max_value: float | None = None,
+    eps: float = 1e-8,
+    control: SolveControl | None = None,
+    callback: Callback | None = None,
+) -> SolveResult:
+    """Shared MLEM/OSEM loop with complete-epoch evidence only."""
+
+    parameters: dict[str, Any] = {
+        "num_iterations": num_iterations,
+        "initial_value": initial_value,
+        "min_value": min_value,
+        "max_value": max_value,
+        "eps": eps,
+    }
+    if algorithm == "osem":
+        parameters.update({
+            "block_size": block_size,
+            "order_strategy": order_strategy,
+            "seed": seed,
+        })
+    try:
+        require_linear_operator(operator, algorithm)
+        validate_measurement_shape(measurement, operator, algorithm)
+    except (TypeError, ValueError) as error:
+        return _parameter_failure_result(
+            algorithm, measurement, operator, x_init=x_init, errors=[str(error)],
+            max_iterations=None, parameters=parameters,
+        )
+
+    subset_values: list[Sequence[int]] | None = None
+    if algorithm == "osem" and subset_indices is not None:
+        try:
+            subset_values = list(subset_indices)
+        except (TypeError, ValueError) as error:
+            return _parameter_failure_result(
+                algorithm, measurement, operator, x_init=x_init, errors=[str(error)],
+                max_iterations=None, parameters=parameters,
+            )
+        try:
+            parameters["subset_indices"] = [
+                tuple(int(value) for value in item) for item in subset_values
+            ]
+        except (TypeError, ValueError, OverflowError) as error:
+            return _parameter_failure_result(
+                algorithm, measurement, operator, x_init=x_init, errors=[str(error)],
+                max_iterations=None, parameters=parameters,
+            )
+    parameter_errors = _statistical_parameter_errors(
+        num_iterations, initial_value, min_value, max_value, eps,
+        block_size=block_size, order_strategy=order_strategy, seed=seed,
+    )
+    if parameter_errors:
+        return _parameter_failure_result(
+            algorithm, measurement, operator, x_init=x_init, errors=parameter_errors,
+            max_iterations=None, parameters=parameters,
+        )
+    if not _finite_tensor(measurement):
+        return _numerical_result(
+            algorithm, measurement, operator, x_init=x_init, max_iterations=None,
+            reason="non_finite_measurement", parameters=parameters,
+        )
+    if bool(torch.any(measurement < 0.0)):
+        return _parameter_failure_result(
+            algorithm, measurement, operator, x_init=x_init,
+            errors=[
+                f"{algorithm} requires nonnegative emission/count observations; "
+                "log-domain or signed line-integral data are incompatible"
+            ],
+            max_iterations=None, parameters=parameters,
+        )
+    try:
+        control = resolve_control(
+            control,
+            default_iterations=int(num_iterations),
+            default_tolerance=1e-5,
+            callback=callback,
+        )
+    except (TypeError, ValueError) as error:
+        return _parameter_failure_result(
+            algorithm, measurement, operator, x_init=x_init, errors=[str(error)],
+            max_iterations=None, parameters=parameters,
+        )
+    limit = min(int(num_iterations), int(control.max_iterations or num_iterations))
+    parameters["num_iterations"] = int(num_iterations)
+    parameters["max_iterations"] = limit
+    try:
+        x = prepare_initial_image(
+            measurement, operator, x_init=x_init, initial_value=float(initial_value)
+        )
+        x = apply_box_constraints(x, min_value=min_value, max_value=max_value)
+    except (TypeError, ValueError) as error:
+        return _parameter_failure_result(
+            algorithm, measurement, operator, x_init=x_init, errors=[str(error)],
+            max_iterations=limit, parameters=parameters,
+        )
+    if not _finite_tensor(x) or bool(torch.any(x < 0.0)):
+        return _numerical_result(
+            algorithm, measurement, operator, x_init=x_init, max_iterations=limit,
+            reason="non_finite_initial_reconstruction", parameters=parameters,
+        )
+
+    recorder = IterationRecorder(control, measurement, operator, algorithm=algorithm)
+    recorder.set_initial(x)
+    actual = 0
+
+    def numerical_result(reason: str, predicted: torch.Tensor | None = None) -> SolveResult:
+        recorder.mark_numerical_error(reason)
+        return recorder.finish(
+            x,
+            actual_iterations=actual,
+            status="numerical_error",
+            stopping_reason=reason,
+            predicted_measurement=predicted if _finite_tensor(predicted) else None,
+            metadata={
+                "criterion": "normalized_poisson_deviance_and_complete_epoch_iterate_change",
+                "iteration_unit": "epochs",
+                "native_termination_managed": True,
+                **parameters,
+            },
+        )
+
+    subsets: list[torch.Tensor] = []
+    subset_operators: list[LinearOperator] = []
+    sensitivities: list[torch.Tensor] = []
+    sensitivity_masks: list[torch.Tensor] = []
+    if algorithm == "osem":
+        if block_size is None and subset_values is None:
+            block_size = max(int(operator.range_shape[-2]) // 10, 1)
+            parameters["block_size"] = block_size
+        try:
+            subsets = make_angle_subsets(
+                num_angles=int(operator.range_shape[-2]),
+                block_size=block_size,
+                subset_indices=subset_values,
+                order_strategy=order_strategy,
+                seed=seed,
+                device=measurement.device,
+            )
+            subset_operators = [make_subset_operator(operator, indices) for indices in subsets]
+        except (NotImplementedError, TypeError, ValueError) as error:
+            return _parameter_failure_result(
+                algorithm, measurement, operator, x_init=x_init, errors=[str(error)],
+                max_iterations=limit, parameters=parameters,
+            )
+        parameters["subset_sizes"] = [int(indices.numel()) for indices in subsets]
+        for sub_operator, indices in zip(subset_operators, subsets):
+            y_sub = select_measurement_subset(measurement, indices)
+            try:
+                sensitivity = sub_operator.adjoint(torch.ones_like(y_sub))
+            except Exception as error:
+                return numerical_result("subset_sensitivity_evaluation_failed")
+            expected_domain = (measurement.shape[0], *tuple(operator.domain_shape))
+            if (
+                not isinstance(sensitivity, torch.Tensor)
+                or tuple(sensitivity.shape) != expected_domain
+                or not _finite_tensor(sensitivity)
+                or bool(torch.any(sensitivity < 0.0))
+                or bool(torch.all(sensitivity <= 0.0))
+            ):
+                return numerical_result("non_positive_subset_sensitivity")
+            sensitivities.append(sensitivity.clamp_min(float(eps)))
+            sensitivity_masks.append(sensitivity > float(eps))
+    else:
+        try:
+            sensitivity = operator.adjoint(torch.ones_like(measurement))
+        except Exception as error:
+            return numerical_result("sensitivity_evaluation_failed")
+        expected_domain = (measurement.shape[0], *tuple(operator.domain_shape))
+        if (
+            not isinstance(sensitivity, torch.Tensor)
+            or tuple(sensitivity.shape) != expected_domain
+            or not _finite_tensor(sensitivity)
+            or bool(torch.any(sensitivity < 0.0))
+            or bool(torch.all(sensitivity <= 0.0))
+        ):
+            return numerical_result("non_positive_sensitivity")
+        sensitivities = [sensitivity.clamp_min(float(eps))]
+        sensitivity_masks = [sensitivity > float(eps)]
+
+    try:
+        prediction = _finish_prediction(operator, x)
+    except Exception as error:
+        return numerical_result("initial_prediction_failed")
+    expected_range = (measurement.shape[0], *tuple(operator.range_shape))
+    if not _is_valid_em_prediction(prediction, expected_range):
+        return numerical_result("invalid_initial_prediction", prediction)
+    previous_deviance = _normalized_poisson_deviance(prediction, measurement, eps)
+    if not _finite_scalar(previous_deviance):
+        return numerical_result("non_finite_initial_poisson_deviance", prediction)
+
+    measurement_norm = _global_norm(measurement)
+    monitor = ConsecutiveStoppingMonitor(control)
+    actual = 0
+    converged = False
+    cancelled = False
+    terminal_status: str | None = None
+    terminal_reason: str | None = None
+    plateau_run = 0
+    cycle_run = 0
+    cycle_amplitude = 0.0
+    cycle_patience = int((control.metadata or {}).get("osem_cycle_patience", control.stall_patience))
+    cycle_tolerance = float(
+        (control.metadata or {}).get(
+            "osem_cycle_tolerance",
+            max(control.stall_relative_iterate_tolerance, 1e-8),
+        )
+    )
+    epoch_states: list[torch.Tensor] = []
+    objective_tolerance = _statistical_tolerance(control, "relative_objective_tolerance")
+    iterate_tolerance = _statistical_tolerance(control, "relative_iterate_tolerance")
+
+    for epoch in range(1, limit + 1):
+        previous = x
+        subset_amplitude = 0.0
+        try:
+            if algorithm == "mlem":
+                ratio = measurement / prediction.clamp_min(float(eps))
+                correction = operator.adjoint(ratio)
+                if (
+                    tuple(correction.shape) != tuple(x.shape)
+                    or not _finite_tensor(ratio)
+                    or not _finite_tensor(correction)
+                    or bool(torch.any(correction < 0.0))
+                ):
+                    return numerical_result("invalid_multiplicative_update", prediction)
+                update_factor = correction / sensitivities[0]
+                x = x * torch.where(
+                    sensitivity_masks[0], update_factor, torch.ones_like(update_factor)
+                )
+                x = apply_box_constraints(x, min_value=min_value, max_value=max_value)
+            else:
+                for subset_index, (indices, sub_operator, sensitivity, sensitivity_mask) in enumerate(
+                    zip(subsets, subset_operators, sensitivities, sensitivity_masks)
+                ):
+                    y_sub = select_measurement_subset(measurement, indices)
+                    prediction_sub = sub_operator.forward(x)
+                    expected_subset = (measurement.shape[0], *tuple(sub_operator.range_shape))
+                    if not _is_valid_em_prediction(prediction_sub, expected_subset):
+                        return numerical_result("invalid_subset_prediction", prediction)
+                    ratio = y_sub / prediction_sub.clamp_min(float(eps))
+                    correction = sub_operator.adjoint(ratio)
+                    if (
+                        tuple(correction.shape) != tuple(x.shape)
+                        or not _finite_tensor(ratio)
+                        or not _finite_tensor(correction)
+                        or bool(torch.any(correction < 0.0))
+                    ):
+                        return numerical_result("invalid_subset_multiplicative_update", prediction)
+                    before_subset = x
+                    update_factor = correction / sensitivity
+                    x = x * torch.where(
+                        sensitivity_mask, update_factor, torch.ones_like(update_factor)
+                    )
+                    x = apply_box_constraints(x, min_value=min_value, max_value=max_value)
+                    if not _finite_tensor(x) or bool(torch.any(x < 0.0)):
+                        return numerical_result("non_finite_multiplicative_update", prediction)
+                    subset_amplitude = max(subset_amplitude, _relative_change(before_subset, x))
+        except Exception as error:
+            return numerical_result("em_update_failed", prediction)
+        if not _finite_tensor(x) or bool(torch.any(x < 0.0)):
+            return numerical_result("non_finite_multiplicative_update", prediction)
+        try:
+            prediction = _finish_prediction(operator, x)
+        except Exception as error:
+            return numerical_result("prediction_evaluation_failed")
+        if not _is_valid_em_prediction(prediction, expected_range):
+            return numerical_result("invalid_prediction", prediction)
+        change = _relative_change(previous, x)
+        raw_deviance = _poisson_deviance(prediction, measurement, eps)
+        normalized_deviance = _normalized_poisson_deviance(prediction, measurement, eps)
+        deviance_change = abs(normalized_deviance - previous_deviance) / max(
+            abs(previous_deviance), 1e-12
+        )
+        residual = prediction - measurement
+        if not all(
+            _finite_scalar(value)
+            for value in (change, raw_deviance, normalized_deviance, deviance_change)
+        ) or not _finite_tensor(residual):
+            return numerical_result("non_finite_statistical_diagnostic", prediction)
+
+        cycle_detected = False
+        period_two_distance = None
+        adjacent_distance = None
+        if algorithm == "osem":
+            if len(epoch_states) >= 2:
+                period_two_distance = _relative_change(epoch_states[-2], x)
+                adjacent_distance = _relative_change(epoch_states[-1], x)
+                cycle_detected = (
+                    period_two_distance <= cycle_tolerance
+                    and adjacent_distance > max(5.0 * cycle_tolerance, 2.0 * iterate_tolerance, 1e-12)
+                )
+            fixed_point_with_subset_motion = (
+                change <= cycle_tolerance
+                and subset_amplitude > max(10.0 * cycle_tolerance, 10.0 * iterate_tolerance, 1e-12)
+            )
+            cycle_detected = cycle_detected or fixed_point_with_subset_motion
+            cycle_run = cycle_run + 1 if cycle_detected else 0
+            cycle_amplitude = max(subset_amplitude, float(adjacent_distance or 0.0))
+            epoch_states.append(x.detach().clone())
+            if len(epoch_states) > 2:
+                epoch_states.pop(0)
+
+        discrepancy_ok = (
+            control.discrepancy_target is None
+            or normalized_deviance <= float(control.discrepancy_target)
+        )
+        native_ok = (
+            deviance_change <= objective_tolerance
+            and change <= iterate_tolerance
+        )
+        criteria: dict[str, bool] = {
+            "normalized_poisson_deviance_change": deviance_change <= objective_tolerance,
+            "relative_iterate_change": change <= iterate_tolerance,
+        }
+        if control.discrepancy_target is not None:
+            criteria = {"discrepancy": discrepancy_ok, **criteria}
+        if algorithm == "osem" and _policy_active(control):
+            criteria["osem_cycle_free"] = not cycle_detected
+        decision = monitor.observe(
+            epoch,
+            criteria=criteria,
+            relative_change=change,
+            monitor_value=normalized_deviance,
+        )
+        converged = decision.converged
+        if _policy_active(control):
+            if decision.diverged:
+                terminal_status = "diverged"
+                terminal_reason = "persistent_poisson_deviance_increase"
+            elif (
+                decision.checked
+                and control.stall_enabled
+                and control.discrepancy_target is not None
+                and not discrepancy_ok
+                and native_ok
+            ):
+                plateau_run += 1
+                if plateau_run >= control.stall_patience:
+                    terminal_status = "stalled"
+                    terminal_reason = "poisson_deviance_plateau_before_discrepancy"
+            else:
+                plateau_run = 0
+            if (
+                terminal_status is None
+                and algorithm == "osem"
+                and control.stall_enabled
+                and decision.checked
+                and cycle_run >= cycle_patience
+            ):
+                terminal_status = "stalled"
+                terminal_reason = "osem_subset_cycle_detected"
+        actual = epoch
+        metadata = {
+            "checked": decision.checked,
+            "complete_epoch": True,
+            "epoch_boundary": True,
+            "poisson_deviance": raw_deviance,
+            "normalized_poisson_deviance": normalized_deviance,
+            "previous_normalized_poisson_deviance": previous_deviance,
+            "normalized_poisson_deviance_change": deviance_change,
+            "poisson_deviance_normalization": "2*sum_observed",
+            "relative_epoch_change": change,
+            "normalized_poisson_deviance_tolerance": objective_tolerance,
+            "relative_iterate_tolerance": iterate_tolerance,
+            "discrepancy_metric": "normalized_poisson_deviance",
+            "discrepancy_satisfied": discrepancy_ok,
+            "plateau_run": plateau_run,
+            "cycle_detected": cycle_detected,
+            "cycle_free": not cycle_detected,
+            "cycle_run": cycle_run,
+            "cycle_amplitude": cycle_amplitude,
+            "subset_amplitude": subset_amplitude,
+            "native_termination_managed": True,
+        }
+        if not _safe_record(
+            recorder,
+            epoch,
+            x,
+            residual=residual,
+            objective=raw_deviance,
+            algorithm_residual=normalized_deviance,
+            stopping_candidate=bool(decision.checked or converged or terminal_status),
+            consecutive_criteria_count=decision.consecutive,
+            criteria=criteria,
+            native_criterion_name="normalized_poisson_deviance_change",
+            native_criterion_value=deviance_change,
+            native_criterion_threshold=objective_tolerance,
+            epoch=epoch,
+            subset_count=len(subsets) if algorithm == "osem" else None,
+            metadata=metadata,
+        ):
+            cancelled = True
+            break
+        previous_deviance = normalized_deviance
+        if terminal_status or (converged and control.stop_on_convergence):
+            break
+
+    final_residual_tensor = prediction - measurement
+    final_residual = _normalized(_global_norm(final_residual_tensor), measurement_norm)
+    status = terminal_status or (
+        "cancelled" if cancelled else _finish_status(
+            actual=actual,
+            limit=limit,
+            converged=converged,
+            cancelled=cancelled,
+            numerical_failure=recorder.numerical_failure,
+        )
+    )
+    converged_reason = (
+        "poisson_deviance_and_relative_epoch_change_patience"
+        if algorithm == "osem" else
+        "poisson_deviance_and_relative_iterate_change_patience"
+    )
+    stopping_reason = (
+        terminal_reason
+        if terminal_reason else
+        converged_reason if converged and actual < limit else
+        "callback_cancelled" if cancelled else
+        "maximum_epochs_reached"
+    )
+    return recorder.finish(
+        x,
+        actual_iterations=actual,
+        status=status,
+        stopping_reason=stopping_reason,
+        final_residual=final_residual,
+        final_objective=_poisson_deviance(prediction, measurement, eps),
+        predicted_measurement=prediction,
+        metadata={
+            "likelihood": "poisson_emission_style",
+            "criterion": "normalized_poisson_deviance_and_complete_epoch_iterate_change",
+            "poisson_deviance_normalization": "2*sum_observed",
+            "complete_epoch_count": actual,
+            "subset_count": len(subsets) if algorithm == "osem" else None,
+            "normalized_poisson_deviance": previous_deviance,
+            "normalized_poisson_deviance_tolerance": objective_tolerance,
+            "relative_iterate_tolerance": iterate_tolerance,
+            "cycle_detected": bool(algorithm == "osem" and cycle_run >= cycle_patience),
+            "cycle_run": cycle_run,
+            "cycle_amplitude": cycle_amplitude,
+            "native_termination_managed": True,
+            "max_iterations": limit,
+            **parameters,
+        },
+    )
 
 
 def solve_mlem_detailed(
@@ -2072,68 +2849,16 @@ def solve_mlem_detailed(
     control: SolveControl | None = None,
     callback: Callback | None = None,
 ) -> SolveResult:
-    require_linear_operator(operator, "mlem")
-    validate_measurement_shape(measurement, operator, "mlem")
-    _validate_count_data(measurement, "mlem")
-    control = resolve_control(control, default_iterations=int(num_iterations), default_tolerance=1e-5, callback=callback)
-    limit = min(int(num_iterations), int(control.max_iterations or num_iterations))
-    x = prepare_initial_image(measurement, operator, x_init=x_init, initial_value=float(initial_value)).clamp_min(float(min_value))
-    recorder = IterationRecorder(control, measurement, operator, algorithm="mlem")
-    recorder.set_initial(x)
-    sensitivity = operator.adjoint(torch.ones_like(measurement)).clamp_min(float(eps))
-    measurement_norm = _global_norm(measurement)
-    actual = 0
-    converged = False
-    cancelled = False
-    prediction = torch.zeros_like(measurement)
-    for epoch in range(1, limit + 1):
-        previous = x
-        prediction_before = operator.forward(x).clamp_min(float(eps))
-        ratio = measurement / prediction_before
-        correction = operator.adjoint(ratio) / sensitivity
-        x = x * correction.clamp_min(0.0)
-        x = apply_box_constraints(x, min_value=min_value, max_value=max_value)
-        prediction = _finish_prediction(operator, x).clamp_min(float(eps))
-        change = _relative_change(previous, x)
-        deviance = _poisson_deviance(prediction, measurement, eps)
-        residual = prediction - measurement
-        converged = _tolerance_reached(control, residual=_normalized(_global_norm(residual), measurement_norm), change=change, require_both=True)
-        actual = epoch
-        if not _safe_record(
-            recorder,
-            epoch,
-            x,
-            residual=residual,
-            objective=deviance,
-            algorithm_residual=deviance,
-            stopping_candidate=converged,
-            epoch=epoch,
-            metadata={"poisson_deviance": deviance, "complete_epoch": True},
-        ):
-            cancelled = True
-            break
-        if converged and control.stop_on_convergence:
-            break
-    residual = prediction - measurement
-    return recorder.finish(
-        x,
-        actual_iterations=actual,
-        status=_finish_status(
-            actual=actual,
-            limit=limit,
-            converged=converged,
-            cancelled=cancelled,
-            numerical_failure=recorder.numerical_failure,
-        ),
-        stopping_reason=(
-            "poisson_deviance_and_epoch_change_tolerance" if converged else
-            "callback_cancelled" if cancelled else
-            "maximum_epochs_reached"
-        ),
-        final_residual=_normalized(_global_norm(residual), measurement_norm),
-        final_objective=_poisson_deviance(prediction, measurement, eps),
-        predicted_measurement=prediction,
-        metadata={"likelihood": "poisson_emission_style", "complete_epoch_count": actual},
+    return _solve_em_detailed(
+        "mlem", operator, measurement,
+        num_iterations=num_iterations,
+        x_init=x_init,
+        initial_value=initial_value,
+        min_value=min_value,
+        max_value=max_value,
+        eps=eps,
+        control=control,
+        callback=callback,
     )
 
 
@@ -2154,78 +2879,20 @@ def solve_osem_detailed(
     control: SolveControl | None = None,
     callback: Callback | None = None,
 ) -> SolveResult:
-    require_linear_operator(operator, "osem")
-    validate_measurement_shape(measurement, operator, "osem")
-    _validate_count_data(measurement, "osem")
-    control = resolve_control(control, default_iterations=int(num_iterations), default_tolerance=1e-5, callback=callback)
-    limit = min(int(num_iterations), int(control.max_iterations or num_iterations))
-    if block_size is None and subset_indices is None:
-        block_size = max(int(operator.range_shape[-2]) // 10, 1)
-    subsets = make_angle_subsets(
-        num_angles=int(operator.range_shape[-2]), block_size=block_size,
-        subset_indices=subset_indices, order_strategy=order_strategy, seed=seed, device=measurement.device,
-    )
-    x = prepare_initial_image(measurement, operator, x_init=x_init, initial_value=float(initial_value)).clamp_min(float(min_value))
-    recorder = IterationRecorder(control, measurement, operator, algorithm="osem")
-    recorder.set_initial(x)
-    measurement_norm = _global_norm(measurement)
-    actual = 0
-    converged = False
-    cancelled = False
-    prediction = torch.zeros_like(measurement)
-    for epoch in range(1, limit + 1):
-        previous = x
-        for indices in subsets:
-            sub_operator = make_subset_operator(operator, indices)
-            y_sub = select_measurement_subset(measurement, indices)
-            sensitivity = sub_operator.adjoint(torch.ones_like(y_sub)).clamp_min(float(eps))
-            prediction_sub = sub_operator.forward(x).clamp_min(float(eps))
-            ratio = y_sub / prediction_sub
-            correction = sub_operator.adjoint(ratio) / sensitivity
-            x = x * correction.clamp_min(0.0)
-            x = apply_box_constraints(x, min_value=min_value, max_value=max_value)
-        prediction = _finish_prediction(operator, x).clamp_min(float(eps))
-        residual = prediction - measurement
-        change = _relative_change(previous, x)
-        deviance = _poisson_deviance(prediction, measurement, eps)
-        converged = _tolerance_reached(control, residual=_normalized(_global_norm(residual), measurement_norm), change=change, require_both=True)
-        actual = epoch
-        if not _safe_record(
-            recorder,
-            epoch,
-            x,
-            residual=residual,
-            objective=deviance,
-            algorithm_residual=deviance,
-            stopping_candidate=converged,
-            epoch=epoch,
-            subset_count=len(subsets),
-            metadata={"poisson_deviance": deviance, "complete_epoch": True, "subset_sizes": [int(item.numel()) for item in subsets]},
-        ):
-            cancelled = True
-            break
-        if converged and control.stop_on_convergence:
-            break
-    residual = prediction - measurement
-    return recorder.finish(
-        x,
-        actual_iterations=actual,
-        status=_finish_status(
-            actual=actual,
-            limit=limit,
-            converged=converged,
-            cancelled=cancelled,
-            numerical_failure=recorder.numerical_failure,
-        ),
-        stopping_reason=(
-            "poisson_deviance_and_epoch_change_tolerance" if converged else
-            "callback_cancelled" if cancelled else
-            "maximum_epochs_reached"
-        ),
-        final_residual=_normalized(_global_norm(residual), measurement_norm),
-        final_objective=_poisson_deviance(prediction, measurement, eps),
-        predicted_measurement=prediction,
-        metadata={"likelihood": "poisson_emission_style", "complete_epoch_count": actual, "subset_count": len(subsets)},
+    return _solve_em_detailed(
+        "osem", operator, measurement,
+        num_iterations=num_iterations,
+        block_size=block_size,
+        subset_indices=subset_indices,
+        order_strategy=order_strategy,
+        seed=seed,
+        x_init=x_init,
+        initial_value=initial_value,
+        min_value=min_value,
+        max_value=max_value,
+        eps=eps,
+        control=control,
+        callback=callback,
     )
 
 
@@ -2326,7 +2993,6 @@ def solve_tikhonov_detailed(
     direction = normal_residual.clone()
     residual_sq = _sqnorm(normal_residual)
     rhs_norm = max(_global_norm(rhs), 1.0)
-    actual = 0
     converged = False
     cancelled = False
     terminal_status = None

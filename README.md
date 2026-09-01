@@ -101,6 +101,20 @@ residual；TV-FISTA 使用完整 composite objective 和归一化 prox-gradient 
 endpoint confirmation 从最终 reconstruction 独立重算证据，其 forward/adjoint 调用与
 optimization calls 分开记账。预算耗尽或正常进程退出绝不改写为 `converged`。
 
+### Batch 5 termination semantics
+
+MLEM/OSEM 只在完整迭代（OSEM 为完整 subset sweep）后记录并检查证据：使用归一化
+Poisson deviance、相对图像变化和连续 patience；OSEM 还记录 subset-cycle evidence。
+计数/强度数据必须显式声明 Poisson emission/count observation model，不能把
+`line_integral` 或 `log_projection` 当作 emission 数据。目标未达到而证据停滞记为
+`stalled`，Poisson deviance 持续增长或出现非有限值记为 `diverged` 或
+`numerical_error`，不会伪装成收敛。
+
+FBP/FDK 是 direct solver：有限、形状正确且参数有效的输出状态为
+`completed_valid`，不是 `converged`；参数错误为 `invalid_parameters`，非有限输出为
+`numerical_error`。FDK 缺少 CUDA/ASTRA 或不满足其后端能力时为 `unavailable`，不会回退
+到 CPU 假装完成。
+
 在 Agent 的 public staging 中，`truth/x` 仅保留外部 loader 所需的零值形状占位符，真实
 truth 及其动态范围元数据不会进入 backend。此时 `metrics.json` 只报告数据一致性与资源
 指标，不生成 RMSE、PSNR、SSIM；图像质量指标由独立 evaluator 从私有源计算。

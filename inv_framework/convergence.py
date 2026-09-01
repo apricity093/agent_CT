@@ -116,10 +116,15 @@ def normalize_status(
 
     raw = status.value if isinstance(status, ConvergenceStatus) else str(status)
     value = LEGACY_STATUS_ALIASES.get(raw, raw)
-    if raw == "converged" and max_iterations is not None and iterations is not None and int(iterations) >= int(max_iterations):
+    if direct or algorithm in {"fbp", "fdk"}:
+        # Direct reconstruction has no iterative convergence claim.  Even a
+        # legacy or over-eager backend status of ``converged`` is normalized
+        # to the validity outcome, while invalid/numerical/unavailable
+        # failures remain untouched.
+        if value in {"converged", "partial"}:
+            value = "completed_valid"
+    elif raw == "converged" and max_iterations is not None and iterations is not None and int(iterations) >= int(max_iterations):
         value = "max_iterations"
-    elif raw == "partial" and direct:
-        value = "completed_valid"
     elif raw == "partial" and is_core_algorithm(algorithm):
         if max_iterations is not None and iterations is not None and int(iterations) >= int(max_iterations):
             value = "max_iterations"
@@ -726,6 +731,70 @@ def _endpoint_relative_change(previous: torch.Tensor, current: torch.Tensor) -> 
     return numerator / denominator
 
 
+def _endpoint_poisson_deviance(
+    prediction: torch.Tensor,
+    measurement: torch.Tensor,
+    eps: float,
+) -> tuple[float, float]:
+    """Return raw and normalized Poisson deviance for endpoint auditing."""
+
+    predicted = prediction.clamp_min(float(eps))
+    observed = measurement
+    value = predicted - observed + torch.where(
+        observed > 0.0,
+        observed * torch.log((observed + float(eps)) / predicted),
+        torch.zeros_like(observed),
+    )
+    raw = float((2.0 * value).sum().item())
+    normalizer = max(2.0 * float(observed.detach().sum().item()), float(eps))
+    return raw, raw / normalizer
+
+
+def _direct_endpoint_parameter_errors(
+    algorithm: str,
+    parameters: Mapping[str, Any],
+) -> list[str]:
+    errors: list[str] = []
+    if algorithm == "fbp":
+        scale = parameters.get("scale")
+        if scale is not None:
+            try:
+                valid = isfinite(float(scale)) and float(scale) > 0.0
+            except (TypeError, ValueError, OverflowError):
+                valid = False
+            if not valid:
+                errors.append("scale must be a finite positive number or None")
+        return errors
+    for name in ("filter_type", "filter"):
+        value = parameters.get(name)
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            errors.append(f"{name} must be a non-empty string")
+    filter_type = str(parameters.get("filter_type", "ram-lak")).strip().lower().replace("_", "-")
+    filter_alias = parameters.get("filter")
+    if filter_type in {"ramp", "ramlak"}:
+        filter_type = "ram-lak"
+    if filter_alias is not None:
+        filter_alias = str(filter_alias).strip().lower().replace("_", "-")
+        if filter_alias in {"ramp", "ramlak"}:
+            filter_alias = "ram-lak"
+    if filter_type != "ram-lak" or (
+        filter_alias is not None and filter_alias != filter_type
+    ):
+        errors.append(
+            "FDK supports only the native Ram-Lak filter and compatible aliases"
+        )
+    if "short_scan" in parameters and not isinstance(parameters.get("short_scan"), bool):
+        errors.append("short_scan must be a bool")
+    supersampling = parameters.get("voxel_supersampling", 1)
+    if (
+        isinstance(supersampling, bool)
+        or not isinstance(supersampling, int)
+        or supersampling <= 0
+    ):
+        errors.append("voxel_supersampling must be a positive integer")
+    return errors
+
+
 def _endpoint_box_constraints(
     value: torch.Tensor,
     parameters: Mapping[str, Any],
@@ -997,9 +1066,36 @@ def confirm_endpoint(
         max_iterations=max_iterations,
         direct=algorithm in {"fbp", "fdk"},
     ).value
-    prediction = operator.forward(reconstruction) if predicted_measurement is None else predicted_measurement
-    finite_inputs = (
+    prediction_error: str | None = None
+    if predicted_measurement is None:
+        try:
+            prediction = operator.forward(reconstruction)
+        except Exception as error:
+            prediction = None
+            prediction_error = str(error)
+    else:
+        prediction = predicted_measurement
+    expected_domain = getattr(operator, "domain_shape", None)
+    expected_range = getattr(operator, "range_shape", None)
+    reconstruction_shape_valid = (
         isinstance(reconstruction, torch.Tensor)
+        and expected_domain is not None
+        and tuple(reconstruction.shape[1:]) == tuple(expected_domain)
+    )
+    measurement_shape_valid = (
+        isinstance(measurement, torch.Tensor)
+        and expected_range is not None
+        and tuple(measurement.shape[1:]) == tuple(expected_range)
+    )
+    prediction_shape_valid = (
+        isinstance(prediction, torch.Tensor)
+        and isinstance(measurement, torch.Tensor)
+        and tuple(prediction.shape) == tuple(measurement.shape)
+    )
+    shape_valid = reconstruction_shape_valid and measurement_shape_valid and prediction_shape_valid
+    finite_inputs = (
+        shape_valid
+        and isinstance(reconstruction, torch.Tensor)
         and isinstance(measurement, torch.Tensor)
         and isinstance(prediction, torch.Tensor)
         and bool(torch.isfinite(reconstruction).all())
@@ -1023,11 +1119,22 @@ def confirm_endpoint(
     finite = finite_inputs
     reconstruction_min = float(reconstruction.min().item()) if finite else None
     reconstruction_max = float(reconstruction.max().item()) if finite else None
+    parameter_errors = (
+        _direct_endpoint_parameter_errors(algorithm, parameters)
+        if algorithm in {"fbp", "fdk"} else []
+    )
+    parameter_valid = not parameter_errors
     result: dict[str, Any] = {
         "schema_version": "ct.endpoint_confirmation.v1",
         "status": "not_applicable" if algorithm in {"fbp", "fdk"} else "not_requested",
         "passed": algorithm in {"fbp", "fdk"},
         "finite": finite,
+        "shape_valid": shape_valid,
+        "reconstruction_shape_valid": reconstruction_shape_valid,
+        "measurement_shape_valid": measurement_shape_valid,
+        "prediction_shape_valid": prediction_shape_valid,
+        "parameter_valid": parameter_valid,
+        "parameter_errors": parameter_errors,
         "reconstruction_min": reconstruction_min,
         "reconstruction_max": reconstruction_max,
         "normalized_data_residual": endpoint_data_residual,
@@ -1037,9 +1144,17 @@ def confirm_endpoint(
         "reasons": [],
         "operator_calls": {},
     }
+    if prediction_error is not None:
+        result["prediction_error"] = prediction_error
     if algorithm in {"fbp", "fdk"}:
-        result["status"] = "passed" if finite else "failed"
-        result["passed"] = finite
+        if not finite:
+            result["reasons"].append("non_finite_endpoint")
+        if not shape_valid:
+            result["reasons"].append("endpoint_shape_mismatch")
+        if not parameter_valid:
+            result["reasons"].append("invalid_parameters")
+        result["status"] = "passed" if finite and shape_valid and parameter_valid else "failed"
+        result["passed"] = bool(finite and shape_valid and parameter_valid)
         result["operator_calls"] = _endpoint_call_delta(
             endpoint_counter_before, _endpoint_operator_stats(operator)
         )
@@ -1056,7 +1171,7 @@ def confirm_endpoint(
     if regularization_operator is None and parameters.get("regularization_operator") is not None:
         regularization_operator = parameters.get("regularization_operator")
     raw_discrepancy_target = (policy.get("effective", {}) or {}).get(
-        "discrepancy_target", policy.get("discrepancy_target", float("inf"))
+        "discrepancy_target", policy.get("discrepancy_target")
     )
     discrepancy_available = raw_discrepancy_target is not None
     discrepancy_target = (
@@ -1082,6 +1197,127 @@ def confirm_endpoint(
     native_endpoint_consistent: bool | None = None
     objective_endpoint_consistent: bool | None = None
     endpoint_norm_source: str | None = None
+    if algorithm in {"mlem", "osem"}:
+        statistical_eps = parameters.get("eps", 1e-8)
+        try:
+            statistical_eps = float(statistical_eps)
+        except (TypeError, ValueError, OverflowError):
+            statistical_eps = float("nan")
+        last_metadata = dict(last_row.get("metadata") or {}) if last_row else {}
+        native_name = "normalized_poisson_deviance_change"
+        native_trajectory_value = _metric(
+            last_metadata,
+            ("normalized_poisson_deviance_change",),
+        )
+        trajectory_deviance = _metric(
+            last_metadata,
+            ("normalized_poisson_deviance",),
+        )
+        trajectory_previous_deviance = _metric(
+            last_metadata,
+            ("previous_normalized_poisson_deviance",),
+        )
+        if trajectory_previous_deviance is None and len(rows) >= 2:
+            previous_metadata = dict(rows[-2].get("metadata") or {})
+            trajectory_previous_deviance = _metric(
+                previous_metadata,
+                ("normalized_poisson_deviance",),
+            )
+        if (
+            finite_inputs
+            and statistical_eps > 0.0
+            and bool(torch.all(measurement >= 0.0))
+        ):
+            try:
+                raw_deviance, endpoint_deviance = _endpoint_poisson_deviance(
+                    prediction, measurement, statistical_eps
+                )
+                endpoint_deviance_change = (
+                    abs(endpoint_deviance - trajectory_previous_deviance)
+                    / max(abs(trajectory_previous_deviance), 1e-12)
+                    if trajectory_previous_deviance is not None
+                    else native_trajectory_value
+                )
+                if endpoint_deviance_change is None:
+                    endpoint_deviance_change = native_trajectory_value
+            except (TypeError, ValueError, RuntimeError, OverflowError):
+                raw_deviance = float("nan")
+                endpoint_deviance = float("nan")
+                endpoint_deviance_change = float("nan")
+        else:
+            raw_deviance = float("nan")
+            endpoint_deviance = float("nan")
+            endpoint_deviance_change = float("nan")
+        if statistical_eps <= 0.0 or not isfinite(statistical_eps):
+            native_recomputation_error = "eps must be finite and positive"
+            result["parameter_valid"] = False
+            result["parameter_errors"] = [native_recomputation_error]
+        measurement_nonnegative = (
+            isinstance(measurement, torch.Tensor)
+            and bool(torch.all(measurement >= 0.0))
+        )
+        if not measurement_nonnegative:
+            result["parameter_valid"] = False
+            result["parameter_errors"] = [
+                "MLEM/OSEM require nonnegative emission/count observations"
+            ]
+            result["reasons"].append("negative_count_observation")
+        prediction_nonnegative = (
+            isinstance(prediction, torch.Tensor)
+            and bool(torch.all(prediction >= 0.0))
+        )
+        if not prediction_nonnegative:
+            result["parameter_valid"] = False
+            result["parameter_errors"] = [
+                "MLEM/OSEM require nonnegative predicted emission/count values"
+            ]
+            result["reasons"].append("negative_endpoint_prediction")
+        iterate_value = _metric(
+            last_row,
+            ("relative_iterate_change", "relative_epoch_change"),
+        )
+        cycle_free = True
+        if algorithm == "osem":
+            cycle_free = bool(last_metadata.get("cycle_free", True))
+        native_value = endpoint_deviance_change
+        native_ok = (
+            native_value is not None
+            and isfinite(float(native_value))
+            and float(native_value) <= objective_tol
+            and iterate_value is not None
+            and isfinite(float(iterate_value))
+            and float(iterate_value) <= iterate_tol
+            and cycle_free
+        )
+        if trajectory_deviance is not None and isfinite(float(trajectory_deviance)) and isfinite(float(endpoint_deviance)):
+            objective_endpoint_consistent = abs(float(trajectory_deviance) - float(endpoint_deviance)) <= (
+                absolute_tolerance
+                + relative_tolerance * max(abs(float(trajectory_deviance)), abs(float(endpoint_deviance)))
+            )
+        if native_trajectory_value is not None and endpoint_deviance_change is not None and isfinite(float(native_trajectory_value)) and isfinite(float(endpoint_deviance_change)):
+            native_endpoint_consistent = abs(float(native_trajectory_value) - float(endpoint_deviance_change)) <= (
+                absolute_tolerance
+                + relative_tolerance * max(abs(float(native_trajectory_value)), abs(float(endpoint_deviance_change)))
+            )
+        result.update({
+            "poisson_deviance": raw_deviance,
+            "normalized_poisson_deviance": endpoint_deviance,
+            "normalized_poisson_deviance_change": endpoint_deviance_change,
+            "trajectory_normalized_poisson_deviance": trajectory_deviance,
+            "trajectory_normalized_poisson_deviance_change": native_trajectory_value,
+            "relative_iterate_change": iterate_value,
+            "poisson_deviance_normalization": "2*sum_observed",
+            "discrepancy_metric": "normalized_poisson_deviance",
+            "osem_cycle_free": cycle_free if algorithm == "osem" else None,
+        })
+        discrepancy_ok = (
+            not discrepancy_available
+            or (
+                isfinite(float(endpoint_deviance))
+                and endpoint_deviance <= float(discrepancy_target)
+            )
+        )
+        result["discrepancy_satisfied"] = discrepancy_ok
     if algorithm in {"sirt", "landweber", "sart", "os_sart"} and finite_inputs:
         try:
             native_name, native_value, native_details = _row_action_endpoint_native(
@@ -1276,13 +1512,14 @@ def confirm_endpoint(
         ) <= absolute_tolerance + relative_tolerance * max(
             abs(float(native_trajectory_value)), abs(float(native_value))
         )
-    discrepancy_ok = (
-        not discrepancy_available
-        or bool(
-            endpoint_data_residual is not None
-            and endpoint_data_residual <= float(discrepancy_target)
+    if algorithm not in {"mlem", "osem"}:
+        discrepancy_ok = (
+            not discrepancy_available
+            or bool(
+                endpoint_data_residual is not None
+                and endpoint_data_residual <= float(discrepancy_target)
+            )
         )
-    )
     result.update({
         "discrepancy_target": discrepancy_target,
         "discrepancy_available": discrepancy_available,
@@ -1325,12 +1562,13 @@ def confirm_endpoint(
             counter_ok = False
     counter_ok = counter_ok and len(tail) == patience and int(tail[-1].get("consecutive_criteria_count", 0)) >= patience
     epoch_boundary = True
-    if algorithm in {"sart", "os_sart"}:
+    if algorithm in {"sart", "os_sart", "mlem", "osem"}:
         epoch_boundary = bool(rows) and all(
             row.get("subset") is None
             and (
                 row.get("epoch") is not None
                 or bool((row.get("metadata") or {}).get("complete_sweep", False))
+                or bool((row.get("metadata") or {}).get("complete_epoch", False))
             )
             for row in rows
         )
@@ -1367,6 +1605,8 @@ def confirm_endpoint(
             result["reasons"].append("endpoint_native_recomputation_failed")
         if native_endpoint_consistent is False:
             result["reasons"].append("trajectory_endpoint_native_metric_mismatch")
+        if algorithm in {"mlem", "osem"} and objective_endpoint_consistent is not True:
+            result["reasons"].append("trajectory_endpoint_poisson_deviance_mismatch")
         if algorithm == "tv_fista" and objective_endpoint_consistent is not True:
             result["reasons"].append("trajectory_endpoint_objective_mismatch")
         if endpoint_cfg.get("require_trajectory_consistency", True) and not trajectory_endpoint_consistent:
@@ -1378,6 +1618,8 @@ def confirm_endpoint(
         "os_sart": "discrepancy_and_relative_epoch_change_patience",
         "cgls": "discrepancy_and_krylov_native_patience",
         "lsqr": "discrepancy_and_krylov_native_patience",
+        "mlem": "poisson_deviance_and_relative_iterate_change_patience",
+        "osem": "poisson_deviance_and_relative_epoch_change_patience",
         "tikhonov": "discrepancy_regularized_normal_and_iterate_patience",
         "tv_fista": "discrepancy_prox_gradient_and_objective_patience",
     }

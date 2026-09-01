@@ -418,6 +418,7 @@ def validate_parameters(
         observation_finite=(
             bool(torch.isfinite(case.measurement).all().item())
             if case is not None and isinstance(getattr(case, "measurement", None), torch.Tensor)
+            and name not in {"fbp", "fdk"}
             else None
         ),
         estimated_lipschitz=estimated,
@@ -810,11 +811,46 @@ def _load_stopping_policy(path: str | Path | None) -> dict[str, Any] | None:
     return dict(payload)
 
 
-def _discrepancy_target(case: Any, policy: Mapping[str, Any]) -> float:
+def _discrepancy_target(case: Any, policy: Mapping[str, Any]) -> float | None:
     discrepancy = dict(policy.get("discrepancy", {}) or {})
-    parameters = dict((case.metadata.get("measurement") or {}).get("parameters", {}) or {})
+    case_metadata = getattr(case, "metadata", {}) or {}
+    measurement_metadata = dict(case_metadata.get("measurement", {}) or {})
+    measurement_kind = str(
+        measurement_metadata.get("kind", case_metadata.get("measurement_kind", ""))
+    ).lower()
+    observation_model = str(
+        measurement_metadata.get(
+            "observation_model", case_metadata.get("observation_model", "")
+        )
+    ).lower()
+    if (
+        observation_model in EMISSION_OBSERVATION_MODELS
+        or measurement_kind in {"count", "counts", "intensity", "emission"}
+    ):
+        # The log-projection uncertainty estimate below is not meaningful for
+        # emission data.  Use an explicit normalized Poisson-deviance target
+        # when one is supplied; otherwise native EM evidence remains the
+        # applicable stopping criterion.
+        explicit_target = discrepancy.get(
+            "normalized_poisson_deviance_target",
+            discrepancy.get("poisson_deviance_target", discrepancy.get("target")),
+        )
+        if explicit_target is None:
+            return None
+        try:
+            target = float(explicit_target)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ConfigError(
+                "count-domain discrepancy target must be finite and nonnegative"
+            ) from error
+        if not math.isfinite(target) or target < 0.0:
+            raise ConfigError(
+                "count-domain discrepancy target must be finite and nonnegative"
+            )
+        return target
+    parameters = dict((case_metadata.get("measurement") or {}).get("parameters", {}) or {})
     if not parameters:
-        parameters = dict(case.metadata.get("measurement_parameters", {}) or {})
+        parameters = dict(case_metadata.get("measurement_parameters", {}) or {})
     incident = parameters.get("incident_photon_count")
     if not isinstance(incident, (int, float)) or float(incident) <= 0.0:
         raise ConfigError("discrepancy stopping requires incident_photon_count in case metadata")
@@ -1160,6 +1196,17 @@ def run_case(
         )
         solve_result = solver.solve_detailed(case.measurement, counted_operator, control=control)
         solver_counters = counted_operator.stats()
+        # Detailed solvers expose canonical termination failures without
+        # throwing from the numerical loop.  Convert those states back to the
+        # runtime's structured failure path before attempting output/evaluation
+        # work, while allowing diverged/max/cancelled results to retain their
+        # diagnostics and artifacts.
+        if solve_result.status == "invalid_parameters":
+            raise InvalidParametersError(solve_result.stopping_reason)
+        if solve_result.status == "unavailable":
+            raise BackendUnavailable(solve_result.stopping_reason)
+        if solve_result.status == "numerical_error":
+            raise NumericalFailure(solve_result.stopping_reason)
         reconstruction = solve_result.reconstruction
         if not isinstance(reconstruction, torch.Tensor):
             raise NumericalFailure(f"solver returned {type(reconstruction).__name__}, expected a tensor")
@@ -1294,10 +1341,12 @@ def run_case(
             convergence["reason_code"] = "endpoint_confirmation_failed"
             convergence["reason_class"] = status_reason_class(ConvergenceStatus.NUMERICAL_ERROR)
             convergence["failure_reason"] = "; ".join(endpoint_confirmation.get("reasons", ())) or "endpoint confirmation failed"
-        if name in {"fbp", "fdk"}:
+        if name in {"fbp", "fdk"} and convergence.get("status") == ConvergenceStatus.COMPLETED_VALID.value:
             convergence["status"] = ConvergenceStatus.COMPLETED_VALID.value
-            convergence["stopping_reason"] = "direct_reconstruction"
-            convergence["reason_code"] = "direct_reconstruction"
+            convergence["stopping_reason"] = convergence.get(
+                "stopping_reason", "direct_reconstruction_valid"
+            )
+            convergence["reason_code"] = convergence["stopping_reason"]
             convergence["reason_class"] = status_reason_class(ConvergenceStatus.COMPLETED_VALID)
         convergence["converged_at_budget_boundary"] = bool(endpoint_confirmation.get("converged_at_budget_boundary", False))
         convergence_status = normalize_status(
