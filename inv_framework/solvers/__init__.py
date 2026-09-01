@@ -1,4 +1,4 @@
-from .base import InverseProblemSolver, IterationRecord, IterationRecorder, SolveControl, SolveResult
+from .base import ConsecutiveStoppingMonitor, InverseProblemSolver, IterationRecord, IterationRecorder, SolveControl, SolveResult
 from .classical import FBPSolver, SIRTSolver, LandweberSolver, fbp, sirt, landweber
 from .dip import DIPSolver
 from .inr import INRSolver
@@ -6,6 +6,7 @@ from .inr import INRSolver
 __all__ = [
     "InverseProblemSolver",
     "SolveControl",
+    "ConsecutiveStoppingMonitor",
     "IterationRecord",
     "IterationRecorder",
     "SolveResult",

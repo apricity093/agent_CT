@@ -4,6 +4,9 @@ import pytest
 import torch
 
 from inv_framework.convergence import ConvergenceStatus, classify_trajectory
+from inv_framework.solvers import ConsecutiveStoppingMonitor, SolveControl
+from inv_framework.ct_runtime import run_case
+from pathlib import Path
 from inv_framework.instrumentation import CountingLinearOperator, OperatorBudgetExceeded
 from inv_framework.operators.base import LinearOperator
 from inv_framework.solvers.specs import SOLVER_SPECS, validate_parameter_values
@@ -76,6 +79,65 @@ def test_convergence_classification_distinguishes_converged_stalled_diverged_and
         max_iterations=3,
     )
     assert budget.status == ConvergenceStatus.MAX_ITERATIONS
+
+
+def test_consecutive_stopping_policy_requires_min_patience_and_resets():
+    control = SolveControl(
+        max_iterations=30, min_iterations=5, check_every=1, patience=5,
+        discrepancy_target=0.1, relative_iterate_tolerance=1e-4,
+    )
+    monitor = ConsecutiveStoppingMonitor(control)
+    ok = {"discrepancy": True, "native": True}
+    bad = {"discrepancy": False, "native": True}
+    for iteration in range(1, 9):
+        decision = monitor.observe(iteration, criteria=ok, relative_change=1e-5, monitor_value=0.01)
+        assert not decision.converged
+    reset = monitor.observe(9, criteria=bad, relative_change=1e-5, monitor_value=0.2)
+    assert reset.consecutive == 0
+    for iteration in range(10, 14):
+        assert not monitor.observe(iteration, criteria=ok, relative_change=1e-5, monitor_value=0.01).converged
+    assert monitor.observe(14, criteria=ok, relative_change=1e-5, monitor_value=0.01).converged
+
+
+def test_consecutive_stopping_policy_honors_check_every_and_classifies_trends():
+    control = SolveControl(
+        max_iterations=20, min_iterations=2, check_every=2, patience=2,
+        discrepancy_target=0.1, stall_enabled=True, stall_patience=2,
+        divergence_enabled=True, divergence_patience=2,
+    )
+    monitor = ConsecutiveStoppingMonitor(control)
+    unchecked = monitor.observe(3, criteria={"discrepancy": True, "native": True}, relative_change=0.0, monitor_value=1.0)
+    assert not unchecked.checked and unchecked.consecutive == 0
+    monitor.observe(2, criteria={"discrepancy": False, "native": False}, relative_change=1e-10, monitor_value=1.0)
+    stalled = monitor.observe(4, criteria={"discrepancy": False, "native": False}, relative_change=1e-10, monitor_value=1.1)
+    assert stalled.stalled
+
+
+def test_runtime_applies_policy_and_independent_endpoint(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    policy = {
+        "schema_version": "1.0", "mode": "solver_native_and_endpoint",
+        "stop_on_convergence": True, "min_iterations": 5, "check_every": 1, "patience": 5,
+        "relative_iterate_tolerance": 1e-4,
+        "normalized_normal_residual_tolerance": 1e-4,
+        "relative_objective_tolerance": 1e-5,
+        "prox_gradient_mapping_tolerance": 1e-4,
+        "discrepancy": {"enabled": True, "tau": 1.05, "count_floor": 1.0, "epsilon": 1e-12, "use_valid_measurement_mask": True},
+        "stalled": {"enabled": True, "relative_iterate_tolerance": 1e-8, "patience": 5, "require_discrepancy_unmet": True},
+        "divergence": {"enabled": True, "relative_increase_tolerance": 1e-4, "patience": 5},
+        "endpoint_confirmation": {"enabled": True, "absolute_tolerance": 1e-7, "relative_tolerance": 1e-4, "require_finite": True, "require_trajectory_consistency": True},
+    }
+    result = run_case(
+        "sirt", "parallel_2d/shepp_logan_sparse_poisson_32",
+        root / "configs" / "algorithms" / "sirt.yaml", tmp_path / "run",
+        data_root=root / "test" / "data", max_iterations=10,
+        parameter_overrides={"num_iterations": 10}, stopping_policy=policy,
+    )
+    assert result["status"] == "success"
+    diagnostics = result["diagnostics"]
+    assert diagnostics["execution_status"] == "completed"
+    assert diagnostics["convergence"]["status"] != "converged" or diagnostics["endpoint_confirmation"]["passed"]
+    assert diagnostics["resources"]["phases"]["endpoint_confirmation"]["forward_calls"] >= 1
 
 
 def test_counting_operator_tracks_calls_and_enforces_budget():

@@ -17,6 +17,7 @@ class ConvergenceStatus(str, Enum):
     DIVERGED = "diverged"
     MAX_ITERATIONS = "max_iterations"
     NON_ITERATIVE_COMPLETED = "non_iterative_completed"
+    NOT_APPLICABLE = "not_applicable"
     INVALID_PARAMETERS = "invalid_parameters"
     NUMERICAL_FAILURE = "numerical_failure"
 
@@ -350,3 +351,143 @@ def post_run_validation(
 # Explicit aliases make the small public interface easy to discover.
 assess_trajectory = classify_trajectory
 validate_post_run = post_run_validation
+
+
+def confirm_endpoint(
+    *,
+    algorithm: str,
+    reconstruction: torch.Tensor,
+    measurement: torch.Tensor,
+    operator: Any,
+    predicted_measurement: torch.Tensor | None = None,
+    valid_measurement_mask: torch.Tensor | None,
+    policy: Mapping[str, Any] | None,
+    trajectory: Iterable[Mapping[str, Any]],
+    solver_status: str,
+    solver_stopping_reason: str,
+    iterations: int,
+    max_iterations: int | None,
+    parameters: Mapping[str, Any],
+    operator_norm_estimate: float,
+) -> dict[str, Any]:
+    """Independently recompute final evidence and audit the patience window."""
+
+    rows = [dict(row) for row in trajectory]
+    prediction = operator.forward(reconstruction) if predicted_measurement is None else predicted_measurement
+    residual = prediction - measurement
+    native_residual = residual
+    native_measurement = measurement
+    if valid_measurement_mask is not None:
+        mask = valid_measurement_mask.to(device=measurement.device, dtype=torch.bool)
+        if mask.ndim == measurement.ndim - 1:
+            mask = mask.unsqueeze(0)
+        if tuple(mask.shape) == tuple(measurement.shape):
+            native_residual = residual.masked_fill(~mask, 0.0)
+            native_measurement = measurement.masked_fill(~mask, 0.0)
+    endpoint_data_residual = _relative_measurement_residual(
+        measurement, prediction, valid_measurement_mask
+    )
+    finite = bool(torch.isfinite(reconstruction).all() and torch.isfinite(prediction).all())
+    result: dict[str, Any] = {
+        "schema_version": "1.0",
+        "status": "not_applicable" if algorithm in {"fbp", "fdk"} else "not_requested",
+        "passed": algorithm in {"fbp", "fdk"},
+        "finite": finite,
+        "reconstruction_min": float(reconstruction.min().item()),
+        "reconstruction_max": float(reconstruction.max().item()),
+        "normalized_data_residual": endpoint_data_residual,
+        "solver_status": solver_status,
+        "solver_stopping_reason": solver_stopping_reason,
+        "reasons": [],
+    }
+    if algorithm in {"fbp", "fdk"}:
+        result["status"] = "passed" if finite else "failed"
+        result["passed"] = finite
+        return result
+    if policy is None:
+        return result
+    discrepancy_target = float((policy.get("effective", {}) or {}).get("discrepancy_target", policy.get("discrepancy_target", float("inf"))))
+    normal_tol = float(policy.get("normalized_normal_residual_tolerance", 1e-4))
+    iterate_tol = float(policy.get("relative_iterate_tolerance", 1e-4))
+    prox_tol = float(policy.get("prox_gradient_mapping_tolerance", 1e-4))
+    objective_tol = float(policy.get("relative_objective_tolerance", 1e-5))
+    native_name = "relative_iterate_change"
+    native_value = rows[-1].get("relative_iterate_change") if rows else None
+    native_ok = native_value is not None and float(native_value) <= iterate_tol
+    if algorithm in {"cgls", "lsqr"}:
+        gradient = operator.adjoint(native_residual)
+        native_name = "normalized_normal_residual"
+        native_value = float(gradient.norm().item()) / max(float(operator_norm_estimate) * float(native_residual.norm().item()), 1e-12)
+        change = rows[-1].get("relative_iterate_change") if rows else None
+        native_ok = native_value <= normal_tol or (change is not None and float(change) <= iterate_tol)
+    elif algorithm == "tikhonov":
+        strength = float(parameters.get("reg_strength", 0.0))
+        gradient = operator.adjoint(native_residual) + strength * reconstruction
+        rhs = operator.adjoint(native_measurement)
+        native_name = "normalized_regularized_normal_residual"
+        native_value = float(gradient.norm().item()) / max(float(rhs.norm().item()) + strength * float(reconstruction.norm().item()), 1e-12)
+        change = rows[-1].get("relative_iterate_change") if rows else None
+        native_ok = native_value <= normal_tol and change is not None and float(change) <= iterate_tol
+    elif algorithm == "tv_fista":
+        from .regularizers import TVRegularizer
+        tv = TVRegularizer(
+            mode=str(parameters.get("tv_mode", "isotropic")),
+            num_iterations=int(parameters.get("tv_num_iterations", 50)),
+            tolerance=float(parameters.get("tv_tolerance", 1e-5)),
+        )
+        step = float((rows[-1].get("step_size") if rows else None) or parameters.get("step_size") or 1.0)
+        gradient = operator.adjoint(native_residual)
+        prox = tv.proximal(reconstruction - step * gradient, step * float(parameters.get("reg_strength", 0.0)))
+        native_name = "normalized_prox_gradient_mapping"
+        native_value = float(((reconstruction - prox) / step).norm().item()) / max(float(reconstruction.norm().item()) / step, 1e-12)
+        objective_change = ((rows[-1].get("metadata") or {}).get("relative_composite_objective_change") if rows else None)
+        native_ok = native_value <= prox_tol and objective_change is not None and float(objective_change) <= objective_tol
+        result["relative_composite_objective_change"] = objective_change
+        result["composite_objective"] = float(0.5 * residual.square().sum().item() + float(parameters.get("reg_strength", 0.0)) * tv.value(reconstruction).sum().item())
+    discrepancy_ok = endpoint_data_residual <= discrepancy_target
+    result.update({
+        "discrepancy_target": discrepancy_target,
+        "discrepancy_satisfied": discrepancy_ok,
+        "native_criterion_name": native_name,
+        "native_criterion_value": native_value,
+        "native_criterion_satisfied": native_ok,
+    })
+    patience = int(policy.get("patience", 5))
+    checked = [row for row in rows if row.get("criteria")]
+    tail = checked[-patience:]
+    monotonic = all(int(a.get("iteration", -1)) < int(b.get("iteration", -1)) for a, b in zip(rows, rows[1:]))
+    consecutive = len(tail) == patience and all(all(bool(v) for v in (row.get("criteria") or {}).values()) for row in tail)
+    counter_ok = bool(tail) and int(tail[-1].get("consecutive_criteria_count", 0)) >= patience
+    result.update({"trajectory_monotonic": monotonic, "patience_window_passed": consecutive, "consecutive_counter_consistent": counter_ok})
+    last_data = rows[-1].get("normalized_data_residual") if rows else None
+    endpoint_cfg = dict(policy.get("endpoint_confirmation", {}) or {})
+    absolute_tolerance = float(endpoint_cfg.get("absolute_tolerance", 1e-7))
+    relative_tolerance = float(endpoint_cfg.get("relative_tolerance", 1e-4))
+    trajectory_endpoint_consistent = last_data is not None and abs(float(last_data) - endpoint_data_residual) <= absolute_tolerance + relative_tolerance * max(abs(float(last_data)), abs(endpoint_data_residual))
+    result["trajectory_endpoint_consistent"] = trajectory_endpoint_consistent
+    if not finite:
+        result["reasons"].append("non_finite_endpoint")
+    if solver_status == "converged":
+        if not discrepancy_ok: result["reasons"].append("endpoint_discrepancy_unmet")
+        if not native_ok: result["reasons"].append("endpoint_native_criterion_unmet")
+        if not monotonic: result["reasons"].append("trajectory_not_monotonic")
+        if not consecutive: result["reasons"].append("patience_window_incomplete")
+        if not counter_ok: result["reasons"].append("consecutive_counter_mismatch")
+        if endpoint_cfg.get("require_trajectory_consistency", True) and not trajectory_endpoint_consistent:
+            result["reasons"].append("trajectory_endpoint_metric_mismatch")
+    allowed = {
+        "sirt": "discrepancy_and_relative_iterate_change_patience",
+        "landweber": "discrepancy_and_relative_iterate_change_patience",
+        "sart": "discrepancy_and_relative_epoch_change_patience",
+        "os_sart": "discrepancy_and_relative_epoch_change_patience",
+        "cgls": "discrepancy_and_krylov_native_patience",
+        "lsqr": "discrepancy_and_krylov_native_patience",
+        "tikhonov": "discrepancy_regularized_normal_and_iterate_patience",
+        "tv_fista": "discrepancy_prox_gradient_and_objective_patience",
+    }
+    if solver_status == "converged" and solver_stopping_reason != allowed.get(algorithm):
+        result["reasons"].append("stopping_reason_not_allowed")
+    result["converged_at_budget_boundary"] = bool(solver_status == "converged" and max_iterations is not None and iterations == max_iterations)
+    result["passed"] = finite and (solver_status != "converged" or not result["reasons"])
+    result["status"] = "passed" if result["passed"] else "failed"
+    return result

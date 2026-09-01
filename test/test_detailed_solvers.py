@@ -46,6 +46,45 @@ def test_detailed_result_distinguishes_iteration_budget():
     assert result.stopping_reason == "maximum_iterations_reached"
 
 
+def test_sirt_policy_requires_five_consecutive_native_checks():
+    operator = IdentityOperator()
+    measurement = torch.ones(1, *operator.range_shape)
+    result = SIRTSolver(num_iterations=12).solve_detailed(
+        measurement,
+        operator,
+        control=SolveControl(
+            max_iterations=12,
+            min_iterations=5,
+            check_every=1,
+            patience=5,
+            discrepancy_target=1e-6,
+            relative_iterate_tolerance=1e-6,
+        ),
+    )
+    assert result.status == "converged"
+    assert result.actual_iterations == 9
+    assert result.stopping_reason == "discrepancy_and_relative_iterate_change_patience"
+    assert result.trajectory[-1].consecutive_criteria_count == 5
+
+
+def test_sirt_policy_never_relabels_budget_as_converged():
+    operator = IdentityOperator()
+    measurement = torch.ones(1, *operator.range_shape)
+    result = SIRTSolver(num_iterations=8).solve_detailed(
+        measurement,
+        operator,
+        control=SolveControl(
+            max_iterations=8,
+            min_iterations=5,
+            patience=5,
+            discrepancy_target=1e-6,
+            relative_iterate_tolerance=1e-6,
+        ),
+    )
+    assert result.status == "max_iterations"
+    assert result.stopping_reason == "maximum_iterations_reached"
+
+
 def test_detailed_callback_can_cancel_at_checkpoint():
     operator = IdentityOperator()
     measurement = torch.ones(1, *operator.range_shape)

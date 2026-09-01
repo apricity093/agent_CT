@@ -32,7 +32,7 @@ from inv_framework.benchmarks import (
     restrict_ct_case,
     pareto_front,
 )
-from inv_framework.convergence import ConvergenceStatus, post_run_validation
+from inv_framework.convergence import ConvergenceStatus, confirm_endpoint, post_run_validation
 from inv_framework.instrumentation import (
     CountingLinearOperator,
     OperatorBudgetExceeded,
@@ -89,7 +89,10 @@ class NumericalFailure(RuntimeError):
 
 
 def solver_records() -> list[dict[str, Any]]:
-    return _solver_records()
+    return [
+        {**record, "stopping_policy_versions": ["1.0"], "endpoint_confirmation": True}
+        for record in _solver_records()
+    ]
 
 
 def regularizer_records_public() -> list[dict[str, Any]]:
@@ -651,6 +654,43 @@ def _load_parameter_sources(path: str | Path | None) -> dict[str, str]:
     return {str(key): str(value) for key, value in payload.items()}
 
 
+def _load_stopping_policy(path: str | Path | None) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    source = Path(path).expanduser().resolve()
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping):
+        raise ConfigError("stopping policy must be a JSON object")
+    if payload.get("schema_version") != "1.0" or payload.get("mode") != "solver_native_and_endpoint":
+        raise ConfigError("unsupported stopping policy schema_version or mode")
+    return dict(payload)
+
+
+def _discrepancy_target(case: Any, policy: Mapping[str, Any]) -> float:
+    discrepancy = dict(policy.get("discrepancy", {}) or {})
+    parameters = dict((case.metadata.get("measurement") or {}).get("parameters", {}) or {})
+    if not parameters:
+        parameters = dict(case.metadata.get("measurement_parameters", {}) or {})
+    incident = parameters.get("incident_photon_count")
+    if not isinstance(incident, (int, float)) or float(incident) <= 0.0:
+        raise ConfigError("discrepancy stopping requires incident_photon_count in case metadata")
+    epsilon = float(discrepancy.get("epsilon", 1e-12))
+    floor = float(discrepancy.get("count_floor", 1.0))
+    values = case.measurement
+    mask = case.valid_measurement_mask if discrepancy.get("use_valid_measurement_mask", True) else None
+    if mask is not None:
+        mask = mask.to(device=values.device, dtype=torch.bool)
+        if mask.ndim == values.ndim - 1:
+            mask = mask.unsqueeze(0)
+        values = values[mask]
+    else:
+        values = values.reshape(-1)
+    counts = (float(incident) * torch.exp(-values)).clamp_min(floor)
+    sigma_sq_sum = counts.reciprocal().sum()
+    delta = float(torch.sqrt(sigma_sq_sum).item()) / max(float(values.norm().item()), epsilon)
+    return float(discrepancy.get("tau", 1.05)) * delta
+
+
 def _prepare_output(path: str | Path, overwrite: bool) -> Path:
     destination = Path(path).expanduser().resolve()
     if destination.is_symlink() or (destination.exists() and not destination.is_dir()):
@@ -728,6 +768,8 @@ def run_case(
     max_forward_calls: int | None = None,
     max_adjoint_calls: int | None = None,
     parameter_sources_path: str | Path | None = None,
+    stopping_policy_path: str | Path | None = None,
+    stopping_policy: Mapping[str, Any] | None = None,
     parameter_overrides: Mapping[str, Any] | None = None,
     parameter_sources: Mapping[str, str] | None = None,
     fit_view_indices: Sequence[int] | None = None,
@@ -755,6 +797,7 @@ def run_case(
                     f"{'; '.join(override_validation.errors)}"
                 )
         parameter_source_map = _load_parameter_sources(parameter_sources_path)
+        requested_stopping_policy = dict(stopping_policy) if stopping_policy is not None else _load_stopping_policy(stopping_policy_path)
         parameter_source_map.update({str(key): str(value) for key, value in (parameter_sources or {}).items()})
         for parameter_name in parameters:
             parameter_source_map.setdefault(parameter_name, "repository_config@sha256")
@@ -799,6 +842,12 @@ def run_case(
                 f"config requests {requested_iterations} iterations; budget allows {int(max_iterations)}"
             )
         solver = build_solver(name, validation.parameters, case)
+        operator_norm_squared = validation.estimates.get("operator_norm_squared")
+        if requested_stopping_policy is not None and name not in {"fbp", "fdk"} and operator_norm_squared is None:
+            operator_norm_squared = estimate_lipschitz_squared(counted_operator, case.measurement, num_iterations=8)
+            validation.estimates["operator_norm_squared"] = operator_norm_squared
+            validation.estimates["operator_norm_estimator"] = "power_iteration_8_for_stopping_policy"
+            validation_counters = counted_operator.stats()
         # Detailed solver paths expose the actual loop boundary.  The
         # configured iteration count remains the execution upper bound; it is
         # never converted into a convergence claim.
@@ -807,10 +856,41 @@ def run_case(
             detail_tolerance = 0.0
         elif name not in {"fbp", "fdk", "cgls", "lsqr"}:
             detail_tolerance = float(validation.parameters.get("tolerance", 1e-5))
+        effective_stopping_policy = dict(requested_stopping_policy) if requested_stopping_policy is not None else None
+        control_kwargs: dict[str, Any] = {}
+        if effective_stopping_policy is not None and name not in {"fbp", "fdk"}:
+            stalled_policy = dict(effective_stopping_policy.get("stalled", {}) or {})
+            divergence_policy = dict(effective_stopping_policy.get("divergence", {}) or {})
+            discrepancy_cfg = dict(effective_stopping_policy.get("discrepancy", {}) or {})
+            target = _discrepancy_target(case, effective_stopping_policy) if discrepancy_cfg.get("enabled", True) else None
+            effective_stopping_policy["effective"] = {"discrepancy_target": target}
+            control_kwargs = {
+                "min_iterations": int(effective_stopping_policy["min_iterations"]),
+                "check_every": int(effective_stopping_policy["check_every"]),
+                "patience": int(effective_stopping_policy["patience"]),
+                "stop_on_convergence": bool(effective_stopping_policy["stop_on_convergence"]),
+                "relative_iterate_tolerance": float(effective_stopping_policy["relative_iterate_tolerance"]),
+                "normalized_normal_residual_tolerance": float(effective_stopping_policy["normalized_normal_residual_tolerance"]),
+                "relative_objective_tolerance": float(effective_stopping_policy["relative_objective_tolerance"]),
+                "prox_gradient_mapping_tolerance": float(effective_stopping_policy["prox_gradient_mapping_tolerance"]),
+                "discrepancy_target": target,
+                "stall_enabled": bool(stalled_policy.get("enabled", True)),
+                "stall_relative_iterate_tolerance": float(stalled_policy.get("relative_iterate_tolerance", 1e-8)),
+                "stall_patience": int(stalled_policy.get("patience", 5)),
+                "divergence_enabled": bool(divergence_policy.get("enabled", True)),
+                "divergence_relative_increase_tolerance": float(divergence_policy.get("relative_increase_tolerance", 1e-4)),
+                "divergence_patience": int(divergence_policy.get("patience", 5)),
+            }
         control = SolveControl(
             max_iterations=max(1, requested_iterations or 1),
             tolerance=detail_tolerance,
-            metadata={"source": "ct_runtime", "solver": name},
+            metadata={
+                "source": "ct_runtime", "solver": name,
+                "effective_stopping_policy": effective_stopping_policy,
+                "operator_norm_estimate": math.sqrt(float(operator_norm_squared or 1.0)),
+            },
+            max_trajectory_points=max(200, requested_iterations) if requested_stopping_policy is not None else 200,
+            **control_kwargs,
         )
         solve_result = solver.solve_detailed(case.measurement, counted_operator, control=control)
         solver_counters = counted_operator.stats()
@@ -890,10 +970,12 @@ def run_case(
                     if heldout_case.valid_measurement_mask is not None else None
                 ),
             })
+        endpoint_counters_before = counted_operator.stats()
+        endpoint_prediction = counted_operator.forward(reconstruction).detach() if requested_stopping_policy is not None else predicted
         endpoint_report = post_run_validation(
             reconstruction,
             measurement=case.measurement,
-            predicted_measurement=predicted,
+            predicted_measurement=endpoint_prediction,
             valid_measurement_mask=case.valid_measurement_mask,
             operator=counted_operator,
             trajectory=[record.to_dict() for record in solve_result.trajectory],
@@ -903,6 +985,25 @@ def run_case(
             non_iterative=spec.direct,
             algorithm=name,
         )
+        endpoint_confirmation = confirm_endpoint(
+            algorithm=name,
+            reconstruction=reconstruction,
+            measurement=case.measurement,
+            operator=counted_operator,
+            valid_measurement_mask=case.valid_measurement_mask,
+            policy=effective_stopping_policy,
+            trajectory=[record.to_dict() for record in solve_result.trajectory],
+            solver_status=solve_result.status,
+            solver_stopping_reason=solve_result.stopping_reason,
+            iterations=solve_result.actual_iterations,
+            max_iterations=int(max_iterations) if max_iterations is not None else (requested_iterations or None),
+            parameters=validation.parameters,
+            operator_norm_estimate=math.sqrt(float(operator_norm_squared or 1.0)),
+        ) if requested_stopping_policy is not None else {
+            "schema_version": "1.0", "status": "not_requested", "passed": True,
+            "finite": bool(torch.isfinite(reconstruction).all()),
+            "normalized_data_residual": endpoint_report.final_residual,
+        }
         if endpoint_report.status == ConvergenceStatus.NUMERICAL_FAILURE:
             raise NumericalFailure(endpoint_report.failure_reason or endpoint_report.stopping_reason)
         counters = counted_operator.stats()
@@ -910,10 +1011,27 @@ def run_case(
             "parameter_estimation": _resource_delta(initial_counters, validation_counters),
             "solver": _resource_delta(validation_counters, solver_counters),
             "final_evaluation": _resource_delta(solver_counters, final_evaluation_counters),
+            "endpoint_confirmation": _resource_delta(endpoint_counters_before, counters),
         }
         convergence = solve_result.to_dict()
         convergence["trajectory"] = [record.to_dict() for record in solve_result.trajectory]
         convergence["endpoint_validation"] = endpoint_report.to_dict()
+        convergence["endpoint_confirmation"] = endpoint_confirmation
+        convergence["requested_policy"] = requested_stopping_policy
+        convergence["effective_policy"] = effective_stopping_policy
+        if solve_result.status == "converged" and not endpoint_confirmation.get("passed", False):
+            convergence["status"] = "partial"
+            convergence["stopping_reason"] = "endpoint_confirmation_failed"
+        if name in {"fbp", "fdk"}:
+            convergence["status"] = "not_applicable"
+            convergence["stopping_reason"] = "direct_reconstruction"
+        convergence["converged_at_budget_boundary"] = bool(endpoint_confirmation.get("converged_at_budget_boundary", False))
+        convergence_status = str(convergence["status"])
+        convergence_reason = str(convergence["stopping_reason"])
+        execution_status = "completed" if requested_stopping_policy is not None and solve_result.status not in {"diverged", "numerical_failure", "cancelled"} else solve_result.status
+        bundle["execution_status"] = execution_status
+        bundle["convergence_status"] = convergence_status
+        bundle["stopping_reason"] = convergence_reason
         objective = solve_result.final_objective
         if objective is None:
             objective = float(0.5 * (predicted - case.measurement).square().sum().item())
@@ -936,14 +1054,15 @@ def run_case(
             "observation_domain": domain,
             "geometry_type": str(case.geometry.get("type", "")),
             "ground_truth_available": truth_available,
-            "execution_status": solve_result.status,
-            "stopping_reason": solve_result.stopping_reason,
+            "execution_status": execution_status,
+            "stopping_reason": convergence_reason,
             "iterations_requested": requested_iterations,
             "iterations_completed": solve_result.actual_iterations,
             "objective": objective,
             "final_residual": solve_result.final_residual if solve_result.final_residual is not None else endpoint_report.final_residual,
             "final_objective": objective,
             "convergence": convergence,
+            "endpoint_confirmation": endpoint_confirmation,
             "resources": {
                 **dict(solve_result.resources),
                 # The aggregate counter snapshot includes endpoint and
@@ -955,6 +1074,9 @@ def run_case(
             },
             "projection_split": split_info or None,
             "fixed_compute": bool(fixed_compute),
+            "requested_stopping_policy": requested_stopping_policy,
+            "effective_stopping_policy": effective_stopping_policy,
+            "legacy_tolerance_status": "superseded_by_stopping_policy" if requested_stopping_policy is not None else "active",
             "constraints": {"min_value": explicit_lower, "max_value": explicit_upper},
             "masks": {
                 "roi_available": case.roi_mask is not None,
@@ -981,9 +1103,9 @@ def run_case(
             "projection_split": split_info or None,
             "observation_domain": domain,
             "ground_truth_available": truth_available,
-            "execution_status": solve_result.status,
-            "convergence_status": solve_result.status,
-            "stopping_reason": solve_result.stopping_reason,
+            "execution_status": execution_status,
+            "convergence_status": convergence_status,
+            "stopping_reason": convergence_reason,
             "diagnostics": "diagnostics.json",
             "device": str(device),
             "environment": {"python": sys.version, "platform": platform.platform(), "torch": torch.__version__, "cuda_available": torch.cuda.is_available(), "git_revision": _git_revision()},
@@ -992,12 +1114,11 @@ def run_case(
         }
         _write_json(destination / "manifest.json", manifest)
         _write_checksums(destination)
-        execution_status = str(solve_result.status)
-        if execution_status in {"diverged", "numerical_failure"}:
-            record = _failure(destination, execution_status, NumericalFailure(solve_result.stopping_reason))
+        if solve_result.status in {"diverged", "numerical_failure"}:
+            record = _failure(destination, solve_result.status, NumericalFailure(solve_result.stopping_reason))
             _write_json(destination / "diagnostics.json", diagnostics)
             _write_checksums(destination)
-            return {"status": execution_status, "output_dir": destination, "metrics": metrics, "diagnostics": diagnostics, **record}
+            return {"status": solve_result.status, "output_dir": destination, "metrics": metrics, "diagnostics": diagnostics, **record}
         return {
             # Keep the old successful-process API stable.  Consumers needing
             # the actual solver termination use execution_status or the

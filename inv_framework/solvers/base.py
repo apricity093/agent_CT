@@ -34,11 +34,24 @@ class SolveControl:
 
     max_iterations: int | None = None
     tolerance: float | None = None
+    min_iterations: int = 1
+    check_every: int = 1
     record_every: int = 1
     max_trajectory_points: int = 200
     patience: int = 5
     stop_on_convergence: bool = True
     check_finite: bool = True
+    relative_iterate_tolerance: float | None = None
+    normalized_normal_residual_tolerance: float | None = None
+    relative_objective_tolerance: float | None = None
+    prox_gradient_mapping_tolerance: float | None = None
+    discrepancy_target: float | None = None
+    stall_relative_iterate_tolerance: float = 1e-8
+    stall_patience: int = 5
+    stall_enabled: bool = False
+    divergence_relative_increase_tolerance: float = 1e-4
+    divergence_patience: int = 5
+    divergence_enabled: bool = False
     callback: Callable[["IterationRecord"], bool | None] | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
@@ -55,10 +68,19 @@ class SolveControl:
             or float(self.tolerance) < 0.0
         ):
             raise ValueError("tolerance must be a finite nonnegative number or None")
-        for name in ("record_every", "max_trajectory_points", "patience"):
+        for name in ("min_iterations", "check_every", "record_every", "max_trajectory_points", "patience", "stall_patience", "divergence_patience"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
+        for name in (
+            "relative_iterate_tolerance", "normalized_normal_residual_tolerance",
+            "relative_objective_tolerance", "prox_gradient_mapping_tolerance",
+            "discrepancy_target", "stall_relative_iterate_tolerance",
+            "divergence_relative_increase_tolerance",
+        ):
+            value = getattr(self, name)
+            if value is not None and (not math.isfinite(float(value)) or float(value) < 0.0):
+                raise ValueError(f"{name} must be a finite nonnegative number or None")
 
 
 @dataclass(frozen=True)
@@ -84,6 +106,11 @@ class IterationRecord:
     relaxation: float | None = None
     finite: bool = True
     stopping_candidate: bool = False
+    consecutive_criteria_count: int = 0
+    criteria: Mapping[str, bool] = field(default_factory=dict)
+    native_criterion_name: str | None = None
+    native_criterion_value: float | None = None
+    native_criterion_threshold: float | None = None
     status: str | None = None
     subset: int | None = None
     subset_count: int | None = None
@@ -112,6 +139,11 @@ class IterationRecord:
             "relaxation": self.relaxation,
             "finite": bool(self.finite),
             "stopping_candidate": bool(self.stopping_candidate),
+            "consecutive_criteria_count": int(self.consecutive_criteria_count),
+            "criteria": dict(self.criteria),
+            "native_criterion_name": self.native_criterion_name,
+            "native_criterion_value": self.native_criterion_value,
+            "native_criterion_threshold": self.native_criterion_threshold,
             "status": self.status,
             "subset": self.subset,
             "subset_count": self.subset_count,
@@ -227,6 +259,11 @@ class IterationRecorder:
         step_size: float | None = None,
         relaxation: float | None = None,
         stopping_candidate: bool = False,
+        consecutive_criteria_count: int = 0,
+        criteria: Mapping[str, bool] | None = None,
+        native_criterion_name: str | None = None,
+        native_criterion_value: float | None = None,
+        native_criterion_threshold: float | None = None,
         status: str | None = None,
         epoch: int | None = None,
         subset: int | None = None,
@@ -249,7 +286,7 @@ class IterationRecorder:
             # A unit floor avoids an artificial 1e12 relative change on the
             # first update from a zero initialization while preserving the
             # usual relative norm for non-small iterates.
-            denominator = max(_tensor_norm(self.previous) or 0.0, 1.0)
+            denominator = max(_tensor_norm(self.previous) or 0.0, 1e-12)
             change = (_tensor_norm(value - self.previous) or 0.0) / denominator
         normalized = None if residual_norm is None else residual_norm / self.measurement_norm
         forward_calls, adjoint_calls = self._counter_values()
@@ -268,6 +305,11 @@ class IterationRecorder:
             relaxation=relaxation,
             finite=finite,
             stopping_candidate=bool(stopping_candidate),
+            consecutive_criteria_count=int(consecutive_criteria_count),
+            criteria=dict(criteria or {}),
+            native_criterion_name=native_criterion_name,
+            native_criterion_value=native_criterion_value,
+            native_criterion_threshold=native_criterion_threshold,
             status=status,
             subset=subset,
             subset_count=subset_count,
@@ -364,6 +406,52 @@ class IterationRecorder:
             relative_iterate_change=last_change,
             predicted_measurement=predicted_measurement,
             metadata={"algorithm": self.algorithm, **dict(self.control.metadata), **dict(metadata or {}), **evidence},
+        )
+
+
+@dataclass(frozen=True)
+class StoppingDecision:
+    checked: bool
+    converged: bool
+    stalled: bool
+    diverged: bool
+    consecutive: int
+    criteria: Mapping[str, bool]
+
+
+class ConsecutiveStoppingMonitor:
+    """Shared min/check/patience state machine for solver-native criteria."""
+
+    def __init__(self, control: SolveControl) -> None:
+        self.control = control
+        self.consecutive = 0
+        self.stall_run = 0
+        self.divergence_run = 0
+        self.previous_monitor: float | None = None
+
+    def observe(self, iteration: int, *, criteria: Mapping[str, bool], relative_change: float | None, monitor_value: float | None) -> StoppingDecision:
+        checked = iteration >= self.control.min_iterations and iteration % self.control.check_every == 0
+        if not checked:
+            return StoppingDecision(False, False, False, False, self.consecutive, dict(criteria))
+        satisfied = bool(criteria) and all(bool(value) for value in criteria.values())
+        self.consecutive = self.consecutive + 1 if satisfied else 0
+        discrepancy_unmet = not bool(criteria.get("discrepancy", True))
+        native_values = [v for k, v in criteria.items() if k != "discrepancy"]
+        native_unmet = bool(native_values) and not all(native_values)
+        if self.control.stall_enabled and relative_change is not None and relative_change <= self.control.stall_relative_iterate_tolerance and discrepancy_unmet and native_unmet:
+            self.stall_run += 1
+        else:
+            self.stall_run = 0
+        if self.control.divergence_enabled and monitor_value is not None and self.previous_monitor is not None:
+            self.divergence_run = self.divergence_run + 1 if monitor_value > self.previous_monitor * (1.0 + self.control.divergence_relative_increase_tolerance) else 0
+        self.previous_monitor = monitor_value
+        return StoppingDecision(
+            True,
+            self.consecutive >= self.control.patience,
+            self.stall_run >= self.control.stall_patience,
+            self.divergence_run >= self.control.divergence_patience,
+            self.consecutive,
+            dict(criteria),
         )
 
 

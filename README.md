@@ -74,6 +74,13 @@ registry 同时声明算法族、目标函数、支持的观测域、正则项�
 `converged`、`partial`、`stalled`、`diverged`、`max_iterations`、
 `non_iterative_completed`、`invalid_parameters` 和 `numerical_failure`。
 
+Stopping-policy schema `1.0` 在保留 solver-native 数学判据的同时统一
+`min_iterations`、`check_every` 和连续 `patience` 状态机。SART/OS-SART 仅在完整
+epoch 后检查；CGLS/LSQR 使用归一化 normal residual；Tikhonov 使用正则化 normal
+residual；TV-FISTA 使用完整 composite objective 和归一化 prox-gradient mapping。
+endpoint confirmation 从最终 reconstruction 独立重算证据，其 forward/adjoint 调用与
+optimization calls 分开记账。预算耗尽或正常进程退出绝不改写为 `converged`。
+
 在 Agent 的 public staging 中，`truth/x` 仅保留外部 loader 所需的零值形状占位符，真实
 truth 及其动态范围元数据不会进入 backend。此时 `metrics.json` 只报告数据一致性与资源
 指标，不生成 RMSE、PSNR、SSIM；图像质量指标由独立 evaluator 从私有源计算。

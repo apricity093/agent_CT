@@ -18,6 +18,7 @@ import torch
 from ..operators.base import ForwardOperator, LinearOperator
 from ..regularizers import TikhonovRegularizer, TVRegularizer
 from .base import (
+    ConsecutiveStoppingMonitor,
     IterationRecorder,
     IterationRecord,
     SolveControl,
@@ -117,6 +118,18 @@ def _safe_record(
     return recorder.record(*args, **kwargs)
 
 
+def _policy_active(control: SolveControl) -> bool:
+    return control.discrepancy_target is not None
+
+
+def _policy_status(decision: Any) -> tuple[str | None, str | None]:
+    if decision.diverged:
+        return "diverged", "persistent_residual_or_objective_increase"
+    if decision.stalled:
+        return "stalled", "stalled_before_discrepancy"
+    return None, None
+
+
 def solve_fbp_detailed(
     operator: LinearOperator,
     measurement: torch.Tensor,
@@ -135,8 +148,8 @@ def solve_fbp_detailed(
     return recorder.finish(
         reconstruction,
         actual_iterations=0,
-        status="non_iterative_completed",
-        stopping_reason="direct_solver_completed",
+        status="not_applicable",
+        stopping_reason="direct_reconstruction",
         resources={"trajectory_available": False},
         metadata={"direct": True},
     )
@@ -158,8 +171,8 @@ def solve_fdk_detailed(
     return recorder.finish(
         reconstruction,
         actual_iterations=0,
-        status="non_iterative_completed",
-        stopping_reason="direct_solver_completed",
+        status="not_applicable",
+        stopping_reason="direct_reconstruction",
         resources={"trajectory_available": False},
         metadata={"direct": True},
     )
@@ -184,6 +197,7 @@ def solve_sirt_detailed(
     limit = min(int(num_iterations), int(control.max_iterations or num_iterations))
     x = prepare_initial_image(measurement, operator, x_init=x_init, initial_value=0.0)
     recorder = IterationRecorder(control, measurement, operator, algorithm="sirt")
+    monitor = ConsecutiveStoppingMonitor(control)
     recorder.set_initial(x)
     domain = (batch, *tuple(operator.domain_shape))
     range_ = (batch, *tuple(operator.range_shape))
@@ -195,15 +209,25 @@ def solve_sirt_detailed(
     actual = 0
     converged = False
     cancelled = False
-    residual = torch.zeros_like(measurement)
+    terminal_status = None
+    terminal_reason = None
+    prediction = operator.forward(x)
+    residual = prediction - measurement
     for iteration in range(1, limit + 1):
-        residual = operator.forward(x) - measurement
         previous = x
         x = x - column_weight * operator.adjoint(row_weight * residual)
         x = apply_box_constraints(x, min_value=min_value, max_value=max_value)
+        prediction = operator.forward(x)
+        residual = prediction - measurement
         change = _relative_change(previous, x)
         residual_value = _normalized(_global_norm(residual), measurement_norm)
-        converged = _tolerance_reached(control, residual=residual_value, change=change)
+        criteria = {
+            "discrepancy": residual_value <= float(control.discrepancy_target or -1.0),
+            "relative_iterate_change": change <= float(control.relative_iterate_tolerance or -1.0),
+        }
+        decision = monitor.observe(iteration, criteria=criteria, relative_change=change, monitor_value=residual_value)
+        converged = decision.converged if _policy_active(control) else _tolerance_reached(control, residual=residual_value, change=change)
+        terminal_status, terminal_reason = _policy_status(decision) if _policy_active(control) else (None, None)
         actual = iteration
         if not _safe_record(
             recorder,
@@ -213,16 +237,20 @@ def solve_sirt_detailed(
             objective=_objective(residual),
             algorithm_residual=residual_value,
             stopping_candidate=converged,
-            metadata={"state": "pre_update"},
+            consecutive_criteria_count=decision.consecutive,
+            criteria=criteria,
+            native_criterion_name="relative_iterate_change",
+            native_criterion_value=change,
+            native_criterion_threshold=control.relative_iterate_tolerance,
+            metadata={"state": "post_update"},
         ):
             cancelled = True
             break
-        if converged and control.stop_on_convergence:
+        if terminal_status or (converged and control.stop_on_convergence):
             break
-    prediction = _finish_prediction(operator, x)
     final_residual_tensor = prediction - measurement
     final_residual = _normalized(_global_norm(final_residual_tensor), measurement_norm)
-    status = _finish_status(
+    status = terminal_status or _finish_status(
         actual=actual,
         limit=limit,
         converged=converged,
@@ -236,6 +264,8 @@ def solve_sirt_detailed(
         actual_iterations=actual,
         status=status,
         stopping_reason=(
+            terminal_reason if terminal_reason else
+            "discrepancy_and_relative_iterate_change_patience" if converged and _policy_active(control) else
             "relative_residual_and_iterate_tolerance" if converged else
             "callback_cancelled" if cancelled else
             "maximum_iterations_reached"
@@ -267,21 +297,32 @@ def solve_landweber_detailed(
     limit = min(int(num_iterations), int(control.max_iterations or num_iterations))
     x = prepare_initial_image(measurement, operator, x_init=x_init, initial_value=0.0)
     recorder = IterationRecorder(control, measurement, operator, algorithm="landweber")
+    monitor = ConsecutiveStoppingMonitor(control)
     recorder.set_initial(x)
     step = 1e-3 if step_size is None else float(step_size)
     measurement_norm = _global_norm(measurement)
     actual = 0
     converged = False
     cancelled = False
-    residual = torch.zeros_like(measurement)
+    terminal_status = None
+    terminal_reason = None
+    prediction = operator.forward(x)
+    residual = prediction - measurement
     for iteration in range(1, limit + 1):
-        residual = operator.forward(x) - measurement
         previous = x
         x = x - step * operator.adjoint(residual)
         x = apply_box_constraints(x, min_value=min_value, max_value=max_value)
+        prediction = operator.forward(x)
+        residual = prediction - measurement
         change = _relative_change(previous, x)
         residual_value = _normalized(_global_norm(residual), measurement_norm)
-        converged = _tolerance_reached(control, residual=residual_value, change=change)
+        criteria = {
+            "discrepancy": residual_value <= float(control.discrepancy_target or -1.0),
+            "relative_iterate_change": change <= float(control.relative_iterate_tolerance or -1.0),
+        }
+        decision = monitor.observe(iteration, criteria=criteria, relative_change=change, monitor_value=residual_value)
+        converged = decision.converged if _policy_active(control) else _tolerance_reached(control, residual=residual_value, change=change)
+        terminal_status, terminal_reason = _policy_status(decision) if _policy_active(control) else (None, None)
         actual = iteration
         if not _safe_record(
             recorder,
@@ -292,16 +333,20 @@ def solve_landweber_detailed(
             algorithm_residual=residual_value,
             step_size=step,
             stopping_candidate=converged,
-            metadata={"state": "pre_update"},
+            consecutive_criteria_count=decision.consecutive,
+            criteria=criteria,
+            native_criterion_name="relative_iterate_change",
+            native_criterion_value=change,
+            native_criterion_threshold=control.relative_iterate_tolerance,
+            metadata={"state": "post_update"},
         ):
             cancelled = True
             break
-        if converged and control.stop_on_convergence:
+        if terminal_status or (converged and control.stop_on_convergence):
             break
-    prediction = _finish_prediction(operator, x)
     final_residual_tensor = prediction - measurement
     final_residual = _normalized(_global_norm(final_residual_tensor), measurement_norm)
-    status = _finish_status(
+    status = terminal_status or _finish_status(
         actual=actual,
         limit=limit,
         converged=converged,
@@ -313,6 +358,8 @@ def solve_landweber_detailed(
         actual_iterations=actual,
         status=status,
         stopping_reason=(
+            terminal_reason if terminal_reason else
+            "discrepancy_and_relative_iterate_change_patience" if converged and _policy_active(control) else
             "relative_residual_and_iterate_tolerance" if converged else
             "callback_cancelled" if cancelled else
             "maximum_iterations_reached"
@@ -343,6 +390,7 @@ def solve_cgls_detailed(
     limit = min(int(num_iterations), int(control.max_iterations or num_iterations))
     x = prepare_initial_image(measurement, operator, x_init=x_init, initial_value=0.0)
     recorder = IterationRecorder(control, measurement, operator, algorithm="cgls")
+    monitor = ConsecutiveStoppingMonitor(control)
     recorder.set_initial(x)
     residual = measurement - operator.forward(x)
     adjoint_residual = operator.adjoint(residual)
@@ -354,7 +402,9 @@ def solve_cgls_detailed(
     actual = 0
     converged = False
     cancelled = False
-    if normal_tolerance > 0.0 and _global_norm(adjoint_residual) <= normal_tolerance:
+    terminal_status = None
+    terminal_reason = None
+    if not _policy_active(control) and normal_tolerance > 0.0 and _global_norm(adjoint_residual) <= normal_tolerance:
         data_residual = -residual
         recorder.record(
             0,
@@ -396,7 +446,18 @@ def solve_cgls_detailed(
         normal_value = _global_norm(next_adjoint)
         data_residual = -residual
         residual_value = _normalized(_global_norm(data_residual), _global_norm(measurement))
-        converged = normal_tolerance > 0.0 and normal_value <= normal_tolerance
+        operator_norm = float(control.metadata.get("operator_norm_estimate", 1.0) or 1.0)
+        normalized_normal = normal_value / max(operator_norm * _global_norm(data_residual), float(eps))
+        criteria = {
+            "discrepancy": residual_value <= float(control.discrepancy_target or -1.0),
+            "krylov_native": (
+                normalized_normal <= float(control.normalized_normal_residual_tolerance or -1.0)
+                or change <= float(control.relative_iterate_tolerance or -1.0)
+            ),
+        }
+        decision = monitor.observe(actual + 1, criteria=criteria, relative_change=change, monitor_value=residual_value)
+        converged = decision.converged if _policy_active(control) else normal_tolerance > 0.0 and normal_value <= normal_tolerance
+        terminal_status, terminal_reason = _policy_status(decision) if _policy_active(control) else (None, None)
         actual += 1
         if not _safe_record(
             recorder,
@@ -404,13 +465,18 @@ def solve_cgls_detailed(
             x,
             residual=data_residual,
             objective=_objective(data_residual),
-            algorithm_residual=_normalized(normal_value, initial_normal),
+            algorithm_residual=normalized_normal if _policy_active(control) else _normalized(normal_value, initial_normal),
             stopping_candidate=converged,
+            consecutive_criteria_count=decision.consecutive,
+            criteria=criteria,
+            native_criterion_name="normalized_normal_residual",
+            native_criterion_value=normalized_normal,
+            native_criterion_threshold=control.normalized_normal_residual_tolerance,
             metadata={"criterion": "normal_residual", "normal_residual_absolute": normal_value},
         ):
             cancelled = True
             break
-        if converged and control.stop_on_convergence:
+        if terminal_status or (converged and control.stop_on_convergence):
             break
         beta = next_gamma / gamma.clamp_min(float(eps))
         direction = next_adjoint + beta.reshape((beta.shape[0],) + (1,) * (direction.ndim - 1)) * direction
@@ -420,7 +486,7 @@ def solve_cgls_detailed(
     # resource accounting consistent with the benchmark protocol.
     prediction = _finish_prediction(operator, x)
     final_residual_tensor = prediction - measurement
-    status = _finish_status(
+    status = terminal_status or _finish_status(
         actual=actual,
         limit=limit,
         converged=converged,
@@ -432,6 +498,8 @@ def solve_cgls_detailed(
         actual_iterations=actual,
         status=status,
         stopping_reason=(
+            terminal_reason if terminal_reason else
+            "discrepancy_and_krylov_native_patience" if converged and _policy_active(control) else
             "normal_residual_tolerance" if converged else
             "callback_cancelled" if cancelled else
             "maximum_iterations_reached"
@@ -465,6 +533,7 @@ def solve_lsqr_detailed(
     epsilon = float(eps)
     x = prepare_initial_image(measurement, operator, x_init=x_init, initial_value=0.0)
     recorder = IterationRecorder(control, measurement, operator, algorithm="lsqr")
+    monitor = ConsecutiveStoppingMonitor(control)
     recorder.set_initial(x)
     rhs_norm = _global_norm(measurement)
     u = measurement - operator.forward(x)
@@ -479,11 +548,13 @@ def solve_lsqr_detailed(
     actual = 0
     converged = False
     cancelled = False
+    terminal_status = None
+    terminal_reason = None
     stop_tol = float(atol) * rhs_norm + float(btol)
     residual_tensor = measurement - operator.forward(x)
     for _ in range(limit):
         residual_norm = _global_norm(residual_tensor)
-        if residual_norm <= stop_tol:
+        if not _policy_active(control) and residual_norm <= stop_tol:
             converged = True
             break
         u = operator.forward(v) - alpha.reshape((alpha.shape[0],) + (1,) * (u.ndim - 1)) * u
@@ -511,26 +582,41 @@ def solve_lsqr_detailed(
         residual_tensor = measurement - operator.forward(x)
         residual_value = _normalized(_global_norm(residual_tensor), rhs_norm)
         change = _relative_change(previous, x)
-        converged = residual_norm <= stop_tol or (
-            stop_tol > 0.0 and residual_value <= _normalized(stop_tol, rhs_norm)
-        )
+        normal_value = _global_norm(operator.adjoint(residual_tensor)) if _policy_active(control) else residual_value
+        operator_norm = float(control.metadata.get("operator_norm_estimate", 1.0) or 1.0)
+        normalized_normal = normal_value / max(operator_norm * _global_norm(residual_tensor), epsilon) if _policy_active(control) else residual_value
+        criteria = {
+            "discrepancy": residual_value <= float(control.discrepancy_target or -1.0),
+            "krylov_native": (
+                normalized_normal <= float(control.normalized_normal_residual_tolerance or -1.0)
+                or change <= float(control.relative_iterate_tolerance or -1.0)
+            ),
+        }
+        decision = monitor.observe(actual, criteria=criteria, relative_change=change, monitor_value=residual_value)
+        converged = decision.converged if _policy_active(control) else residual_norm <= stop_tol or (stop_tol > 0.0 and residual_value <= _normalized(stop_tol, rhs_norm))
+        terminal_status, terminal_reason = _policy_status(decision) if _policy_active(control) else (None, None)
         if not _safe_record(
             recorder,
             actual,
             x,
             residual=-residual_tensor,
             objective=_objective(residual_tensor),
-            algorithm_residual=residual_value,
+            algorithm_residual=normalized_normal if _policy_active(control) else residual_value,
             stopping_candidate=converged,
+            consecutive_criteria_count=decision.consecutive,
+            criteria=criteria,
+            native_criterion_name="normalized_normal_residual",
+            native_criterion_value=normalized_normal,
+            native_criterion_threshold=control.normalized_normal_residual_tolerance,
             metadata={"criterion": "simplified_atol_btol"},
         ):
             cancelled = True
             break
-        if converged and control.stop_on_convergence:
+        if terminal_status or (converged and control.stop_on_convergence):
             break
     prediction = (measurement - residual_tensor).detach()
     final_residual_tensor = prediction - measurement
-    status = _finish_status(
+    status = terminal_status or _finish_status(
         actual=actual,
         limit=limit,
         converged=converged,
@@ -542,6 +628,8 @@ def solve_lsqr_detailed(
         actual_iterations=actual,
         status=status,
         stopping_reason=(
+            terminal_reason if terminal_reason else
+            "discrepancy_and_krylov_native_patience" if converged and _policy_active(control) else
             "atol_btol_tolerance" if converged else
             "callback_cancelled" if cancelled else
             "maximum_iterations_reached"
@@ -577,6 +665,7 @@ def _subset_solver_detailed(
     limit = min(int(num_iterations), int(control.max_iterations or num_iterations))
     x = prepare_initial_image(measurement, operator, x_init=x_init, initial_value=0.0)
     recorder = IterationRecorder(control, measurement, operator, algorithm=algorithm)
+    monitor = ConsecutiveStoppingMonitor(control)
     recorder.set_initial(x)
     subsets = make_angle_subsets(
         num_angles=int(operator.range_shape[-2]),
@@ -591,6 +680,8 @@ def _subset_solver_detailed(
     actual = 0
     converged = False
     cancelled = False
+    terminal_status = None
+    terminal_reason = None
     prediction = torch.zeros_like(measurement)
     for epoch in range(1, limit + 1):
         previous = x
@@ -609,7 +700,13 @@ def _subset_solver_detailed(
         residual = prediction - measurement
         change = _relative_change(previous, x)
         residual_value = _normalized(_global_norm(residual), measurement_norm)
-        converged = _tolerance_reached(control, residual=residual_value, change=change, require_both=True)
+        criteria = {
+            "discrepancy": residual_value <= float(control.discrepancy_target or -1.0),
+            "relative_epoch_change": change <= float(control.relative_iterate_tolerance or -1.0),
+        }
+        decision = monitor.observe(epoch, criteria=criteria, relative_change=change, monitor_value=residual_value)
+        converged = decision.converged if _policy_active(control) else _tolerance_reached(control, residual=residual_value, change=change, require_both=True)
+        terminal_status, terminal_reason = _policy_status(decision) if _policy_active(control) else (None, None)
         actual = epoch
         if not _safe_record(
             recorder,
@@ -620,15 +717,20 @@ def _subset_solver_detailed(
             algorithm_residual=residual_value,
             relaxation=float(relaxation),
             stopping_candidate=converged,
+            consecutive_criteria_count=decision.consecutive,
+            criteria=criteria,
+            native_criterion_name="relative_epoch_change",
+            native_criterion_value=change,
+            native_criterion_threshold=control.relative_iterate_tolerance,
             epoch=epoch,
             subset_count=len(subsets),
             metadata={"complete_sweep": True, "subset_sizes": [int(item.numel()) for item in subsets]},
         ):
             cancelled = True
             break
-        if converged and control.stop_on_convergence:
+        if terminal_status or (converged and control.stop_on_convergence):
             break
-    status = _finish_status(
+    status = terminal_status or _finish_status(
         actual=actual,
         limit=limit,
         converged=converged,
@@ -640,6 +742,8 @@ def _subset_solver_detailed(
         actual_iterations=actual,
         status=status,
         stopping_reason=(
+            terminal_reason if terminal_reason else
+            "discrepancy_and_relative_epoch_change_patience" if converged and _policy_active(control) else
             "complete_sweep_residual_and_iterate_tolerance" if converged else
             "callback_cancelled" if cancelled else
             "maximum_epochs_reached"
@@ -647,7 +751,7 @@ def _subset_solver_detailed(
         final_residual=_normalized(_global_norm(prediction - measurement), measurement_norm),
         final_objective=_objective(prediction - measurement),
         predicted_measurement=prediction,
-        metadata={"complete_sweep_count": actual, "subset_count": len(subsets)},
+        metadata={"complete_sweep_count": actual, "subset_count": len(subsets), "iteration_unit": "epochs", "internal_subset_updates": actual * len(subsets)},
     )
 
 
@@ -927,6 +1031,7 @@ def solve_tikhonov_detailed(
     strength = float(reg_strength)
     x = prepare_initial_image(measurement, operator, x_init=x_init, initial_value=0.0)
     recorder = IterationRecorder(control, measurement, operator, algorithm="tikhonov")
+    monitor = ConsecutiveStoppingMonitor(control)
     recorder.set_initial(x)
     # Cache A*x and A*d.  The cached predictions keep the per-iteration
     # objective exact while avoiding a second forward call solely for
@@ -943,9 +1048,11 @@ def solve_tikhonov_detailed(
     actual = 0
     converged = False
     cancelled = False
+    terminal_status = None
+    terminal_reason = None
     for iteration in range(1, limit + 1):
         normal_value = _global_norm(normal_residual)
-        if float(control.tolerance or 0.0) > 0.0 and _normalized(normal_value, rhs_norm) <= float(control.tolerance):
+        if not _policy_active(control) and float(control.tolerance or 0.0) > 0.0 and _normalized(normal_value, rhs_norm) <= float(control.tolerance):
             converged = True
             break
         direction_prediction = operator.forward(direction)
@@ -1009,9 +1116,17 @@ def solve_tikhonov_detailed(
         normal_value = _global_norm(normal_residual)
         normal_relative = _normalized(normal_value, rhs_norm)
         change = _relative_change(previous, x)
-        converged = float(control.tolerance or 0.0) > 0.0 and _tolerance_reached(
-            control, residual=normal_relative, change=change, require_both=True
-        )
+        data_relative = _normalized(_global_norm(residual), _global_norm(measurement))
+        reg_denominator = _global_norm(rhs) + strength * _global_norm(regularizer.gradient(x))
+        reg_normalized = normal_value / max(reg_denominator, float(eps))
+        criteria = {
+            "discrepancy": data_relative <= float(control.discrepancy_target or -1.0),
+            "regularized_normal_residual": reg_normalized <= float(control.normalized_normal_residual_tolerance or -1.0),
+            "relative_iterate_change": change <= float(control.relative_iterate_tolerance or -1.0),
+        }
+        decision = monitor.observe(iteration, criteria=criteria, relative_change=change, monitor_value=objective)
+        converged = decision.converged if _policy_active(control) else float(control.tolerance or 0.0) > 0.0 and _tolerance_reached(control, residual=normal_relative, change=change, require_both=True)
+        terminal_status, terminal_reason = _policy_status(decision) if _policy_active(control) else (None, None)
         actual = iteration
         if not _safe_record(
             recorder,
@@ -1019,13 +1134,18 @@ def solve_tikhonov_detailed(
             x,
             residual=residual,
             objective=objective,
-            algorithm_residual=normal_relative,
+            algorithm_residual=reg_normalized if _policy_active(control) else normal_relative,
             stopping_candidate=converged,
+            consecutive_criteria_count=decision.consecutive,
+            criteria=criteria,
+            native_criterion_name="normalized_regularized_normal_residual",
+            native_criterion_value=reg_normalized,
+            native_criterion_threshold=control.normalized_normal_residual_tolerance,
             metadata={"normal_residual": normal_value, "complete_objective": True},
         ):
             cancelled = True
             break
-        if converged and control.stop_on_convergence:
+        if terminal_status or (converged and control.stop_on_convergence):
             break
     # Keep the final evaluation explicit, even though the prediction above is
     # already exact in the unconstrained linear path.  This distinguishes the
@@ -1036,7 +1156,7 @@ def solve_tikhonov_detailed(
     return recorder.finish(
         x,
         actual_iterations=actual,
-        status=_finish_status(
+        status=terminal_status or _finish_status(
             actual=actual,
             limit=limit,
             converged=converged,
@@ -1044,6 +1164,8 @@ def solve_tikhonov_detailed(
             numerical_failure=recorder.numerical_failure,
         ),
         stopping_reason=(
+            terminal_reason if terminal_reason else
+            "discrepancy_regularized_normal_and_iterate_patience" if converged and _policy_active(control) else
             "normal_residual_and_iterate_tolerance" if converged else
             "callback_cancelled" if cancelled else
             "maximum_iterations_reached"
@@ -1092,11 +1214,15 @@ def solve_tv_fista_detailed(
     momentum = x.clone()
     acceleration = 1.0
     recorder = IterationRecorder(control, measurement, operator, algorithm="tv_fista")
+    monitor = ConsecutiveStoppingMonitor(control)
     recorder.set_initial(x)
     measurement_norm = _global_norm(measurement)
     actual = 0
     converged = False
     cancelled = False
+    terminal_status = None
+    terminal_reason = None
+    previous_objective = None
     prediction = torch.zeros_like(measurement)
     for iteration in range(1, limit + 1):
         residual_at_momentum = operator.forward(momentum) - measurement
@@ -1116,12 +1242,18 @@ def solve_tv_fista_detailed(
         residual = residual_at_momentum
         objective = _objective(residual) + float(reg_strength) * float(tv.value(momentum).sum().item())
         change = _relative_change(momentum, next_momentum)
-        converged = _tolerance_reached(
-            control,
-            residual=_normalized(_global_norm(residual), measurement_norm),
-            change=change,
-            require_both=True,
-        )
+        data_relative = _normalized(_global_norm(residual), measurement_norm)
+        mapping = (momentum - next_x) / step
+        normalized_mapping = _global_norm(mapping) / max(_global_norm(momentum) / step, 1e-12)
+        objective_change = None if previous_objective is None else abs(objective - previous_objective) / max(abs(previous_objective), 1e-12)
+        criteria = {
+            "discrepancy": data_relative <= float(control.discrepancy_target or -1.0),
+            "prox_gradient_mapping": normalized_mapping <= float(control.prox_gradient_mapping_tolerance or -1.0),
+            "relative_composite_objective_change": objective_change is not None and objective_change <= float(control.relative_objective_tolerance or -1.0),
+        }
+        decision = monitor.observe(iteration, criteria=criteria, relative_change=change, monitor_value=objective)
+        converged = decision.converged if _policy_active(control) else _tolerance_reached(control, residual=data_relative, change=change, require_both=True)
+        terminal_status, terminal_reason = _policy_status(decision) if _policy_active(control) else (None, None)
         actual = iteration
         if not _safe_record(
             recorder,
@@ -1132,7 +1264,12 @@ def solve_tv_fista_detailed(
             algorithm_residual=_normalized(_global_norm(residual), measurement_norm),
             step_size=step,
             stopping_candidate=converged,
-            metadata={"complete_objective": True, "objective_state": "momentum", "fista_momentum": float(momentum_scale)},
+            consecutive_criteria_count=decision.consecutive,
+            criteria=criteria,
+            native_criterion_name="normalized_prox_gradient_mapping",
+            native_criterion_value=normalized_mapping,
+            native_criterion_threshold=control.prox_gradient_mapping_tolerance,
+            metadata={"complete_objective": True, "objective_state": "momentum", "relative_composite_objective_change": objective_change, "normalized_prox_gradient_mapping": normalized_mapping, "fista_momentum": float(momentum_scale)},
         ):
             cancelled = True
             x = next_x
@@ -1140,7 +1277,8 @@ def solve_tv_fista_detailed(
         x = next_x
         momentum = next_momentum
         acceleration = next_acceleration
-        if converged and control.stop_on_convergence:
+        previous_objective = objective
+        if terminal_status or (converged and control.stop_on_convergence):
             break
     prediction = _finish_prediction(operator, x)
     residual = prediction - measurement
@@ -1148,7 +1286,7 @@ def solve_tv_fista_detailed(
     return recorder.finish(
         x,
         actual_iterations=actual,
-        status=_finish_status(
+        status=terminal_status or _finish_status(
             actual=actual,
             limit=limit,
             converged=converged,
@@ -1156,6 +1294,8 @@ def solve_tv_fista_detailed(
             numerical_failure=recorder.numerical_failure,
         ),
         stopping_reason=(
+            terminal_reason if terminal_reason else
+            "discrepancy_prox_gradient_and_objective_patience" if converged and _policy_active(control) else
             "complete_objective_and_iterate_tolerance" if converged else
             "callback_cancelled" if cancelled else
             "maximum_iterations_reached"
