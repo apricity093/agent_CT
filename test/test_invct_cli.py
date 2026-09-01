@@ -8,7 +8,7 @@ import torch
 import yaml
 
 from inv_framework.cli import main
-from inv_framework.ct_runtime import SOLVER_SPECS, _load_result
+from inv_framework.ct_runtime import SOLVER_SPECS, _load_result, run_suite
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -177,3 +177,117 @@ def test_small_benchmark_suite(tmp_path, capsys):
     assert (output_root / "metrics.csv").is_file()
     assert (output_root / "report.md").is_file()
     assert (output_root / "artifacts.sha256").is_file()
+
+
+def test_equal_call_suite_keeps_budget_failures_as_records(tmp_path):
+    fbp = _algorithm(tmp_path, "fbp")
+    sirt = _algorithm(tmp_path, "sirt", {"num_iterations": 1})
+    output_root = tmp_path / "equal_output"
+    suite = _yaml(
+        tmp_path / "equal_suite.yaml",
+        {
+            "schema_version": 1,
+            "name": "equal",
+            "data_root": str(DATA_ROOT),
+            "output_root": str(output_root),
+            "device": "cpu",
+            "benchmark_protocol": "equal_operator_calls",
+            "budget": {
+                "protocol": "equal_operator_calls",
+                "max_forward_calls": 2,
+                "max_adjoint_calls": 2,
+            },
+            "groups": [{
+                "algorithms": [
+                    {"name": "fbp", "config": str(fbp)},
+                    {"name": "sirt", "config": str(sirt)},
+                ],
+                "cases": [CASE_ID],
+            }],
+        },
+    )
+
+    result = run_suite(suite)
+    records = {record["solver"]: record for record in result["records"]}
+    assert records["fbp"]["status"] == "success"
+    assert records["sirt"]["status"] == "resource_exhausted"
+    assert records["sirt"]["failure_reason"]
+    assert records["sirt"]["tuning_protocol"] == "equal_operator_calls"
+
+
+def test_heldout_suite_materializes_shared_fold_hash(tmp_path):
+    fbp = _algorithm(tmp_path, "fbp")
+    output_root = tmp_path / "heldout_output"
+    suite = _yaml(
+        tmp_path / "heldout_suite.yaml",
+        {
+            "schema_version": 1,
+            "name": "heldout",
+            "data_root": str(DATA_ROOT),
+            "output_root": str(output_root),
+            "device": "cpu",
+            "groups": [{
+                "heldout_split": {"folds": 3, "protocol_version": "heldout_projection_cv/v1"},
+                "algorithms": [{"name": "fbp", "config": str(fbp)}],
+                "cases": [CASE_ID],
+            }],
+        },
+    )
+
+    result = run_suite(suite)
+    records = result["records"]
+    assert len(records) == 3
+    assert {record["split_fold"] for record in records} == {0, 1, 2}
+    assert len({record["split_sha256"] for record in records}) == 1
+    assert all(record.get("held_out_projection_residual") is not None for record in records)
+    assert set(result["comparison"]["fairness"]) == {
+        f"{CASE_ID}::fold_0",
+        f"{CASE_ID}::fold_1",
+        f"{CASE_ID}::fold_2",
+    }
+
+
+def test_oracle_suite_calibrates_on_disjoint_development_case(tmp_path):
+    sirt = _algorithm(tmp_path, "sirt", {"num_iterations": 1})
+    output_root = tmp_path / "oracle_output"
+    suite = _yaml(
+        tmp_path / "oracle_suite.yaml",
+        {
+            "schema_version": 1,
+            "name": "oracle",
+            "data_root": str(DATA_ROOT),
+            "output_root": str(output_root),
+            "device": "cpu",
+            "benchmark_protocol": "oracle_calibration",
+            "budget": {
+                "protocol": "oracle_calibration",
+                "tuning_trials": 2,
+                "tuning_max_forward_calls": 1000,
+                "tuning_max_adjoint_calls": 1000,
+            },
+            "groups": [{
+                "calibration_cases": ["parallel_2d/shepp_logan_dense_clean_32"],
+                "oracle_metric": "psnr",
+                "algorithms": [{
+                    "name": "sirt",
+                    "config": str(sirt),
+                    "parameter_grid": [
+                        {"num_iterations": 1},
+                        {"num_iterations": 2},
+                    ],
+                }],
+                "cases": [CASE_ID],
+            }],
+        },
+    )
+
+    result = run_suite(suite)
+    assert len(result["calibration_records"]) == 2
+    assert len(result["records"]) == 1
+    assert all(record["oracle_phase"] == "calibration" for record in result["calibration_records"])
+    assert result["oracle_selection"]["group_0/sirt"]["selected_trial_index"] in {0, 1}
+    assert result["records"][0]["oracle_phase"] == "final"
+    assert result["records"][0]["parameter_source"] == "oracle_calibration_development_only"
+    benchmark = json.loads((output_root / "benchmark.json").read_text(encoding="utf-8"))
+    assert len(benchmark["calibration_records"]) == 2
+    assert (output_root / "calibration_metrics.csv").is_file()

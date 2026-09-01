@@ -1,9 +1,401 @@
-"""Abstract solver for inverse problems."""
+"""Common solver contracts and optional detailed execution diagnostics.
+
+The original public solver API intentionally stays small:
+``solve(measurement, operator) -> Tensor``.  Research orchestration needs a
+little more evidence than that return value can provide, however.  The
+dataclasses in this module are the backwards-compatible seam for that
+evidence.  A solver may implement :meth:`solve_detailed`; callers that only
+know the old API continue to use :meth:`solve` unchanged.
+"""
+
+from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field, replace
+import math
+import time
+from typing import Any, Callable, Iterable, Mapping
+
 import torch
 
 from ..operators.base import ForwardOperator
+
+
+@dataclass(frozen=True)
+class SolveControl:
+    """Controls optional detailed solver execution.
+
+    ``max_iterations`` is an upper bound, never evidence of convergence.
+    ``tolerance`` is interpreted by the individual solver's native criterion;
+    algorithm-specific tolerances remain available through the solver's
+    constructor.  The callback is invoked for each recorded checkpoint and
+    may return ``False`` to request cancellation.
+    """
+
+    max_iterations: int | None = None
+    tolerance: float | None = None
+    record_every: int = 1
+    max_trajectory_points: int = 200
+    patience: int = 5
+    stop_on_convergence: bool = True
+    check_finite: bool = True
+    callback: Callable[["IterationRecord"], bool | None] | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.max_iterations is not None and (
+            isinstance(self.max_iterations, bool)
+            or not isinstance(self.max_iterations, int)
+            or self.max_iterations <= 0
+        ):
+            raise ValueError("max_iterations must be a positive integer or None")
+        if self.tolerance is not None and (
+            isinstance(self.tolerance, bool)
+            or not math.isfinite(float(self.tolerance))
+            or float(self.tolerance) < 0.0
+        ):
+            raise ValueError("tolerance must be a finite nonnegative number or None")
+        for name in ("record_every", "max_trajectory_points", "patience"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+
+
+@dataclass(frozen=True)
+class IterationRecord:
+    """One solver-native diagnostic checkpoint.
+
+    The fields are deliberately scalar/JSON-friendly except for ``metadata``;
+    no tensors are retained in a trajectory.  ``data_residual`` is the
+    normalized 2-norm whenever a residual tensor is available.
+    """
+
+    iteration: int
+    epoch: int | None = None
+    data_residual: float | None = None
+    normalized_data_residual: float | None = None
+    objective: float | None = None
+    relative_iterate_change: float | None = None
+    algorithm_residual: float | None = None
+    forward_calls: int | None = None
+    adjoint_calls: int | None = None
+    elapsed_seconds: float = 0.0
+    step_size: float | None = None
+    relaxation: float | None = None
+    finite: bool = True
+    stopping_candidate: bool = False
+    status: str | None = None
+    subset: int | None = None
+    subset_count: int | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def normal_residual(self) -> float | None:
+        """Compatibility alias used by CGLS/Tikhonov diagnostics."""
+
+        return self.algorithm_residual
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "iteration": int(self.iteration),
+            "epoch": self.epoch,
+            "data_residual": self.data_residual,
+            "normalized_data_residual": self.normalized_data_residual,
+            "objective": self.objective,
+            "relative_iterate_change": self.relative_iterate_change,
+            "algorithm_residual": self.algorithm_residual,
+            "normal_residual": self.algorithm_residual,
+            "forward_calls": self.forward_calls,
+            "adjoint_calls": self.adjoint_calls,
+            "elapsed_seconds": float(self.elapsed_seconds),
+            "step_size": self.step_size,
+            "relaxation": self.relaxation,
+            "finite": bool(self.finite),
+            "stopping_candidate": bool(self.stopping_candidate),
+            "status": self.status,
+            "subset": self.subset,
+            "subset_count": self.subset_count,
+            "metadata": dict(self.metadata),
+        }
+
+
+@dataclass(frozen=True)
+class SolveResult:
+    """Detailed, backwards-compatible result for one solver invocation."""
+
+    reconstruction: torch.Tensor
+    actual_iterations: int
+    status: str
+    stopping_reason: str
+    trajectory: tuple[IterationRecord, ...] = ()
+    resources: Mapping[str, Any] = field(default_factory=dict)
+    final_residual: float | None = None
+    final_objective: float | None = None
+    relative_iterate_change: float | None = None
+    predicted_measurement: torch.Tensor | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def iterations(self) -> int:
+        """Short alias used by result consumers."""
+
+        return int(self.actual_iterations)
+
+    @property
+    def trajectory_available(self) -> bool:
+        return bool(self.trajectory)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize diagnostics without serializing tensors."""
+
+        return {
+            "actual_iterations": int(self.actual_iterations),
+            "iterations": int(self.actual_iterations),
+            "status": self.status,
+            "stopping_reason": self.stopping_reason,
+            "trajectory_available": self.trajectory_available,
+            "trajectory": [record.to_dict() for record in self.trajectory],
+            "resources": dict(self.resources),
+            "final_residual": self.final_residual,
+            "final_objective": self.final_objective,
+            "relative_iterate_change": self.relative_iterate_change,
+            "metadata": dict(self.metadata),
+        }
+
+
+def _tensor_norm(value: torch.Tensor | None) -> float | None:
+    if value is None:
+        return None
+    return float(value.detach().reshape(-1).norm().item())
+
+
+def _sample_records(records: Iterable[IterationRecord], limit: int) -> tuple[IterationRecord, ...]:
+    rows = list(records)
+    if len(rows) <= limit:
+        return tuple(rows)
+    if limit <= 1:
+        return (rows[-1],)
+    positions = {
+        round(index * (len(rows) - 1) / (limit - 1))
+        for index in range(limit)
+    }
+    return tuple(rows[index] for index in sorted(positions))
+
+
+class IterationRecorder:
+    """Create bounded scalar records while sharing operator counters."""
+
+    def __init__(
+        self,
+        control: SolveControl,
+        measurement: torch.Tensor,
+        operator: Any,
+        *,
+        algorithm: str,
+        callback: Callable[[IterationRecord], bool | None] | None = None,
+    ) -> None:
+        self.control = control
+        self.measurement = measurement
+        self.operator = operator
+        self.algorithm = algorithm
+        self.callback = callback if callback is not None else control.callback
+        self.started = time.perf_counter()
+        self.records: list[IterationRecord] = []
+        self.previous: torch.Tensor | None = None
+        self.numerical_failure = False
+        measurement_norm = measurement.detach().reshape(-1).norm().item()
+        self.measurement_norm = max(float(measurement_norm), 1e-12)
+
+    def set_initial(self, value: torch.Tensor) -> None:
+        self.previous = value.detach().clone()
+
+    def _counter_values(self) -> tuple[int | None, int | None]:
+        stats = getattr(self.operator, "stats", None)
+        if not callable(stats):
+            return None, None
+        payload = stats() or {}
+        return payload.get("forward_calls"), payload.get("adjoint_calls")
+
+    def record(
+        self,
+        iteration: int,
+        value: torch.Tensor,
+        *,
+        residual: torch.Tensor | None = None,
+        objective: float | None = None,
+        algorithm_residual: float | None = None,
+        step_size: float | None = None,
+        relaxation: float | None = None,
+        stopping_candidate: bool = False,
+        status: str | None = None,
+        epoch: int | None = None,
+        subset: int | None = None,
+        subset_count: int | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> bool:
+        # Finite checks are performed even for down-sampled trajectories.  A
+        # skipped checkpoint must not hide a NaN/Inf that later contaminates
+        # the reconstruction.
+        finite = bool(torch.isfinite(value).all())
+        if residual is not None:
+            finite = finite and bool(torch.isfinite(residual).all())
+        self.numerical_failure = self.numerical_failure or (self.control.check_finite and not finite)
+        if int(iteration) % self.control.record_every != 0 and not stopping_candidate:
+            self.previous = value.detach().clone()
+            return True
+        residual_norm = _tensor_norm(residual)
+        change = None
+        if self.previous is not None:
+            # A unit floor avoids an artificial 1e12 relative change on the
+            # first update from a zero initialization while preserving the
+            # usual relative norm for non-small iterates.
+            denominator = max(_tensor_norm(self.previous) or 0.0, 1.0)
+            change = (_tensor_norm(value - self.previous) or 0.0) / denominator
+        normalized = None if residual_norm is None else residual_norm / self.measurement_norm
+        forward_calls, adjoint_calls = self._counter_values()
+        row = IterationRecord(
+            iteration=int(iteration),
+            epoch=epoch,
+            data_residual=residual_norm,
+            normalized_data_residual=normalized,
+            objective=None if objective is None else float(objective),
+            relative_iterate_change=change,
+            algorithm_residual=None if algorithm_residual is None else float(algorithm_residual),
+            forward_calls=forward_calls,
+            adjoint_calls=adjoint_calls,
+            elapsed_seconds=time.perf_counter() - self.started,
+            step_size=step_size,
+            relaxation=relaxation,
+            finite=finite,
+            stopping_candidate=bool(stopping_candidate),
+            status=status,
+            subset=subset,
+            subset_count=subset_count,
+            metadata={"algorithm": self.algorithm, **dict(metadata or {})},
+        )
+        self.records.append(row)
+        self.previous = value.detach().clone()
+        if self.callback is not None:
+            decision = self.callback(row)
+            if decision is False:
+                return False
+        return True
+
+    def finish(
+        self,
+        reconstruction: torch.Tensor,
+        *,
+        actual_iterations: int,
+        status: str,
+        stopping_reason: str,
+        residual: torch.Tensor | None = None,
+        final_residual: float | None = None,
+        final_objective: float | None = None,
+        predicted_measurement: torch.Tensor | None = None,
+        resources: Mapping[str, Any] | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> SolveResult:
+        if final_residual is None and residual is not None:
+            norm = _tensor_norm(residual)
+            final_residual = None if norm is None else norm / self.measurement_norm
+        last_change = self.records[-1].relative_iterate_change if self.records else None
+        stats = {}
+        stats_method = getattr(self.operator, "stats", None)
+        if callable(stats_method):
+            stats.update(stats_method() or {})
+        stats["runtime_seconds"] = time.perf_counter() - self.started
+        stats.update(dict(resources or {}))
+        if self.control.check_finite:
+            finite_result = bool(torch.isfinite(reconstruction).all())
+            if predicted_measurement is not None:
+                finite_result = finite_result and bool(torch.isfinite(predicted_measurement).all())
+            for scalar in (final_residual, final_objective):
+                if scalar is not None:
+                    finite_result = finite_result and math.isfinite(float(scalar))
+            self.numerical_failure = self.numerical_failure or not finite_result
+        effective_status = str(status)
+        effective_reason = str(stopping_reason)
+        if self.numerical_failure:
+            effective_status = "numerical_failure"
+            effective_reason = "non_finite_solver_state"
+        evidence: dict[str, Any] = {}
+        # A native loop can terminate at its configured limit without having
+        # met a stopping criterion.  Use the recorded scalar trajectory only
+        # to detect clear divergence/stagnation; never turn a budget stop
+        # into a convergence claim.
+        if self.records and effective_status in {"max_iterations", "partial"}:
+            try:
+                from ..convergence import classify_trajectory
+
+                rows = [
+                    {
+                        "iteration": record.iteration,
+                        "normalized_residual": record.normalized_data_residual,
+                        "objective": record.objective,
+                        "relative_iterate_change": record.relative_iterate_change,
+                        "status": record.status,
+                    }
+                    for record in self.records
+                ]
+                classification = classify_trajectory(
+                    rows,
+                    max_iterations=self.control.max_iterations,
+                    tolerance=float(self.control.tolerance or 0.0),
+                    patience=self.control.patience,
+                    algorithm=self.algorithm,
+                )
+                evidence["trajectory_classification"] = classification.status.value
+                if classification.status.value in {"diverged", "stalled", "numerical_failure"}:
+                    effective_status = classification.status.value
+                    effective_reason = classification.stopping_reason
+            except (ImportError, AttributeError, ValueError, TypeError):
+                # Diagnostics must not make a numerically valid reconstruction
+                # fail merely because an optional classifier is unavailable.
+                evidence["trajectory_classification"] = "unavailable"
+        return SolveResult(
+            reconstruction=reconstruction,
+            actual_iterations=int(actual_iterations),
+            status=effective_status,
+            stopping_reason=effective_reason,
+            trajectory=_sample_records(self.records, self.control.max_trajectory_points),
+            resources=stats,
+            final_residual=final_residual,
+            final_objective=final_objective,
+            relative_iterate_change=last_change,
+            predicted_measurement=predicted_measurement,
+            metadata={"algorithm": self.algorithm, **dict(self.control.metadata), **dict(metadata or {}), **evidence},
+        )
+
+
+def resolve_control(
+    control: SolveControl | None,
+    *,
+    default_iterations: int,
+    default_tolerance: float | None = None,
+    callback: Callable[[IterationRecord], bool | None] | None = None,
+) -> SolveControl:
+    """Fill a detailed-control object with solver-specific defaults."""
+
+    if control is None:
+        return SolveControl(
+            max_iterations=int(default_iterations),
+            tolerance=default_tolerance,
+            callback=callback,
+        )
+    return replace(
+        control,
+        max_iterations=(
+            int(default_iterations)
+            if control.max_iterations is None
+            else control.max_iterations
+        ),
+        tolerance=(
+            default_tolerance
+            if control.tolerance is None
+            else control.tolerance
+        ),
+        callback=callback if callback is not None else control.callback,
+    )
 
 
 class InverseProblemSolver(ABC):
@@ -22,3 +414,28 @@ class InverseProblemSolver(ABC):
               operator: ForwardOperator,
               **kwargs) -> torch.Tensor:
         ...
+
+    def solve_detailed(
+        self,
+        measurement: torch.Tensor,
+        operator: ForwardOperator,
+        *,
+        control: SolveControl | None = None,
+        callback: Callable[[IterationRecord], bool | None] | None = None,
+        **kwargs: Any,
+    ) -> SolveResult:
+        """Fallback for legacy solvers that do not expose native checkpoints.
+
+        The fallback is intentionally conservative: it reports ``partial``
+        and does not fabricate an iteration count or convergence claim.
+        Core CT solvers override this method with actual loop diagnostics.
+        """
+
+        reconstruction = self.solve(measurement, operator, **kwargs)
+        return SolveResult(
+            reconstruction=reconstruction,
+            actual_iterations=0,
+            status="partial",
+            stopping_reason="solver_did_not_expose_trajectory",
+            metadata={"trajectory_available": False},
+        )

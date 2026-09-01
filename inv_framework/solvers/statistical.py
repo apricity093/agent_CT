@@ -17,6 +17,18 @@ from ._utils import (
 )
 
 
+def _require_nonnegative_count_data(measurement: torch.Tensor, solver: str) -> None:
+    """Reject signed/log-domain data instead of silently clipping it."""
+
+    if not torch.isfinite(measurement).all():
+        raise ValueError(f"{solver} requires finite observations")
+    if bool(torch.any(measurement < 0.0)):
+        raise ValueError(
+            f"{solver} requires nonnegative emission/count observations; "
+            "log-domain or signed line-integral data are incompatible"
+        )
+
+
 def _positive_initial(
     measurement: torch.Tensor,
     operator: LinearOperator,
@@ -51,9 +63,10 @@ def mlem(operator: LinearOperator,
     """MLEM for nonnegative linear projection data."""
     require_linear_operator(operator, "mlem")
     validate_measurement_shape(y, operator, "mlem")
+    _require_nonnegative_count_data(y, "mlem")
 
     x = _positive_initial(y, operator, x_init, initial_value, min_value)
-    y_nonnegative = y.clamp_min(0.0)
+    y_nonnegative = y
     sensitivity = operator.adjoint(torch.ones_like(y_nonnegative)).clamp_min(float(eps))
 
     for _ in range(int(num_iterations)):
@@ -80,11 +93,12 @@ def osem(operator: LinearOperator,
     """Ordered-subsets EM for nonnegative linear projection data."""
     require_linear_operator(operator, "osem")
     validate_measurement_shape(y, operator, "osem")
+    _require_nonnegative_count_data(y, "osem")
 
     if block_size is None:
         block_size = max(int(operator.range_shape[-2]) // 10, 1)
     x = _positive_initial(y, operator, x_init, initial_value, min_value)
-    y_nonnegative = y.clamp_min(0.0)
+    y_nonnegative = y
     subsets = make_angle_subsets(
         num_angles=operator.range_shape[-2],
         block_size=block_size,
@@ -132,6 +146,20 @@ class MLEMSolver(InverseProblemSolver):
             eps=kwargs.pop("eps", self.eps),
         )
 
+    def solve_detailed(self, measurement, operator: ForwardOperator, x_init=None, *, control=None, callback=None, **kwargs):
+        from .detailed import solve_mlem_detailed
+
+        return solve_mlem_detailed(
+            operator, measurement,
+            num_iterations=kwargs.pop("num_iterations", self.num_iterations),
+            x_init=x_init,
+            initial_value=kwargs.pop("initial_value", self.initial_value),
+            min_value=kwargs.pop("min_value", self.min_value),
+            max_value=kwargs.pop("max_value", self.max_value),
+            eps=kwargs.pop("eps", self.eps),
+            control=control, callback=callback,
+        )
+
 
 class OSEMSolver(InverseProblemSolver):
     def __init__(self,
@@ -168,4 +196,22 @@ class OSEMSolver(InverseProblemSolver):
             min_value=kwargs.pop("min_value", self.min_value),
             max_value=kwargs.pop("max_value", self.max_value),
             eps=kwargs.pop("eps", self.eps),
+        )
+
+    def solve_detailed(self, measurement, operator: ForwardOperator, x_init=None, *, control=None, callback=None, **kwargs):
+        from .detailed import solve_osem_detailed
+
+        return solve_osem_detailed(
+            operator, measurement,
+            num_iterations=kwargs.pop("num_iterations", self.num_iterations),
+            block_size=kwargs.pop("block_size", self.block_size),
+            subset_indices=kwargs.pop("subset_indices", self.subset_indices),
+            order_strategy=kwargs.pop("order_strategy", self.order_strategy),
+            seed=kwargs.pop("seed", self.seed),
+            x_init=x_init,
+            initial_value=kwargs.pop("initial_value", self.initial_value),
+            min_value=kwargs.pop("min_value", self.min_value),
+            max_value=kwargs.pop("max_value", self.max_value),
+            eps=kwargs.pop("eps", self.eps),
+            control=control, callback=callback,
         )

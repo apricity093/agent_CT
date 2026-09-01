@@ -13,10 +13,12 @@ import json
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import torch
+
+from .protocol import ProjectionSplit, make_heldout_projection_split
 
 
 SCHEMA_VERSION = "1.0"
@@ -58,9 +60,11 @@ class CTTestCase:
     """One operator-ready, batched CT benchmark case.
 
     ``truth`` has shape ``(B, *domain_shape)``. ``measurement`` and
-    ``measurement_clean`` have shape ``(B, *range_shape)``.  Geometry and
-    metadata are JSON-compatible mappings so agents can inspect them without
-    loading the HDF5 arrays.
+    ``measurement_clean`` have shape ``(B, *range_shape)``.  For a public
+    staged case, ``measurement_clean`` may intentionally alias the observed
+    measurement because the clean signal is withheld.  Geometry and metadata
+    are JSON-compatible mappings so agents can inspect them without loading
+    the HDF5 arrays.
     """
 
     case_id: str
@@ -144,6 +148,89 @@ class CTTestCase:
                 self.valid_measurement_mask, is_mask=True
             ),
         )
+
+
+def restrict_ct_case(
+    case: CTTestCase,
+    view_indices: Sequence[int],
+    *,
+    case_id: str | None = None,
+    partition: str | None = None,
+) -> CTTestCase:
+    """Return a CT case restricted to an existing subset of projection views."""
+
+    indices = tuple(int(value) for value in view_indices)
+    if not indices:
+        raise ValueError("view_indices must contain at least one view")
+    num_views = int(case.measurement.shape[-2])
+    if len(set(indices)) != len(indices) or any(index < 0 or index >= num_views for index in indices):
+        raise ValueError("view_indices must be unique indices within the case view axis")
+    index_tensor = torch.as_tensor(indices, dtype=torch.long, device=case.measurement.device)
+
+    def select_views(tensor: torch.Tensor | None) -> torch.Tensor | None:
+        if tensor is None or tensor.ndim < 2:
+            return tensor
+        return tensor.index_select(-2, index_tensor.to(device=tensor.device))
+
+    geometry = _json_copy(case.geometry)
+    if "angles_rad" in geometry:
+        angles = list(geometry["angles_rad"])
+        geometry["angles_rad"] = [angles[index] for index in indices]
+    range_shape = list(geometry.get("range_shape", ()))
+    if len(range_shape) >= 2:
+        range_shape[-2] = len(indices)
+        geometry["range_shape"] = range_shape
+    metadata = _json_copy(case.metadata)
+    metadata["source_case_id"] = case.case_id
+    metadata["view_indices"] = list(indices)
+    if partition is not None:
+        metadata["projection_partition"] = partition
+    return replace(
+        case,
+        case_id=case_id or case.case_id,
+        measurement_clean=select_views(case.measurement_clean),
+        measurement=select_views(case.measurement),
+        valid_measurement_mask=select_views(case.valid_measurement_mask),
+        geometry=geometry,
+        metadata=metadata,
+    )
+
+
+def make_heldout_ct_splits(
+    case: CTTestCase,
+    *,
+    folds: int = 3,
+    protocol_version: str = "heldout_projection_cv/v1",
+) -> tuple[ProjectionSplit, tuple[tuple[CTTestCase, CTTestCase], ...]]:
+    """Create train/held-out CT case pairs using only observed angle views."""
+
+    angles = case.geometry.get("angles_rad")
+    if angles is None:
+        angles = int(case.measurement.shape[-2])
+    split = make_heldout_projection_split(
+        case.case_id,
+        angles,
+        folds=folds,
+        protocol_version=protocol_version,
+    )
+    pairs = tuple(
+        (
+            restrict_ct_case(
+                case,
+                split.training_indices(fold),
+                case_id=f"{case.case_id}::fold{fold}::train",
+                partition=f"train_fold_{fold}",
+            ),
+            restrict_ct_case(
+                case,
+                split.validation_folds[fold],
+                case_id=f"{case.case_id}::fold{fold}::heldout",
+                partition=f"heldout_fold_{fold}",
+            ),
+        )
+        for fold in range(split.fold_count)
+    )
+    return split, pairs
 
 
 @dataclass(frozen=True)
@@ -236,11 +323,12 @@ def load_ct_case(
     h5py = _require_h5py()
     with h5py.File(arrays_path, "r") as handle:
         truth = torch.from_numpy(np.asarray(handle["truth/x"], dtype=np.float32))
-        clean = torch.from_numpy(
-            np.asarray(handle["measurement/y_clean"], dtype=np.float32)
-        )
         observed = torch.from_numpy(
             np.asarray(handle["measurement/y_observed"], dtype=np.float32)
+        )
+        clean_dataset = handle.get("measurement/y_clean")
+        clean = observed if clean_dataset is None else torch.from_numpy(
+            np.asarray(clean_dataset, dtype=np.float32)
         )
         roi = (
             torch.from_numpy(np.asarray(handle["masks/roi"], dtype=bool))

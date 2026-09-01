@@ -251,6 +251,32 @@ class TikhonovSolver(InverseProblemSolver):
             max_value=self.max_value,
         )
 
+    def solve_detailed(
+        self,
+        measurement: torch.Tensor,
+        operator: ForwardOperator,
+        x_init: Optional[torch.Tensor] = None,
+        *,
+        control=None,
+        callback=None,
+        **kwargs,
+    ):
+        from .detailed import solve_tikhonov_detailed
+
+        return solve_tikhonov_detailed(
+            operator,
+            measurement,
+            reg_strength=kwargs.pop("reg_strength", self.reg_strength),
+            num_iterations=kwargs.pop("num_iterations", self.num_iterations),
+            tolerance=kwargs.pop("tolerance", self.tolerance),
+            x_init=x_init,
+            regularization_operator=kwargs.pop("regularization_operator", self.regularization_operator),
+            min_value=kwargs.pop("min_value", self.min_value),
+            max_value=kwargs.pop("max_value", self.max_value),
+            control=control,
+            callback=callback,
+        )
+
 
 class TVFISTASolver(InverseProblemSolver):
     """Unified solver wrapper for TV-regularized FISTA reconstruction."""
@@ -294,4 +320,32 @@ class TVFISTASolver(InverseProblemSolver):
             power_iterations=self.power_iterations,
             min_value=self.min_value,
             max_value=self.max_value,
+        )
+
+    def solve_detailed(
+        self,
+        measurement: torch.Tensor,
+        operator: ForwardOperator,
+        x_init: Optional[torch.Tensor] = None,
+        *,
+        control=None,
+        callback=None,
+        **kwargs,
+    ):
+        from .detailed import solve_tv_fista_detailed
+
+        return solve_tv_fista_detailed(
+            operator,
+            measurement,
+            reg_strength=kwargs.pop("reg_strength", self.reg_strength),
+            num_iterations=kwargs.pop("num_iterations", self.num_iterations),
+            step_size=kwargs.pop("step_size", self.step_size),
+            x_init=x_init,
+            regularizer=kwargs.pop("regularizer", self.regularizer),
+            tolerance=kwargs.pop("tolerance", self.tolerance),
+            power_iterations=kwargs.pop("power_iterations", self.power_iterations),
+            min_value=kwargs.pop("min_value", self.min_value),
+            max_value=kwargs.pop("max_value", self.max_value),
+            control=control,
+            callback=callback,
         )

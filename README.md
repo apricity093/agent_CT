@@ -60,10 +60,35 @@ CGLS 和 LSQR 直接处理线性最小二乘问题，SART 与 OSEM 使用投影�
 ```bash
 invct list-solvers
 invct list-solvers --json
+invct list-regularizers --json
 ```
 
-运行前会检查 solver、参数类型、数据维度、扫描几何和后端能力。不兼容组合会明确失败，
-不会被记录为成功运行。
+registry 同时声明算法族、目标函数、支持的观测域、正则项、参数约束、初始化策略、
+复杂度和失败模式。运行前会检查 solver、参数类型、数据维度、扫描几何、观测域和后端
+能力。不兼容组合会明确失败，不会被记录为成功运行。例如 MLEM/OSEM 只接受
+`nonnegative_counts` 或 `intensity`，不会把 `log_projection` 当作计数数据运行。
+
+每次运行都会生成 `diagnostics.json`，记录归一化参数、必要时由算子幂迭代得到的
+`||A||^2` 估计、收敛状态、停止原因、最终数据残差/目标函数、迭代数、forward/adjoint
+调用数、运行时间和资源信息。迭代 solver 的固定迭代数不等于“已收敛”；状态包括
+`converged`、`partial`、`stalled`、`diverged`、`max_iterations`、
+`non_iterative_completed`、`invalid_parameters` 和 `numerical_failure`。
+
+在 Agent 的 public staging 中，`truth/x` 仅保留外部 loader 所需的零值形状占位符，真实
+truth 及其动态范围元数据不会进入 backend。此时 `metrics.json` 只报告数据一致性与资源
+指标，不生成 RMSE、PSNR、SSIM；图像质量指标由独立 evaluator 从私有源计算。
+
+## Benchmark protocol
+
+生产比较应明确记录以下协议之一：
+
+- `fixed_defaults`：所有 solver 使用 registry/config 默认值，不进行 truth 调参；
+- `equal_operator_calls`：所有候选共享相同的 forward/adjoint 调参预算；
+- `oracle_calibration`：允许使用 truth 的离线校准，结果不得与前两种在线协议混报。
+
+比较结果分别报告图像质量、投影一致性/收敛和 runtime、operator calls、memory；不把这些
+轴压成一个总分。`BenchmarkBudget` 会校验协议与调用预算，`pareto_front` 和分组排名
+保留非支配候选及各指标的独立排序。
 
 ## 安装
 
@@ -261,16 +286,41 @@ protocol 使用显式 `{min: ...}` 或 `{max: ...}` 声明阈值方向。评估�
 
 ## 运行 benchmark
 
-suite 使用 group 表达“算法配置列表 x case 列表”，因此 11 个二维算法和 FDK 可以
-分别使用合适的几何：
+suite 使用 group 表达“算法配置列表 x case 列表”，因此 registry 中的 11 个二维算法
+和 FDK 可以分别使用合适的几何；质量 suite 只选择其中 9 个与 transmission/log-domain
+观测模型兼容的二维算法：
 
 ```bash
 invct bench --suite configs/benchmarks/traditional_quality.yaml
 ```
 
-仓库自带的质量 suite 在三个 128x128 parallel-beam case 上运行 11 个二维算法，
-并在独立 3D cone-beam case 上运行 FDK，共产生 34 个独立 job。suite 配置使用
+仓库自带的质量 suite 在三个 128x128 parallel-beam case 上运行 9 个兼容的二维
+transmission/log-domain 算法，并在独立 3D cone-beam case 上运行 FDK，共产生 28 个
+独立 job。MLEM/OSEM 是 emission-style Poisson solver，不会被错误地用于这些
+X-ray line-integral/poisson-log case。suite 配置使用
 `device: cuda`，要求 PyTorch CUDA 和 ASTRA CUDA。
+
+需要无 ground-truth 调参时，在 group 中声明确定性的 held-out angle split：
+
+```yaml
+benchmark_protocol: fixed_defaults
+groups:
+  - heldout_split: {folds: 3, protocol_version: heldout_projection_cv/v1}
+    algorithms:
+      - {name: tikhonov, config: ../algorithms/tikhonov.yaml}
+    cases: [parallel_2d/tissue_breast_dense_clean_128]
+```
+
+每个 fold 使用同一组原始角度的互补 fit/held-out 子集，split hash 会写入每条
+benchmark record；不会用 truth 选择参数。`equal_operator_calls` 还会将 solver
+设置为 fixed-compute，并在 `benchmark.json` 中保留公平性检查和 Pareto front。
+
+`oracle_calibration` 必须显式声明互不重叠的 `calibration_cases`、冻结的
+`oracle_metric` 和每个算法等长的 `parameter_grid`；`budget.tuning_trials` 必须与
+网格长度一致。runner 只在 development/calibration cases 上选择参数，随后在
+`cases` 上执行一次最终运行，并把全部 calibration 成功/失败记录和选择结果写入
+`benchmark.json`。校准参数的来源标记为
+`oracle_calibration_development_only`，不能与 measurement-only 结果混排。
 
 ## 输出文件
 
@@ -298,13 +348,17 @@ suite-output/
 ├── <solver>/<case-slug>/...
 ├── metrics.json
 ├── metrics.csv
+├── calibration_metrics.csv  # oracle_calibration 时生成
 ├── evaluation.json
+├── benchmark.json
 ├── manifest.json
 ├── report.md
 └── artifacts.sha256
 ```
 
-manifest 记录 Python、PyTorch、平台、CUDA 可用性、Git revision、solver 参数和输入来源。
+manifest 记录 Python、PyTorch、平台、CUDA 可用性、Git revision、dirty patch hash、
+solver 参数、参数来源和输入来源。失败候选仍保留在 `metrics.json`/`metrics.csv`，
+不会从比较表中静默删除。
 
 ## Python API
 

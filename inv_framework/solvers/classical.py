@@ -16,7 +16,7 @@ import torch
 from torch.fft import rfft, irfft
 
 from ..operators.base import ForwardOperator, LinearOperator
-from .base import InverseProblemSolver
+from .base import InverseProblemSolver, IterationRecord, SolveControl, SolveResult
 
 
 def _require_linear(op: ForwardOperator, name: str) -> None:
@@ -123,6 +123,14 @@ class FBPSolver(InverseProblemSolver):
     def solve(self, measurement, operator, **kwargs):
         return fbp(operator, measurement, scale=self.scale)
 
+    def solve_detailed(self, measurement, operator, *, control=None, callback=None, **kwargs):
+        from .detailed import solve_fbp_detailed
+
+        return solve_fbp_detailed(
+            operator, measurement, scale=kwargs.pop("scale", self.scale),
+            control=control, callback=callback, **kwargs,
+        )
+
 
 class SIRTSolver(InverseProblemSolver):
     def __init__(self,
@@ -139,6 +147,17 @@ class SIRTSolver(InverseProblemSolver):
                     min_value=self.min_value,
                     max_value=self.max_value,
                     x_init=x_init)
+
+    def solve_detailed(self, measurement, operator, x_init=None, *, control=None, callback=None, **kwargs):
+        from .detailed import solve_sirt_detailed
+
+        return solve_sirt_detailed(
+            operator, measurement,
+            num_iterations=kwargs.pop("num_iterations", self.num_iterations),
+            min_value=kwargs.pop("min_value", self.min_value),
+            max_value=kwargs.pop("max_value", self.max_value),
+            x_init=x_init, control=control, callback=callback,
+        )
 
 
 class LandweberSolver(InverseProblemSolver):
@@ -159,6 +178,19 @@ class LandweberSolver(InverseProblemSolver):
                          x_init=x_init,
                          min_value=self.min_value,
                          max_value=self.max_value)
+
+    def solve_detailed(self, measurement, operator, x_init=None, *, control=None, callback=None, **kwargs):
+        from .detailed import solve_landweber_detailed
+
+        return solve_landweber_detailed(
+            operator, measurement,
+            num_iterations=kwargs.pop("num_iterations", self.num_iterations),
+            step_size=kwargs.pop("step_size", self.step_size),
+            x_init=x_init,
+            min_value=kwargs.pop("min_value", self.min_value),
+            max_value=kwargs.pop("max_value", self.max_value),
+            control=control, callback=callback,
+        )
 
 
 # Add-on CT solvers appended after the 2026-06-08 frozen implementation.
@@ -329,6 +361,19 @@ class CGLSSolver(InverseProblemSolver):
                     min_value=self.min_value,
                     max_value=self.max_value)
 
+    def solve_detailed(self, measurement, operator, x_init=None, *, control=None, callback=None, **kwargs):
+        from .detailed import solve_cgls_detailed
+
+        return solve_cgls_detailed(
+            operator, measurement,
+            num_iterations=kwargs.pop("num_iterations", self.num_iterations),
+            tol=kwargs.pop("tol", self.tol),
+            x_init=x_init,
+            min_value=kwargs.pop("min_value", self.min_value),
+            max_value=kwargs.pop("max_value", self.max_value),
+            control=control, callback=callback,
+        )
+
 
 class LSQRSolver(InverseProblemSolver):
     def __init__(self,
@@ -355,6 +400,21 @@ class LSQRSolver(InverseProblemSolver):
                     min_value=self.min_value,
                     max_value=self.max_value)
 
+    def solve_detailed(self, measurement, operator, x_init=None, *, control=None, callback=None, **kwargs):
+        from .detailed import solve_lsqr_detailed
+
+        return solve_lsqr_detailed(
+            operator, measurement,
+            num_iterations=kwargs.pop("num_iterations", self.num_iterations),
+            damping=kwargs.pop("damping", self.damping),
+            atol=kwargs.pop("atol", self.atol),
+            btol=kwargs.pop("btol", self.btol),
+            x_init=x_init,
+            min_value=kwargs.pop("min_value", self.min_value),
+            max_value=kwargs.pop("max_value", self.max_value),
+            control=control, callback=callback,
+        )
+
 
 class FDKSolver(InverseProblemSolver):
     def __init__(self, **kwargs):
@@ -364,3 +424,10 @@ class FDKSolver(InverseProblemSolver):
         params = dict(self.kwargs)
         params.update(kwargs)
         return fdk(operator, measurement, **params)
+
+    def solve_detailed(self, measurement, operator, *, control=None, callback=None, **kwargs):
+        from .detailed import solve_fdk_detailed
+
+        params = dict(self.kwargs)
+        params.update(kwargs)
+        return solve_fdk_detailed(operator, measurement, control=control, callback=callback, **params)

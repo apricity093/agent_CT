@@ -139,6 +139,24 @@ class SARTSolver(InverseProblemSolver):
             eps=kwargs.pop("eps", self.eps),
         )
 
+    def solve_detailed(self, measurement, operator: ForwardOperator, x_init=None, *, control=None, callback=None, **kwargs):
+        from .detailed import solve_sart_detailed
+
+        return solve_sart_detailed(
+            operator, measurement,
+            num_iterations=kwargs.pop("num_iterations", self.num_iterations),
+            block_size=kwargs.pop("block_size", self.block_size),
+            subset_indices=kwargs.pop("subset_indices", self.subset_indices),
+            order_strategy=kwargs.pop("order_strategy", self.order_strategy),
+            seed=kwargs.pop("seed", self.seed),
+            relaxation=kwargs.pop("relaxation", self.relaxation),
+            min_value=kwargs.pop("min_value", self.min_value),
+            max_value=kwargs.pop("max_value", self.max_value),
+            x_init=x_init,
+            eps=kwargs.pop("eps", self.eps),
+            control=control, callback=callback,
+        )
+
 
 class OSSARTSolver(InverseProblemSolver):
     def __init__(self,
@@ -175,4 +193,22 @@ class OSSARTSolver(InverseProblemSolver):
             max_value=kwargs.pop("max_value", self.max_value),
             x_init=x_init,
             eps=kwargs.pop("eps", self.eps),
+        )
+
+    def solve_detailed(self, measurement, operator: ForwardOperator, x_init=None, *, control=None, callback=None, **kwargs):
+        from .detailed import solve_os_sart_detailed
+
+        return solve_os_sart_detailed(
+            operator, measurement,
+            num_iterations=kwargs.pop("num_iterations", self.num_iterations),
+            block_size=kwargs.pop("block_size", self.block_size),
+            subset_indices=kwargs.pop("subset_indices", self.subset_indices),
+            order_strategy=kwargs.pop("order_strategy", self.order_strategy),
+            seed=kwargs.pop("seed", self.seed),
+            relaxation=kwargs.pop("relaxation", self.relaxation),
+            min_value=kwargs.pop("min_value", self.min_value),
+            max_value=kwargs.pop("max_value", self.max_value),
+            x_init=x_init,
+            eps=kwargs.pop("eps", self.eps),
+            control=control, callback=callback,
         )

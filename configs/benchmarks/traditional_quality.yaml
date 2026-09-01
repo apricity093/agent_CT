@@ -6,6 +6,10 @@ device: cuda
 overwrite: false
 continue_on_error: true
 protocol: ../protocols/traditional_quality.yaml
+benchmark_protocol: fixed_defaults
+budget:
+  protocol: fixed_defaults
+retry_budget: 0
 groups:
   - algorithms:
       - {name: fbp, config: ../algorithms/fbp.yaml}
@@ -15,8 +19,6 @@ groups:
       - {name: lsqr, config: ../algorithms/lsqr.yaml}
       - {name: sart, config: ../algorithms/sart.yaml}
       - {name: os_sart, config: ../algorithms/os_sart.yaml}
-      - {name: mlem, config: ../algorithms/mlem.yaml}
-      - {name: osem, config: ../algorithms/osem.yaml}
       - {name: tikhonov, config: ../algorithms/tikhonov.yaml}
       - {name: tv_fista, config: ../algorithms/tv_fista.yaml}
     cases:

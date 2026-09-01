@@ -1,7 +1,7 @@
 schema_version: 1
 name: traditional_ct_quality
 expected_statuses: [success]
-min_records: 34
+min_records: 28
 required_metrics:
   - relative_error
   - rmse

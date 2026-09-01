@@ -12,6 +12,7 @@ from inv_framework.ct_runtime import (
     ConfigError,
     SOLVER_SPECS,
     evaluate_run,
+    regularizer_records_public,
     run_case,
     run_suite,
     solver_records,
@@ -25,6 +26,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     solvers = commands.add_parser("list-solvers", help="List runnable traditional CT solvers.")
     solvers.add_argument("--json", action="store_true", dest="as_json")
+
+    regularizers = commands.add_parser("list-regularizers", help="List registered CT regularizers.")
+    regularizers.add_argument("--json", action="store_true", dest="as_json")
 
     data = commands.add_parser("data", help="Inspect and validate the CT case catalog.")
     data_commands = data.add_subparsers(dest="data_command")
@@ -49,6 +53,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--device", default="cpu")
     run.add_argument("--data-root")
     run.add_argument("--overwrite", action="store_true")
+    run.add_argument("--observation-domain")
+    run.add_argument("--max-iterations", type=int)
+    run.add_argument("--max-forward-calls", type=int)
+    run.add_argument("--max-adjoint-calls", type=int)
+    run.add_argument("--parameter-sources", help="JSON mapping of parameter names to provenance labels.")
+    run.add_argument("--fixed-compute", action="store_true", help="Disable solver early stopping for a fixed operator-call protocol.")
 
     evaluate = commands.add_parser("eval", help="Evaluate a saved run without rerunning its solver.")
     evaluate.add_argument("--run", required=True, dest="run_dir")
@@ -82,6 +92,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 printable = [{"name": item["name"], "dimension": ",".join(map(str, item["dimensions"])), "geometry": ",".join(item["geometry_types"]), "backend": item["backend"] or "built-in"} for item in records]
                 _print_records(printable, ("name", "dimension", "geometry", "backend"))
             return 0
+        if args.command == "list-regularizers":
+            records = regularizer_records_public()
+            if args.as_json:
+                print(json.dumps(records, indent=2))
+            else:
+                printable = [{"name": item["name"], "prior": item["prior_type"], "convex": item["convex"], "proximal": item["has_proximal"]} for item in records]
+                _print_records(printable, ("name", "prior", "convex", "proximal"))
+            return 0
         if args.command == "data":
             if args.data_command is None:
                 parser.parse_args(["data", "--help"])
@@ -111,7 +129,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             _print_records(results, ("case_id", "status", "truth_shape", "measurement_shape"))
             return 0
         if args.command == "run":
-            result = run_case(args.solver, args.case_id, args.config, args.out, device=args.device, data_root=args.data_root, overwrite=args.overwrite)
+            result = run_case(
+                args.solver,
+                args.case_id,
+                args.config,
+                args.out,
+                device=args.device,
+                data_root=args.data_root,
+                overwrite=args.overwrite,
+                observation_domain=args.observation_domain,
+                max_iterations=args.max_iterations,
+                max_forward_calls=args.max_forward_calls,
+                max_adjoint_calls=args.max_adjoint_calls,
+                parameter_sources_path=args.parameter_sources,
+                fixed_compute=args.fixed_compute,
+            )
             print(result["output_dir"])
             return 0 if result["status"] == "success" else 1
         if args.command == "eval":
