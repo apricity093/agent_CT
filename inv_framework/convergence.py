@@ -15,6 +15,8 @@ from typing import Any, Iterable, Mapping
 
 import torch
 
+from .instrumentation import OperatorBudgetExceeded
+
 
 CONVERGENCE_SCHEMA_VERSION = "ct.convergence.v1"
 
@@ -699,6 +701,214 @@ assess_trajectory = classify_trajectory
 validate_post_run = post_run_validation
 
 
+def _endpoint_operator_stats(operator: Any) -> dict[str, Any]:
+    stats = getattr(operator, "stats", None)
+    if not callable(stats):
+        return {}
+    return dict(stats() or {})
+
+
+def _endpoint_call_delta(before: Mapping[str, Any], after: Mapping[str, Any]) -> dict[str, int]:
+    delta: dict[str, int] = {}
+    for name in ("forward_calls", "adjoint_calls", "total_operator_calls"):
+        if before.get(name) is not None and after.get(name) is not None:
+            delta[name] = int(after[name]) - int(before[name])
+    return delta
+
+
+def _endpoint_finite_tensor(value: Any) -> bool:
+    return isinstance(value, torch.Tensor) and bool(torch.isfinite(value).all().item())
+
+
+def _endpoint_relative_change(previous: torch.Tensor, current: torch.Tensor) -> float:
+    numerator = float((current - previous).detach().reshape(-1).norm().item())
+    denominator = max(float(previous.detach().reshape(-1).norm().item()), 1e-12)
+    return numerator / denominator
+
+
+def _endpoint_box_constraints(
+    value: torch.Tensor,
+    parameters: Mapping[str, Any],
+) -> torch.Tensor:
+    minimum = parameters.get("min_value")
+    maximum = parameters.get("max_value")
+    if minimum is None and maximum is None:
+        return value
+    return value.clamp(minimum, maximum)
+
+
+def _balanced_endpoint_subsets(num_angles: int, count: int) -> list[tuple[int, ...]]:
+    count = int(count)
+    if count <= 0 or count > int(num_angles):
+        raise ValueError("subset_count must be between 1 and the number of views")
+    base, remainder = divmod(int(num_angles), count)
+    subsets: list[tuple[int, ...]] = []
+    start = 0
+    for index in range(count):
+        size = base + (1 if index < remainder else 0)
+        subsets.append(tuple(range(start, start + size)))
+        start += size
+    return subsets
+
+
+def _row_action_endpoint_native(
+    algorithm: str,
+    *,
+    reconstruction: torch.Tensor,
+    measurement: torch.Tensor,
+    prediction: torch.Tensor,
+    operator: Any,
+    parameters: Mapping[str, Any],
+) -> tuple[str, float, dict[str, Any]]:
+    """Recompute a fixed-point relative change at the final reconstruction.
+
+    The solver trajectory stores the change made by the last update.  The
+    endpoint has no previous tensor, so the independent evaluator applies one
+    solver-native update to the final reconstruction and measures its relative
+    fixed-point change.  This is a state-based check and does not trust the
+    scalar copied from the solver trajectory.
+    """
+
+    from .solvers._utils import (
+        apply_box_constraints,
+        make_angle_subsets,
+        make_subset_operator,
+        select_measurement_subset,
+    )
+
+    residual = prediction - measurement
+    if not _endpoint_finite_tensor(residual):
+        raise ValueError("endpoint residual is non-finite")
+    if algorithm == "landweber":
+        step = parameters.get("step_size", 1e-3)
+        if isinstance(step, bool):
+            raise ValueError("step_size is not a finite positive number")
+        step = float(step)
+        if not isfinite(step) or step <= 0.0:
+            raise ValueError("step_size is not a finite positive number")
+        candidate = reconstruction - step * operator.adjoint(residual)
+        candidate = apply_box_constraints(
+            candidate,
+            min_value=parameters.get("min_value"),
+            max_value=parameters.get("max_value"),
+        )
+        if not _endpoint_finite_tensor(candidate):
+            raise ValueError("endpoint Landweber update is non-finite")
+        return (
+            "relative_iterate_change",
+            _endpoint_relative_change(reconstruction, candidate),
+            {"update": "landweber", "step_size": step},
+        )
+
+    if algorithm == "sirt":
+        batch = int(measurement.shape[0])
+        domain = (batch, *tuple(operator.domain_shape))
+        range_ = (batch, *tuple(operator.range_shape))
+        dtype = reconstruction.dtype
+        device = reconstruction.device
+        row_weight = operator.forward(torch.ones(domain, device=device, dtype=dtype))
+        row_weight = torch.where(
+            row_weight < 1e-8,
+            torch.full_like(row_weight, float("inf")),
+            row_weight,
+        ).reciprocal()
+        column_weight = operator.adjoint(torch.ones(range_, device=device, dtype=dtype))
+        column_weight = torch.where(
+            column_weight < 1e-8,
+            torch.full_like(column_weight, float("inf")),
+            column_weight,
+        ).reciprocal()
+        if not _endpoint_finite_tensor(row_weight) or not _endpoint_finite_tensor(column_weight):
+            raise ValueError("endpoint SIRT normalization is non-finite")
+        candidate = reconstruction - column_weight * operator.adjoint(row_weight * residual)
+        candidate = apply_box_constraints(
+            candidate,
+            min_value=parameters.get("min_value"),
+            max_value=parameters.get("max_value"),
+        )
+        if not _endpoint_finite_tensor(candidate):
+            raise ValueError("endpoint SIRT update is non-finite")
+        return (
+            "relative_iterate_change",
+            _endpoint_relative_change(reconstruction, candidate),
+            {"update": "sirt"},
+        )
+
+    if algorithm not in {"sart", "os_sart"}:
+        raise ValueError(f"unsupported row-action endpoint algorithm {algorithm!r}")
+
+    num_angles = int(operator.range_shape[-2])
+    explicit_subsets = parameters.get("subset_indices")
+    if explicit_subsets is not None:
+        subset_spec = [tuple(int(value) for value in indices) for indices in explicit_subsets]
+    elif algorithm == "os_sart" and parameters.get("subset_count") is not None:
+        subset_spec = _balanced_endpoint_subsets(num_angles, int(parameters["subset_count"]))
+    else:
+        block_size = parameters.get("block_size")
+        if algorithm == "os_sart" and block_size is None:
+            block_size = max(num_angles // 10, 1)
+        subsets = make_angle_subsets(
+            num_angles=num_angles,
+            block_size=block_size,
+            order_strategy=str(parameters.get("order_strategy", "ordered")),
+            seed=parameters.get("seed"),
+            device=measurement.device,
+        )
+        subset_spec = [tuple(int(value) for value in item.detach().cpu().tolist()) for item in subsets]
+
+    subsets = make_angle_subsets(
+        num_angles=num_angles,
+        subset_indices=subset_spec,
+        device=measurement.device,
+    )
+    batch = int(measurement.shape[0])
+    domain = (batch, *tuple(operator.domain_shape))
+    candidate = reconstruction.clone()
+    eps = float(parameters.get("eps", 1e-8))
+    relaxation = float(parameters.get("relaxation", 1.0))
+    for indices in subsets:
+        sub_operator = make_subset_operator(operator, indices)
+        y_sub = select_measurement_subset(measurement, indices)
+        ones_range = torch.ones(
+            (batch, *tuple(sub_operator.range_shape)),
+            device=measurement.device,
+            dtype=reconstruction.dtype,
+        )
+        row_weight = sub_operator.forward(
+            torch.ones(domain, device=measurement.device, dtype=reconstruction.dtype)
+        )
+        row_weight = torch.where(
+            row_weight.abs() < eps,
+            torch.full_like(row_weight, float("inf")),
+            row_weight,
+        ).reciprocal()
+        column_weight = sub_operator.adjoint(ones_range)
+        column_weight = torch.where(
+            column_weight.abs() < eps,
+            torch.full_like(column_weight, float("inf")),
+            column_weight,
+        ).reciprocal()
+        subset_residual = sub_operator.forward(candidate) - y_sub
+        candidate = candidate - relaxation * column_weight * sub_operator.adjoint(row_weight * subset_residual)
+        candidate = apply_box_constraints(
+            candidate,
+            min_value=parameters.get("min_value"),
+            max_value=parameters.get("max_value"),
+        )
+        if not (
+            _endpoint_finite_tensor(row_weight)
+            and _endpoint_finite_tensor(column_weight)
+            and _endpoint_finite_tensor(subset_residual)
+            and _endpoint_finite_tensor(candidate)
+        ):
+            raise ValueError("endpoint subset update is non-finite")
+    return (
+        "relative_epoch_change",
+        _endpoint_relative_change(reconstruction, candidate),
+        {"update": algorithm, "complete_epoch": True, "subset_count": len(subsets)},
+    )
+
+
 def confirm_endpoint(
     *,
     algorithm: str,
@@ -706,7 +916,7 @@ def confirm_endpoint(
     measurement: torch.Tensor,
     operator: Any,
     predicted_measurement: torch.Tensor | None = None,
-    valid_measurement_mask: torch.Tensor | None,
+    valid_measurement_mask: torch.Tensor | None = None,
     policy: Mapping[str, Any] | None,
     trajectory: Iterable[Mapping[str, Any]],
     solver_status: str,
@@ -719,6 +929,7 @@ def confirm_endpoint(
     """Independently recompute final evidence and audit the patience window."""
 
     rows = [dict(row) for row in trajectory]
+    endpoint_counter_before = _endpoint_operator_stats(operator)
     solver_status_value = normalize_status(
         solver_status,
         algorithm=algorithm,
@@ -764,21 +975,72 @@ def confirm_endpoint(
         "solver_stopping_reason": solver_stopping_reason,
         "solver_reason_class": status_reason_class(solver_status_value),
         "reasons": [],
+        "operator_calls": {},
     }
     if algorithm in {"fbp", "fdk"}:
         result["status"] = "passed" if finite else "failed"
         result["passed"] = finite
+        result["operator_calls"] = _endpoint_call_delta(
+            endpoint_counter_before, _endpoint_operator_stats(operator)
+        )
         return result
     if policy is None:
+        result["operator_calls"] = _endpoint_call_delta(
+            endpoint_counter_before, _endpoint_operator_stats(operator)
+        )
         return result
-    discrepancy_target = float((policy.get("effective", {}) or {}).get("discrepancy_target", policy.get("discrepancy_target", float("inf"))))
+    raw_discrepancy_target = (policy.get("effective", {}) or {}).get(
+        "discrepancy_target", policy.get("discrepancy_target", float("inf"))
+    )
+    discrepancy_available = raw_discrepancy_target is not None
+    discrepancy_target = (
+        float(raw_discrepancy_target) if discrepancy_available else None
+    )
     normal_tol = float(policy.get("normalized_normal_residual_tolerance", 1e-4))
     iterate_tol = float(policy.get("relative_iterate_tolerance", 1e-4))
     prox_tol = float(policy.get("prox_gradient_mapping_tolerance", 1e-4))
     objective_tol = float(policy.get("relative_objective_tolerance", 1e-5))
+    endpoint_cfg = dict(policy.get("endpoint_confirmation", {}) or {})
+    absolute_tolerance = float(endpoint_cfg.get("absolute_tolerance", 1e-7))
+    relative_tolerance = float(endpoint_cfg.get("relative_tolerance", 1e-4))
+    last_row = rows[-1] if rows else {}
     native_name = "relative_iterate_change"
-    native_value = rows[-1].get("relative_iterate_change") if rows else None
-    native_ok = native_value is not None and float(native_value) <= iterate_tol
+    native_trajectory_value = _metric(
+        last_row,
+        ("native_criterion_value", "relative_iterate_change", "relative_epoch_change"),
+    )
+    native_value = native_trajectory_value
+    native_ok = native_value is not None and isfinite(float(native_value)) and float(native_value) <= iterate_tol
+    native_details: dict[str, Any] = {}
+    native_recomputation_error: str | None = None
+    native_endpoint_consistent: bool | None = None
+    if algorithm in {"sirt", "landweber", "sart", "os_sart"} and finite_inputs:
+        try:
+            native_name, native_value, native_details = _row_action_endpoint_native(
+                algorithm,
+                reconstruction=reconstruction,
+                measurement=measurement,
+                prediction=prediction,
+                operator=operator,
+                parameters=parameters,
+            )
+            native_ok = isfinite(float(native_value)) and float(native_value) <= iterate_tol
+        except OperatorBudgetExceeded:
+            raise
+        except Exception as error:
+            native_recomputation_error = str(error)
+            native_ok = False
+    if (
+        algorithm in {"sirt", "landweber", "sart", "os_sart"}
+        and native_trajectory_value is not None
+        and native_value is not None
+        and isfinite(float(native_trajectory_value))
+        and isfinite(float(native_value))
+    ):
+        native_endpoint_consistent = abs(float(native_trajectory_value) - float(native_value)) <= (
+            absolute_tolerance
+            + relative_tolerance * max(abs(float(native_trajectory_value)), abs(float(native_value)))
+        )
     if algorithm in {"cgls", "lsqr"}:
         gradient = operator.adjoint(native_residual) if native_residual is not None else torch.full_like(reconstruction, float("nan"))
         native_name = "normalized_normal_residual"
@@ -815,28 +1077,82 @@ def confirm_endpoint(
             float(0.5 * residual.square().sum().item() + float(parameters.get("reg_strength", 0.0)) * tv.value(reconstruction).sum().item())
             if residual is not None else None
         )
-    discrepancy_ok = bool(
-        endpoint_data_residual is not None
-        and endpoint_data_residual <= discrepancy_target
+    if native_value is not None and not isfinite(float(native_value)):
+        finite = False
+        result["reasons"].append("non_finite_native_criterion")
+    if native_recomputation_error is not None:
+        result["native_recomputation_error"] = native_recomputation_error
+    if native_details:
+        result["native_recomputation"] = native_details
+    discrepancy_ok = (
+        not discrepancy_available
+        or bool(
+            endpoint_data_residual is not None
+            and endpoint_data_residual <= float(discrepancy_target)
+        )
     )
     result.update({
         "discrepancy_target": discrepancy_target,
+        "discrepancy_available": discrepancy_available,
         "discrepancy_satisfied": discrepancy_ok,
         "native_criterion_name": native_name,
         "native_criterion_value": native_value,
         "native_criterion_satisfied": native_ok,
+        "trajectory_native_criterion_value": native_trajectory_value,
+        "trajectory_endpoint_native_consistent": native_endpoint_consistent,
     })
     patience = int(policy.get("patience", 5))
-    checked = [row for row in rows if row.get("criteria")]
+    checked = [
+        row for row in rows
+        if row.get("criteria") and bool((row.get("metadata") or {}).get("checked", True))
+    ]
     tail = checked[-patience:]
+    check_every = max(1, int(policy.get("check_every", 1)))
+    check_spacing_ok = all(
+        int(current.get("iteration", -1)) - int(previous.get("iteration", -1)) == check_every
+        for previous, current in zip(tail, tail[1:])
+    )
+    min_iterations = int(policy.get("min_iterations", 1))
+    min_iteration_ok = bool(tail) and int(tail[0].get("iteration", -1)) >= min_iterations
     monotonic = all(int(a.get("iteration", -1)) < int(b.get("iteration", -1)) for a, b in zip(rows, rows[1:]))
-    consecutive = len(tail) == patience and all(all(bool(v) for v in (row.get("criteria") or {}).values()) for row in tail)
-    counter_ok = bool(tail) and int(tail[-1].get("consecutive_criteria_count", 0)) >= patience
-    result.update({"trajectory_monotonic": monotonic, "patience_window_passed": consecutive, "consecutive_counter_consistent": counter_ok})
-    last_data = rows[-1].get("normalized_data_residual") if rows else None
-    endpoint_cfg = dict(policy.get("endpoint_confirmation", {}) or {})
-    absolute_tolerance = float(endpoint_cfg.get("absolute_tolerance", 1e-7))
-    relative_tolerance = float(endpoint_cfg.get("relative_tolerance", 1e-4))
+    consecutive = (
+        len(tail) == patience
+        and check_spacing_ok
+        and min_iteration_ok
+        and all(all(bool(v) for v in (row.get("criteria") or {}).values()) for row in tail)
+    )
+    counter_ok = bool(tail)
+    expected_consecutive = 0
+    for row in checked:
+        expected_consecutive = expected_consecutive + 1 if all(
+            bool(value) for value in (row.get("criteria") or {}).values()
+        ) else 0
+        reported = row.get("consecutive_criteria_count")
+        if reported is not None and int(reported) != expected_consecutive:
+            counter_ok = False
+    counter_ok = counter_ok and len(tail) == patience and int(tail[-1].get("consecutive_criteria_count", 0)) >= patience
+    epoch_boundary = True
+    if algorithm in {"sart", "os_sart"}:
+        epoch_boundary = bool(rows) and all(
+            row.get("subset") is None
+            and (
+                row.get("epoch") is not None
+                or bool((row.get("metadata") or {}).get("complete_sweep", False))
+            )
+            for row in rows
+        )
+    result.update({
+        "trajectory_monotonic": monotonic,
+        "check_spacing_consistent": check_spacing_ok,
+        "min_iteration_respected": min_iteration_ok,
+        "patience_window_passed": consecutive,
+        "consecutive_counter_consistent": counter_ok,
+        "complete_epoch_boundaries": epoch_boundary,
+    })
+    last_data = _metric(
+        last_row,
+        ("normalized_data_residual", "normalized_residual", "data_residual", "residual"),
+    )
     trajectory_endpoint_consistent = bool(
         last_data is not None
         and endpoint_data_residual is not None
@@ -853,6 +1169,11 @@ def confirm_endpoint(
         if not monotonic: result["reasons"].append("trajectory_not_monotonic")
         if not consecutive: result["reasons"].append("patience_window_incomplete")
         if not counter_ok: result["reasons"].append("consecutive_counter_mismatch")
+        if not epoch_boundary: result["reasons"].append("subset_level_termination")
+        if native_recomputation_error is not None:
+            result["reasons"].append("endpoint_native_recomputation_failed")
+        if native_endpoint_consistent is False:
+            result["reasons"].append("trajectory_endpoint_native_metric_mismatch")
         if endpoint_cfg.get("require_trajectory_consistency", True) and not trajectory_endpoint_consistent:
             result["reasons"].append("trajectory_endpoint_metric_mismatch")
     allowed = {
@@ -868,6 +1189,9 @@ def confirm_endpoint(
     if solver_status_value == "converged" and solver_stopping_reason != allowed.get(algorithm):
         result["reasons"].append("stopping_reason_not_allowed")
     result["converged_at_budget_boundary"] = bool(solver_status_value == "converged" and max_iterations is not None and iterations == max_iterations)
+    result["operator_calls"] = _endpoint_call_delta(
+        endpoint_counter_before, _endpoint_operator_stats(operator)
+    )
     result["passed"] = finite and (solver_status_value != "converged" or not result["reasons"])
     result["status"] = "passed" if result["passed"] else "failed"
     return result

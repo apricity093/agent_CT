@@ -282,11 +282,24 @@ class IterationRecorder:
         # Keep the old attribute as a compatibility alias.  New result
         # payloads use the canonical ``numerical_error`` status.
         self.numerical_failure = False
+        self.numerical_error_reason: str | None = None
         measurement_norm = measurement.detach().reshape(-1).norm().item()
         self.measurement_norm = max(float(measurement_norm), 1e-12)
 
     def set_initial(self, value: torch.Tensor) -> None:
         self.previous = value.detach().clone()
+
+    def mark_numerical_error(self, reason: str) -> None:
+        """Record the first field-specific numerical failure reason.
+
+        ``record`` keeps its historical generic finite check for legacy
+        callers.  Native detailed loops can opt into a more useful reason
+        without changing the public result shape or the old solver paths.
+        """
+
+        self.numerical_failure = True
+        if self.numerical_error_reason is None:
+            self.numerical_error_reason = str(reason)
 
     def _counter_values(self) -> tuple[int | None, int | None]:
         stats = getattr(self.operator, "stats", None)
@@ -406,7 +419,7 @@ class IterationRecorder:
         effective_reason = str(stopping_reason)
         if self.numerical_failure:
             effective_status = "numerical_error"
-            effective_reason = "non_finite_solver_state"
+            effective_reason = self.numerical_error_reason or "non_finite_solver_state"
         else:
             effective_status = canonicalize_status(
                 effective_status,
@@ -506,9 +519,21 @@ class ConsecutiveStoppingMonitor:
         satisfied = bool(criteria) and all(bool(value) for value in criteria.values())
         self.consecutive = self.consecutive + 1 if satisfied else 0
         discrepancy_unmet = not bool(criteria.get("discrepancy", True))
-        native_values = [v for k, v in criteria.items() if k != "discrepancy"]
+        native_items = [(k, v) for k, v in criteria.items() if k != "discrepancy"]
+        native_values = [v for _k, v in native_items]
         native_unmet = bool(native_values) and not all(native_values)
-        if self.control.stall_enabled and relative_change is not None and relative_change <= self.control.stall_relative_iterate_tolerance and discrepancy_unmet and native_unmet:
+        # For row-action policies the only native progress statistic is the
+        # same iterate/epoch change used by the convergence criterion.  A
+        # fixed point with an unmet discrepancy is therefore a stall even
+        # though that native change criterion is technically satisfied.  For
+        # solvers with a distinct native optimality metric, retain the
+        # stricter unmet-native-evidence requirement.
+        native_is_change_only = bool(native_items) and all(
+            name in {"relative_iterate_change", "relative_epoch_change"}
+            for name, _value in native_items
+        )
+        stall_native_ok = native_unmet or native_is_change_only
+        if self.control.stall_enabled and relative_change is not None and relative_change <= self.control.stall_relative_iterate_tolerance and discrepancy_unmet and stall_native_ok:
             self.stall_run += 1
         else:
             self.stall_run = 0

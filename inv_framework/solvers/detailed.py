@@ -11,7 +11,7 @@ values and operator counters describe the actual run.
 from __future__ import annotations
 
 import math
-from typing import Any, Callable, Iterable, Optional, Sequence
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 import torch
 
@@ -130,6 +130,237 @@ def _policy_status(decision: Any) -> tuple[str | None, str | None]:
     return None, None
 
 
+def _finite_tensor(value: Any) -> bool:
+    return isinstance(value, torch.Tensor) and bool(torch.isfinite(value).all().item())
+
+
+def _finite_scalar(value: Any) -> bool:
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _operator_stats(operator: Any) -> dict[str, Any]:
+    stats = getattr(operator, "stats", None)
+    if not callable(stats):
+        return {}
+    return dict(stats() or {})
+
+
+def _operator_call_delta(before: Mapping[str, Any], after: Mapping[str, Any]) -> dict[str, int]:
+    delta: dict[str, int] = {}
+    for name in ("forward_calls", "adjoint_calls", "total_operator_calls"):
+        if before.get(name) is not None and after.get(name) is not None:
+            delta[name] = int(after[name]) - int(before[name])
+    return delta
+
+
+def _common_parameter_errors(
+    num_iterations: Any,
+    min_value: Any,
+    max_value: Any,
+) -> list[str]:
+    errors: list[str] = []
+    if isinstance(num_iterations, bool) or not isinstance(num_iterations, int) or num_iterations <= 0:
+        errors.append("num_iterations must be a positive integer")
+    for name, value in (("min_value", min_value), ("max_value", max_value)):
+        if value is not None and (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not _finite_scalar(value)
+        ):
+            errors.append(f"{name} must be a finite number or None")
+    if (
+        min_value is not None
+        and max_value is not None
+        and _finite_scalar(min_value)
+        and _finite_scalar(max_value)
+        and float(min_value) > float(max_value)
+    ):
+        errors.append("min_value must be less than or equal to max_value")
+    return errors
+
+
+def _parameter_failure_result(
+    algorithm: str,
+    measurement: torch.Tensor,
+    operator: LinearOperator,
+    *,
+    x_init: torch.Tensor | None,
+    errors: Iterable[str],
+    max_iterations: int | None,
+    parameters: Mapping[str, Any],
+    resources: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> SolveResult:
+    """Return a structured no-loop result for direct detailed callers."""
+
+    x = prepare_initial_image(measurement, operator, x_init=x_init, initial_value=0.0)
+    return SolveResult(
+        reconstruction=x,
+        actual_iterations=0,
+        status="invalid_parameters",
+        stopping_reason="parameter_validation_failed",
+        resources={**_operator_stats(operator), **dict(resources or {})},
+        metadata={
+            "algorithm": algorithm,
+            "max_iterations": max_iterations,
+            "validation_errors": [str(error) for error in errors],
+            "parameters": dict(parameters),
+            **dict(metadata or {}),
+        },
+    )
+
+
+def _numerical_result(
+    algorithm: str,
+    measurement: torch.Tensor,
+    operator: LinearOperator,
+    *,
+    x_init: torch.Tensor | None,
+    max_iterations: int | None,
+    reason: str,
+    parameters: Mapping[str, Any],
+) -> SolveResult:
+    """Return a structured pre-loop numerical failure without hiding it."""
+
+    x = prepare_initial_image(measurement, operator, x_init=x_init, initial_value=0.0)
+    return SolveResult(
+        reconstruction=x,
+        actual_iterations=0,
+        status="numerical_error",
+        stopping_reason=reason,
+        resources=_operator_stats(operator),
+        metadata={
+            "algorithm": algorithm,
+            "max_iterations": max_iterations,
+            "parameters": dict(parameters),
+        },
+    )
+
+
+def _native_tolerance(control: SolveControl) -> float | None:
+    if control.relative_iterate_tolerance is not None:
+        return float(control.relative_iterate_tolerance)
+    # A policy is still meaningful for direct detailed callers that only set
+    # the discrepancy target.  Keep the same documented native threshold as
+    # the runtime policy instead of silently making the second criterion
+    # impossible to satisfy.
+    return 1e-4 if control.discrepancy_target is not None else None
+
+
+def _row_action_criteria(
+    control: SolveControl,
+    residual_value: float,
+    change: float,
+    *,
+    epoch: bool = False,
+) -> tuple[dict[str, bool], float | None]:
+    if control.discrepancy_target is None:
+        return {}, _native_tolerance(control)
+    native_tolerance = _native_tolerance(control)
+    assert native_tolerance is not None
+    native_name = "relative_epoch_change" if epoch else "relative_iterate_change"
+    return {
+        "discrepancy": residual_value <= float(control.discrepancy_target),
+        native_name: change <= native_tolerance,
+    }, native_tolerance
+
+
+def _known_operator_norm_squared(control: SolveControl) -> float | None:
+    metadata = dict(control.metadata or {})
+    if metadata.get("operator_norm_squared") is not None:
+        value = float(metadata["operator_norm_squared"])
+    elif metadata.get("operator_norm_estimate") is not None:
+        value = float(metadata["operator_norm_estimate"]) ** 2
+    else:
+        return None
+    return value if _finite_scalar(value) and value >= 0.0 else float("nan")
+
+
+def _estimate_operator_norm_squared(
+    operator: LinearOperator,
+    reference: torch.Tensor,
+    *,
+    iterations: int = 8,
+) -> float:
+    """Deterministically estimate ``||A||^2`` for Landweber preflight."""
+
+    domain_shape = tuple(int(value) for value in operator.domain_shape)
+    sample_size = math.prod(domain_shape)
+    seed = torch.linspace(
+        0.5,
+        1.5,
+        steps=sample_size,
+        dtype=reference.dtype,
+        device=reference.device,
+    ).reshape((1, *domain_shape))
+    denominator = seed.reshape(seed.shape[0], -1).norm(dim=1).clamp_min(1e-12)
+    vector = seed / denominator.reshape((1,) + (1,) * len(domain_shape))
+    for _ in range(max(1, int(iterations))):
+        next_vector = operator.adjoint(operator.forward(vector))
+        if not _finite_tensor(next_vector):
+            return float("nan")
+        norm = next_vector.reshape(next_vector.shape[0], -1).norm(dim=1)
+        if bool(torch.all(norm <= 1e-12)):
+            return 0.0
+        vector = next_vector / norm.reshape((next_vector.shape[0],) + (1,) * len(domain_shape)).clamp_min(1e-12)
+    image = operator.adjoint(operator.forward(vector))
+    if not _finite_tensor(image):
+        return float("nan")
+    value = (vector * image).reshape(vector.shape[0], -1).sum(dim=1).clamp_min(0.0).max()
+    return float(value.item())
+
+
+def _landweber_step_preflight(
+    operator: LinearOperator,
+    measurement: torch.Tensor,
+    control: SolveControl,
+    step_size: Any,
+) -> tuple[float, float, list[str], dict[str, Any]]:
+    errors: list[str] = []
+    if isinstance(step_size, bool) or not isinstance(step_size, (int, float)):
+        errors.append("step_size must be a finite positive number")
+        return 0.0, float("nan"), errors, {}
+    step = float(step_size)
+    if not _finite_scalar(step) or step <= 0.0:
+        errors.append("step_size must be a finite positive number")
+        return step, float("nan"), errors, {}
+    norm_squared = _known_operator_norm_squared(control)
+    estimates: dict[str, Any] = {}
+    if norm_squared is None:
+        power_iterations = dict(control.metadata or {}).get("power_iterations", 8)
+        try:
+            power_iterations = int(power_iterations)
+        except (TypeError, ValueError):
+            power_iterations = 8
+        if power_iterations <= 0:
+            power_iterations = 8
+        norm_squared = _estimate_operator_norm_squared(
+            operator, measurement, iterations=power_iterations
+        )
+        estimates.update({
+            "operator_norm_squared": norm_squared,
+            "operator_norm_estimator": f"power_iteration_{power_iterations}",
+        })
+    else:
+        estimates.update({
+            "operator_norm_squared": norm_squared,
+            "operator_norm_estimator": "control_metadata",
+        })
+    if not _finite_scalar(norm_squared) or norm_squared < 0.0:
+        errors.append("operator norm estimate must be finite and nonnegative")
+    elif norm_squared > 0.0:
+        upper = 2.0 / float(norm_squared)
+        if not step < upper:
+            errors.append(
+                "step_size must satisfy 0 < step_size < 2 / ||A||^2 "
+                f"({upper:.6g})"
+            )
+    return step, float(norm_squared), errors, estimates
+
+
 def solve_fbp_detailed(
     operator: LinearOperator,
     measurement: torch.Tensor,
@@ -191,20 +422,63 @@ def solve_sirt_detailed(
 ) -> SolveResult:
     require_linear_operator(operator, "sirt")
     batch = validate_measurement_shape(measurement, operator, "sirt")
+    parameter_errors = _common_parameter_errors(num_iterations, min_value, max_value)
+    if parameter_errors:
+        return _parameter_failure_result(
+            "sirt", measurement, operator, x_init=x_init, errors=parameter_errors,
+            max_iterations=None,
+            parameters={
+                "num_iterations": num_iterations,
+                "min_value": min_value,
+                "max_value": max_value,
+            },
+        )
     control = resolve_control(
         control, default_iterations=int(num_iterations), default_tolerance=1e-5, callback=callback
     )
     limit = min(int(num_iterations), int(control.max_iterations or num_iterations))
+    parameters = {
+        "num_iterations": int(num_iterations),
+        "min_value": min_value,
+        "max_value": max_value,
+    }
+    if not _finite_tensor(measurement):
+        return _numerical_result(
+            "sirt", measurement, operator, x_init=x_init, max_iterations=limit,
+            reason="non_finite_measurement", parameters=parameters,
+        )
     x = prepare_initial_image(measurement, operator, x_init=x_init, initial_value=0.0)
+    if not _finite_tensor(x):
+        return _numerical_result(
+            "sirt", measurement, operator, x_init=x_init, max_iterations=limit,
+            reason="non_finite_initial_reconstruction", parameters=parameters,
+        )
     recorder = IterationRecorder(control, measurement, operator, algorithm="sirt")
     monitor = ConsecutiveStoppingMonitor(control)
     recorder.set_initial(x)
     domain = (batch, *tuple(operator.domain_shape))
     range_ = (batch, *tuple(operator.range_shape))
+    optimization_before = _operator_stats(operator)
     row_weight = operator.forward(torch.ones(domain, device=measurement.device, dtype=measurement.dtype))
     row_weight = torch.where(row_weight < 1e-8, torch.full_like(row_weight, float("inf")), row_weight).reciprocal()
+    if not _finite_tensor(row_weight):
+        recorder.mark_numerical_error("non_finite_row_normalization")
+        return recorder.finish(
+            x, actual_iterations=0, status="numerical_error",
+            stopping_reason="non_finite_row_normalization",
+            resources={"optimization_calls": _operator_call_delta(optimization_before, _operator_stats(operator))},
+            metadata={"criterion": "normalized_data_residual_and_relative_iterate_change", **parameters},
+        )
     column_weight = operator.adjoint(torch.ones(range_, device=measurement.device, dtype=measurement.dtype))
     column_weight = torch.where(column_weight < 1e-8, torch.full_like(column_weight, float("inf")), column_weight).reciprocal()
+    if not _finite_tensor(column_weight):
+        recorder.mark_numerical_error("non_finite_column_normalization")
+        return recorder.finish(
+            x, actual_iterations=0, status="numerical_error",
+            stopping_reason="non_finite_column_normalization",
+            resources={"optimization_calls": _operator_call_delta(optimization_before, _operator_stats(operator))},
+            metadata={"criterion": "normalized_data_residual_and_relative_iterate_change", **parameters},
+        )
     measurement_norm = _global_norm(measurement)
     actual = 0
     converged = False
@@ -213,43 +487,149 @@ def solve_sirt_detailed(
     terminal_reason = None
     prediction = operator.forward(x)
     residual = prediction - measurement
+    if not _finite_tensor(prediction) or not _finite_tensor(residual):
+        recorder.mark_numerical_error("non_finite_initial_residual")
+        return recorder.finish(
+            x, actual_iterations=0, status="numerical_error",
+            stopping_reason="non_finite_initial_residual",
+            predicted_measurement=prediction,
+            resources={"optimization_calls": _operator_call_delta(optimization_before, _operator_stats(operator))},
+            metadata={"criterion": "normalized_data_residual_and_relative_iterate_change", **parameters},
+        )
+    native_tolerance = _native_tolerance(control)
     for iteration in range(1, limit + 1):
         previous = x
         x = x - column_weight * operator.adjoint(row_weight * residual)
         x = apply_box_constraints(x, min_value=min_value, max_value=max_value)
+        actual = iteration
+        if not _finite_tensor(x):
+            recorder.mark_numerical_error("non_finite_reconstruction")
+            recorder.record(
+                iteration, x, metadata={"state": "post_update", "checked": False, "non_finite_field": "reconstruction"}
+            )
+            break
         prediction = operator.forward(x)
         residual = prediction - measurement
+        if not _finite_tensor(prediction):
+            recorder.mark_numerical_error("non_finite_prediction")
+            recorder.record(
+                iteration, x, residual=residual,
+                metadata={"state": "post_update", "checked": False, "non_finite_field": "prediction"}
+            )
+            break
+        if not _finite_tensor(residual):
+            recorder.mark_numerical_error("non_finite_residual")
+            recorder.record(
+                iteration, x, residual=residual,
+                metadata={"state": "post_update", "checked": False, "non_finite_field": "residual"}
+            )
+            break
         change = _relative_change(previous, x)
         residual_value = _normalized(_global_norm(residual), measurement_norm)
-        criteria = {
-            "discrepancy": residual_value <= float(control.discrepancy_target or -1.0),
-            "relative_iterate_change": change <= float(control.relative_iterate_tolerance or -1.0),
-        }
+        if not _finite_scalar(change):
+            recorder.mark_numerical_error("non_finite_relative_iterate_change")
+            recorder.record(
+                iteration, x, residual=residual,
+                metadata={"state": "post_update", "checked": False, "non_finite_field": "relative_iterate_change"}
+            )
+            break
+        if not _finite_scalar(residual_value):
+            recorder.mark_numerical_error("non_finite_discrepancy")
+            recorder.record(
+                iteration, x, residual=residual,
+                metadata={"state": "post_update", "checked": False, "non_finite_field": "discrepancy"}
+            )
+            break
+        criteria, native_tolerance = _row_action_criteria(
+            control, residual_value, change, epoch=False
+        )
         decision = monitor.observe(iteration, criteria=criteria, relative_change=change, monitor_value=residual_value)
         converged = decision.converged if _policy_active(control) else _tolerance_reached(control, residual=residual_value, change=change)
         terminal_status, terminal_reason = _policy_status(decision) if _policy_active(control) else (None, None)
-        actual = iteration
+        objective = _objective(residual)
+        if not _finite_scalar(objective):
+            recorder.mark_numerical_error("non_finite_objective")
+            recorder.record(
+                iteration, x, residual=residual,
+                metadata={"state": "post_update", "checked": decision.checked, "non_finite_field": "objective"}
+            )
+            break
         if not _safe_record(
             recorder,
             iteration,
             x,
             residual=residual,
-            objective=_objective(residual),
+            objective=objective,
             algorithm_residual=residual_value,
             stopping_candidate=converged,
             consecutive_criteria_count=decision.consecutive,
             criteria=criteria,
             native_criterion_name="relative_iterate_change",
             native_criterion_value=change,
-            native_criterion_threshold=control.relative_iterate_tolerance,
-            metadata={"state": "post_update"},
+            native_criterion_threshold=native_tolerance,
+            metadata={"state": "post_update", "checked": decision.checked, "unit": "iterations"},
         ):
             cancelled = True
             break
         if terminal_status or (converged and control.stop_on_convergence):
             break
-    final_residual_tensor = prediction - measurement
+    if recorder.numerical_failure:
+        return recorder.finish(
+            x,
+            actual_iterations=actual,
+            status="numerical_error",
+            stopping_reason=recorder.numerical_error_reason or "non_finite_solver_state",
+            predicted_measurement=prediction,
+            metadata={
+                "criterion": "normalized_data_residual_and_relative_iterate_change",
+                "iteration_unit": "iterations",
+                **parameters,
+            },
+        )
+    optimization_after = _operator_stats(operator)
+    endpoint_prediction = prediction
+    verification_calls: dict[str, int] = {}
+    endpoint_confirmation: dict[str, Any] = {"requested": False}
+    if _policy_active(control) and not cancelled:
+        endpoint_before = _operator_stats(operator)
+        endpoint_prediction = _finish_prediction(operator, x)
+        verification_calls = _operator_call_delta(endpoint_before, _operator_stats(operator))
+        if not _finite_tensor(endpoint_prediction):
+            recorder.mark_numerical_error("non_finite_endpoint_prediction")
+        else:
+            endpoint_residual = endpoint_prediction - measurement
+            endpoint_value = _normalized(_global_norm(endpoint_residual), measurement_norm)
+            trajectory_value = _normalized(_global_norm(prediction - measurement), measurement_norm)
+            endpoint_confirmation = {
+                "requested": True,
+                "independent": True,
+                "trajectory_normalized_data_residual": trajectory_value,
+                "endpoint_normalized_data_residual": endpoint_value,
+                "trajectory_endpoint_consistent": (
+                    abs(trajectory_value - endpoint_value)
+                    <= 1e-7 + 1e-4 * max(abs(trajectory_value), abs(endpoint_value))
+                ),
+            }
+    if recorder.numerical_failure:
+        return recorder.finish(
+            x,
+            actual_iterations=actual,
+            status="numerical_error",
+            stopping_reason=recorder.numerical_error_reason or "non_finite_solver_state",
+            predicted_measurement=endpoint_prediction,
+            resources={
+                "optimization_" + key: value for key, value in _operator_call_delta(optimization_before, optimization_after).items()
+            } | {"verification_" + key: value for key, value in verification_calls.items()},
+            metadata={
+                "criterion": "normalized_data_residual_and_relative_iterate_change",
+                "endpoint_confirmation": endpoint_confirmation,
+                "iteration_unit": "iterations",
+                **parameters,
+            },
+        )
+    final_residual_tensor = endpoint_prediction - measurement
     final_residual = _normalized(_global_norm(final_residual_tensor), measurement_norm)
+    final_objective = _objective(final_residual_tensor)
     status = terminal_status or _finish_status(
         actual=actual,
         limit=limit,
@@ -271,9 +651,18 @@ def solve_sirt_detailed(
             "maximum_iterations_reached"
         ),
         final_residual=final_residual,
-        final_objective=_objective(final_residual_tensor),
-        predicted_measurement=prediction,
-        metadata={"criterion": "normalized_data_residual_or_relative_iterate_change"},
+        final_objective=final_objective,
+        predicted_measurement=endpoint_prediction,
+        resources={
+            "optimization_" + key: value for key, value in _operator_call_delta(optimization_before, optimization_after).items()
+        } | {"verification_" + key: value for key, value in verification_calls.items()},
+        metadata={
+            "criterion": "normalized_data_residual_and_relative_iterate_change",
+            "iteration_unit": "iterations",
+            "endpoint_confirmation": endpoint_confirmation,
+            "max_iterations": limit,
+            **parameters,
+        },
     )
 
 
@@ -291,15 +680,55 @@ def solve_landweber_detailed(
 ) -> SolveResult:
     require_linear_operator(operator, "landweber")
     validate_measurement_shape(measurement, operator, "landweber")
+    parameter_errors = _common_parameter_errors(num_iterations, min_value, max_value)
+    if parameter_errors:
+        return _parameter_failure_result(
+            "landweber", measurement, operator, x_init=x_init, errors=parameter_errors,
+            max_iterations=None,
+            parameters={
+                "num_iterations": num_iterations,
+                "step_size": step_size,
+                "min_value": min_value,
+                "max_value": max_value,
+            },
+        )
     control = resolve_control(
         control, default_iterations=int(num_iterations), default_tolerance=1e-5, callback=callback
     )
     limit = min(int(num_iterations), int(control.max_iterations or num_iterations))
+    parameters = {
+        "num_iterations": int(num_iterations),
+        "step_size": 1e-3 if step_size is None else step_size,
+        "min_value": min_value,
+        "max_value": max_value,
+    }
+    if not _finite_tensor(measurement):
+        return _numerical_result(
+            "landweber", measurement, operator, x_init=x_init, max_iterations=limit,
+            reason="non_finite_measurement", parameters=parameters,
+        )
+    x = prepare_initial_image(measurement, operator, x_init=x_init, initial_value=0.0)
+    if not _finite_tensor(x):
+        return _numerical_result(
+            "landweber", measurement, operator, x_init=x_init, max_iterations=limit,
+            reason="non_finite_initial_reconstruction", parameters=parameters,
+        )
+    step, norm_squared, step_errors, norm_estimates = _landweber_step_preflight(
+        operator, measurement, control, parameters["step_size"]
+    )
+    if step_errors:
+        return _parameter_failure_result(
+            "landweber", measurement, operator, x_init=x_init, errors=step_errors,
+            max_iterations=limit,
+            parameters={**parameters, "step_size": step},
+            metadata={"operator_norm_squared": norm_squared, **norm_estimates},
+        )
+    parameters["step_size"] = step
     x = prepare_initial_image(measurement, operator, x_init=x_init, initial_value=0.0)
     recorder = IterationRecorder(control, measurement, operator, algorithm="landweber")
     monitor = ConsecutiveStoppingMonitor(control)
     recorder.set_initial(x)
-    step = 1e-3 if step_size is None else float(step_size)
+    optimization_before = _operator_stats(operator)
     measurement_norm = _global_norm(measurement)
     actual = 0
     converged = False
@@ -308,28 +737,79 @@ def solve_landweber_detailed(
     terminal_reason = None
     prediction = operator.forward(x)
     residual = prediction - measurement
+    if not _finite_tensor(prediction) or not _finite_tensor(residual):
+        recorder.mark_numerical_error("non_finite_initial_residual")
+        return recorder.finish(
+            x, actual_iterations=0, status="numerical_error",
+            stopping_reason="non_finite_initial_residual",
+            predicted_measurement=prediction,
+            resources={"parameter_estimation": norm_estimates},
+            metadata={"criterion": "normalized_data_residual_and_relative_iterate_change", **parameters, **norm_estimates},
+        )
+    native_tolerance = _native_tolerance(control)
     for iteration in range(1, limit + 1):
         previous = x
         x = x - step * operator.adjoint(residual)
         x = apply_box_constraints(x, min_value=min_value, max_value=max_value)
+        actual = iteration
+        if not _finite_tensor(x):
+            recorder.mark_numerical_error("non_finite_reconstruction")
+            recorder.record(
+                iteration, x, metadata={"state": "post_update", "checked": False, "non_finite_field": "reconstruction"}
+            )
+            break
         prediction = operator.forward(x)
         residual = prediction - measurement
+        if not _finite_tensor(prediction):
+            recorder.mark_numerical_error("non_finite_prediction")
+            recorder.record(
+                iteration, x, residual=residual,
+                metadata={"state": "post_update", "checked": False, "non_finite_field": "prediction"}
+            )
+            break
+        if not _finite_tensor(residual):
+            recorder.mark_numerical_error("non_finite_residual")
+            recorder.record(
+                iteration, x, residual=residual,
+                metadata={"state": "post_update", "checked": False, "non_finite_field": "residual"}
+            )
+            break
         change = _relative_change(previous, x)
         residual_value = _normalized(_global_norm(residual), measurement_norm)
-        criteria = {
-            "discrepancy": residual_value <= float(control.discrepancy_target or -1.0),
-            "relative_iterate_change": change <= float(control.relative_iterate_tolerance or -1.0),
-        }
+        if not _finite_scalar(change):
+            recorder.mark_numerical_error("non_finite_relative_iterate_change")
+            recorder.record(
+                iteration, x, residual=residual,
+                metadata={"state": "post_update", "checked": False, "non_finite_field": "relative_iterate_change"}
+            )
+            break
+        if not _finite_scalar(residual_value):
+            recorder.mark_numerical_error("non_finite_discrepancy")
+            recorder.record(
+                iteration, x, residual=residual,
+                metadata={"state": "post_update", "checked": False, "non_finite_field": "discrepancy"}
+            )
+            break
+        criteria, native_tolerance = _row_action_criteria(
+            control, residual_value, change, epoch=False
+        )
         decision = monitor.observe(iteration, criteria=criteria, relative_change=change, monitor_value=residual_value)
         converged = decision.converged if _policy_active(control) else _tolerance_reached(control, residual=residual_value, change=change)
         terminal_status, terminal_reason = _policy_status(decision) if _policy_active(control) else (None, None)
-        actual = iteration
+        objective = _objective(residual)
+        if not _finite_scalar(objective):
+            recorder.mark_numerical_error("non_finite_objective")
+            recorder.record(
+                iteration, x, residual=residual,
+                metadata={"state": "post_update", "checked": decision.checked, "non_finite_field": "objective"}
+            )
+            break
         if not _safe_record(
             recorder,
             iteration,
             x,
             residual=residual,
-            objective=_objective(residual),
+            objective=objective,
             algorithm_residual=residual_value,
             step_size=step,
             stopping_candidate=converged,
@@ -337,15 +817,61 @@ def solve_landweber_detailed(
             criteria=criteria,
             native_criterion_name="relative_iterate_change",
             native_criterion_value=change,
-            native_criterion_threshold=control.relative_iterate_tolerance,
-            metadata={"state": "post_update"},
+            native_criterion_threshold=native_tolerance,
+            metadata={"state": "post_update", "checked": decision.checked, "unit": "iterations"},
         ):
             cancelled = True
             break
         if terminal_status or (converged and control.stop_on_convergence):
             break
-    final_residual_tensor = prediction - measurement
+    if recorder.numerical_failure:
+        return recorder.finish(
+            x,
+            actual_iterations=actual,
+            status="numerical_error",
+            stopping_reason=recorder.numerical_error_reason or "non_finite_solver_state",
+            predicted_measurement=prediction,
+            metadata={"criterion": "normalized_data_residual_and_relative_iterate_change", **parameters, **norm_estimates},
+        )
+    optimization_after = _operator_stats(operator)
+    endpoint_prediction = prediction
+    verification_calls: dict[str, int] = {}
+    endpoint_confirmation: dict[str, Any] = {"requested": False}
+    if _policy_active(control) and not cancelled:
+        endpoint_before = _operator_stats(operator)
+        endpoint_prediction = _finish_prediction(operator, x)
+        verification_calls = _operator_call_delta(endpoint_before, _operator_stats(operator))
+        if not _finite_tensor(endpoint_prediction):
+            recorder.mark_numerical_error("non_finite_endpoint_prediction")
+        else:
+            endpoint_residual = endpoint_prediction - measurement
+            endpoint_value = _normalized(_global_norm(endpoint_residual), measurement_norm)
+            trajectory_value = _normalized(_global_norm(prediction - measurement), measurement_norm)
+            endpoint_confirmation = {
+                "requested": True,
+                "independent": True,
+                "trajectory_normalized_data_residual": trajectory_value,
+                "endpoint_normalized_data_residual": endpoint_value,
+                "trajectory_endpoint_consistent": (
+                    abs(trajectory_value - endpoint_value)
+                    <= 1e-7 + 1e-4 * max(abs(trajectory_value), abs(endpoint_value))
+                ),
+            }
+    if recorder.numerical_failure:
+        return recorder.finish(
+            x,
+            actual_iterations=actual,
+            status="numerical_error",
+            stopping_reason=recorder.numerical_error_reason or "non_finite_solver_state",
+            predicted_measurement=endpoint_prediction,
+            resources={
+                "optimization_" + key: value for key, value in _operator_call_delta(optimization_before, optimization_after).items()
+            } | {"verification_" + key: value for key, value in verification_calls.items()},
+            metadata={"criterion": "normalized_data_residual_and_relative_iterate_change", "endpoint_confirmation": endpoint_confirmation, **parameters, **norm_estimates},
+        )
+    final_residual_tensor = endpoint_prediction - measurement
     final_residual = _normalized(_global_norm(final_residual_tensor), measurement_norm)
+    final_objective = _objective(final_residual_tensor)
     status = terminal_status or _finish_status(
         actual=actual,
         limit=limit,
@@ -365,9 +891,18 @@ def solve_landweber_detailed(
             "maximum_iterations_reached"
         ),
         final_residual=final_residual,
-        final_objective=_objective(final_residual_tensor),
-        predicted_measurement=prediction,
-        metadata={"criterion": "normalized_data_residual_or_relative_iterate_change", "step_size": step},
+        final_objective=final_objective,
+        predicted_measurement=endpoint_prediction,
+        resources={
+            "optimization_" + key: value for key, value in _operator_call_delta(optimization_before, optimization_after).items()
+        } | {"verification_" + key: value for key, value in verification_calls.items()},
+        metadata={
+            "criterion": "normalized_data_residual_and_relative_iterate_change",
+            "endpoint_confirmation": endpoint_confirmation,
+            "max_iterations": limit,
+            **parameters,
+            **norm_estimates,
+        },
     )
 
 
@@ -661,59 +1196,163 @@ def _subset_solver_detailed(
 ) -> SolveResult:
     require_linear_operator(operator, algorithm)
     batch = validate_measurement_shape(measurement, operator, algorithm)
+    parameter_errors = _common_parameter_errors(num_iterations, min_value, max_value)
+    if isinstance(relaxation, bool) or not isinstance(relaxation, (int, float)) or not _finite_scalar(relaxation):
+        parameter_errors.append("relaxation must be a finite number")
+    elif not 0.0 < float(relaxation) <= 1.0:
+        parameter_errors.append("relaxation must satisfy 0 < relaxation <= 1")
+    if isinstance(eps, bool) or not isinstance(eps, (int, float)) or not _finite_scalar(eps) or float(eps) <= 0.0:
+        parameter_errors.append("eps must be a finite positive number")
+    if block_size is not None and (
+        isinstance(block_size, bool) or not isinstance(block_size, int) or block_size <= 0
+    ):
+        parameter_errors.append("block_size must be a positive integer or None")
+    elif block_size is not None and int(block_size) > int(operator.range_shape[-2]):
+        parameter_errors.append(
+            "block_size must be no greater than the number of views "
+            f"({int(operator.range_shape[-2])})"
+        )
+    subset_spec: list[tuple[int, ...]] | None = None
+    if subset_indices is not None:
+        try:
+            subset_spec = [tuple(int(value) for value in indices) for indices in subset_indices]
+        except (TypeError, ValueError):
+            parameter_errors.append("subset_indices must be an iterable of integer index groups")
+    if parameter_errors:
+        return _parameter_failure_result(
+            algorithm, measurement, operator, x_init=x_init, errors=parameter_errors,
+            max_iterations=None,
+            parameters={
+                "num_iterations": num_iterations,
+                "block_size": block_size,
+                "subset_indices": subset_spec,
+                "relaxation": relaxation,
+                "eps": eps,
+                "min_value": min_value,
+                "max_value": max_value,
+            },
+        )
     control = resolve_control(control, default_iterations=int(num_iterations), default_tolerance=1e-5, callback=callback)
     limit = min(int(num_iterations), int(control.max_iterations or num_iterations))
+    parameters = {
+        "num_iterations": int(num_iterations),
+        "block_size": block_size,
+        "subset_indices": subset_spec,
+        "order_strategy": order_strategy,
+        "seed": seed,
+        "relaxation": float(relaxation),
+        "eps": float(eps),
+        "min_value": min_value,
+        "max_value": max_value,
+    }
+    if not _finite_tensor(measurement):
+        return _numerical_result(
+            algorithm, measurement, operator, x_init=x_init, max_iterations=limit,
+            reason="non_finite_measurement", parameters=parameters,
+        )
     x = prepare_initial_image(measurement, operator, x_init=x_init, initial_value=0.0)
+    if not _finite_tensor(x):
+        return _numerical_result(
+            algorithm, measurement, operator, x_init=x_init, max_iterations=limit,
+            reason="non_finite_initial_reconstruction", parameters=parameters,
+        )
     recorder = IterationRecorder(control, measurement, operator, algorithm=algorithm)
     monitor = ConsecutiveStoppingMonitor(control)
     recorder.set_initial(x)
-    subsets = make_angle_subsets(
-        num_angles=int(operator.range_shape[-2]),
-        block_size=block_size,
-        subset_indices=subset_indices,
-        order_strategy=order_strategy,
-        seed=seed,
-        device=measurement.device,
-    )
+    try:
+        subsets = make_angle_subsets(
+            num_angles=int(operator.range_shape[-2]),
+            block_size=block_size,
+            subset_indices=subset_spec,
+            order_strategy=order_strategy,
+            seed=seed,
+            device=measurement.device,
+        )
+    except (TypeError, ValueError) as error:
+        return _parameter_failure_result(
+            algorithm, measurement, operator, x_init=x_init, errors=[str(error)],
+            max_iterations=limit, parameters=parameters,
+        )
     domain = (batch, *tuple(operator.domain_shape))
     measurement_norm = _global_norm(measurement)
+    optimization_before = _operator_stats(operator)
     actual = 0
     converged = False
     cancelled = False
     terminal_status = None
     terminal_reason = None
     prediction = torch.zeros_like(measurement)
+    native_tolerance = _native_tolerance(control)
+    partial_epoch: int | None = None
+    subset_updates = 0
     for epoch in range(1, limit + 1):
         previous = x
+        epoch_complete = True
         for index, indices in enumerate(subsets):
             sub_operator = make_subset_operator(operator, indices)
             y_sub = select_measurement_subset(measurement, indices)
             ones_range = torch.ones((batch, *tuple(sub_operator.range_shape)), device=measurement.device, dtype=measurement.dtype)
             row_weight = sub_operator.forward(torch.ones(domain, device=measurement.device, dtype=measurement.dtype))
             row_weight = torch.where(row_weight.abs() < float(eps), torch.full_like(row_weight, float("inf")), row_weight).reciprocal()
+            if not _finite_tensor(row_weight):
+                recorder.mark_numerical_error("non_finite_row_normalization")
+                epoch_complete = False
+                break
             column_weight = sub_operator.adjoint(ones_range)
             column_weight = torch.where(column_weight.abs() < float(eps), torch.full_like(column_weight, float("inf")), column_weight).reciprocal()
+            if not _finite_tensor(column_weight):
+                recorder.mark_numerical_error("non_finite_column_normalization")
+                epoch_complete = False
+                break
             residual = sub_operator.forward(x) - y_sub
+            if not _finite_tensor(residual):
+                recorder.mark_numerical_error("non_finite_residual")
+                epoch_complete = False
+                break
             x = x - float(relaxation) * column_weight * sub_operator.adjoint(row_weight * residual)
             x = apply_box_constraints(x, min_value=min_value, max_value=max_value)
+            subset_updates += 1
+            if not _finite_tensor(x):
+                recorder.mark_numerical_error("non_finite_reconstruction")
+                epoch_complete = False
+                break
+        if not epoch_complete:
+            partial_epoch = epoch
+            break
         prediction = _finish_prediction(operator, x)
         residual = prediction - measurement
+        if not _finite_tensor(prediction) or not _finite_tensor(residual):
+            recorder.mark_numerical_error("non_finite_epoch_prediction")
+            partial_epoch = epoch
+            break
         change = _relative_change(previous, x)
         residual_value = _normalized(_global_norm(residual), measurement_norm)
-        criteria = {
-            "discrepancy": residual_value <= float(control.discrepancy_target or -1.0),
-            "relative_epoch_change": change <= float(control.relative_iterate_tolerance or -1.0),
-        }
+        if not _finite_scalar(change):
+            recorder.mark_numerical_error("non_finite_relative_epoch_change")
+            partial_epoch = epoch
+            break
+        if not _finite_scalar(residual_value):
+            recorder.mark_numerical_error("non_finite_discrepancy")
+            partial_epoch = epoch
+            break
+        criteria, native_tolerance = _row_action_criteria(
+            control, residual_value, change, epoch=True
+        )
         decision = monitor.observe(epoch, criteria=criteria, relative_change=change, monitor_value=residual_value)
         converged = decision.converged if _policy_active(control) else _tolerance_reached(control, residual=residual_value, change=change, require_both=True)
         terminal_status, terminal_reason = _policy_status(decision) if _policy_active(control) else (None, None)
         actual = epoch
+        objective = _objective(residual)
+        if not _finite_scalar(objective):
+            recorder.mark_numerical_error("non_finite_objective")
+            partial_epoch = epoch
+            break
         if not _safe_record(
             recorder,
             epoch,
             x,
             residual=residual,
-            objective=_objective(residual),
+            objective=objective,
             algorithm_residual=residual_value,
             relaxation=float(relaxation),
             stopping_candidate=converged,
@@ -721,15 +1360,85 @@ def _subset_solver_detailed(
             criteria=criteria,
             native_criterion_name="relative_epoch_change",
             native_criterion_value=change,
-            native_criterion_threshold=control.relative_iterate_tolerance,
+            native_criterion_threshold=native_tolerance,
             epoch=epoch,
             subset_count=len(subsets),
-            metadata={"complete_sweep": True, "subset_sizes": [int(item.numel()) for item in subsets]},
+            metadata={
+                "complete_sweep": True,
+                "epoch_boundary": True,
+                "checked": decision.checked,
+                "unit": "epochs",
+                "subset_sizes": [int(item.numel()) for item in subsets],
+            },
         ):
             cancelled = True
             break
         if terminal_status or (converged and control.stop_on_convergence):
             break
+    if recorder.numerical_failure:
+        return recorder.finish(
+            x,
+            actual_iterations=actual,
+            status="numerical_error",
+            stopping_reason=recorder.numerical_error_reason or "non_finite_solver_state",
+            predicted_measurement=prediction,
+            metadata={
+                "criterion": "complete_epoch_discrepancy_and_relative_epoch_change",
+                "iteration_unit": "epochs",
+                "subset_count": len(subsets),
+                "internal_subset_updates": subset_updates,
+                "partial_epoch": partial_epoch,
+                **parameters,
+            },
+        )
+    optimization_after = _operator_stats(operator)
+    endpoint_prediction = prediction
+    verification_calls: dict[str, int] = {}
+    endpoint_confirmation: dict[str, Any] = {"requested": False}
+    if _policy_active(control) and not cancelled:
+        endpoint_before = _operator_stats(operator)
+        endpoint_prediction = _finish_prediction(operator, x)
+        verification_calls = _operator_call_delta(endpoint_before, _operator_stats(operator))
+        if not _finite_tensor(endpoint_prediction):
+            recorder.mark_numerical_error("non_finite_endpoint_prediction")
+        else:
+            endpoint_residual = endpoint_prediction - measurement
+            endpoint_value = _normalized(_global_norm(endpoint_residual), measurement_norm)
+            trajectory_value = _normalized(_global_norm(prediction - measurement), measurement_norm)
+            endpoint_confirmation = {
+                "requested": True,
+                "independent": True,
+                "complete_epoch": True,
+                "trajectory_normalized_data_residual": trajectory_value,
+                "endpoint_normalized_data_residual": endpoint_value,
+                "trajectory_endpoint_consistent": (
+                    abs(trajectory_value - endpoint_value)
+                    <= 1e-7 + 1e-4 * max(abs(trajectory_value), abs(endpoint_value))
+                ),
+            }
+    if recorder.numerical_failure:
+        return recorder.finish(
+            x,
+            actual_iterations=actual,
+            status="numerical_error",
+            stopping_reason=recorder.numerical_error_reason or "non_finite_solver_state",
+            predicted_measurement=endpoint_prediction,
+            resources={
+                "optimization_" + key: value for key, value in _operator_call_delta(optimization_before, optimization_after).items()
+            } | {"verification_" + key: value for key, value in verification_calls.items()},
+            metadata={
+                "criterion": "complete_epoch_discrepancy_and_relative_epoch_change",
+                "endpoint_confirmation": endpoint_confirmation,
+                "iteration_unit": "epochs",
+                "subset_count": len(subsets),
+                "internal_subset_updates": subset_updates,
+                "partial_epoch": partial_epoch,
+                **parameters,
+            },
+        )
+    final_residual_tensor = endpoint_prediction - measurement
+    final_residual = _normalized(_global_norm(final_residual_tensor), measurement_norm)
+    final_objective = _objective(final_residual_tensor)
     status = terminal_status or _finish_status(
         actual=actual,
         limit=limit,
@@ -748,10 +1457,23 @@ def _subset_solver_detailed(
             "callback_cancelled" if cancelled else
             "maximum_epochs_reached"
         ),
-        final_residual=_normalized(_global_norm(prediction - measurement), measurement_norm),
-        final_objective=_objective(prediction - measurement),
-        predicted_measurement=prediction,
-        metadata={"complete_sweep_count": actual, "subset_count": len(subsets), "iteration_unit": "epochs", "internal_subset_updates": actual * len(subsets)},
+        final_residual=final_residual,
+        final_objective=final_objective,
+        predicted_measurement=endpoint_prediction,
+        resources={
+            "optimization_" + key: value for key, value in _operator_call_delta(optimization_before, optimization_after).items()
+        } | {"verification_" + key: value for key, value in verification_calls.items()},
+        metadata={
+            "complete_sweep_count": actual,
+            "subset_count": len(subsets),
+            "iteration_unit": "epochs",
+            "internal_subset_updates": subset_updates,
+            "partial_epoch": partial_epoch,
+            "endpoint_confirmation": endpoint_confirmation,
+            "criterion": "complete_epoch_discrepancy_and_relative_epoch_change",
+            "max_iterations": limit,
+            **parameters,
+        },
     )
 
 
