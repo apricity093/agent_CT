@@ -371,6 +371,8 @@ class CGLSSolver(InverseProblemSolver):
             x_init=x_init,
             min_value=kwargs.pop("min_value", self.min_value),
             max_value=kwargs.pop("max_value", self.max_value),
+            operator_norm_estimate=kwargs.pop("operator_norm_estimate", None),
+            operator_norm_squared=kwargs.pop("operator_norm_squared", None),
             control=control, callback=callback,
         )
 
@@ -412,6 +414,8 @@ class LSQRSolver(InverseProblemSolver):
             x_init=x_init,
             min_value=kwargs.pop("min_value", self.min_value),
             max_value=kwargs.pop("max_value", self.max_value),
+            operator_norm_estimate=kwargs.pop("operator_norm_estimate", None),
+            operator_norm_squared=kwargs.pop("operator_norm_squared", None),
             control=control, callback=callback,
         )
 

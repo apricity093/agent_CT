@@ -737,6 +737,64 @@ def _endpoint_box_constraints(
     return value.clamp(minimum, maximum)
 
 
+def _endpoint_operator_norm_estimate(
+    operator: Any,
+    reconstruction: torch.Tensor,
+    *,
+    supplied: float | None = None,
+    supplied_squared: float | None = None,
+    power_iterations: int = 8,
+) -> tuple[float, str]:
+    """Resolve ``||A||`` for an independently recomputed Krylov metric."""
+
+    if supplied is not None:
+        value = float(supplied)
+        source = "caller"
+    elif supplied_squared is not None:
+        squared = float(supplied_squared)
+        if not isfinite(squared) or squared < 0.0:
+            raise ValueError("operator_norm_squared must be finite and nonnegative")
+        value = squared ** 0.5
+        source = "caller_squared"
+    else:
+        iterations = int(power_iterations)
+        if iterations <= 0:
+            raise ValueError("power_iterations must be positive")
+        domain_shape = tuple(int(item) for item in operator.domain_shape)
+        sample_size = 1
+        for item in domain_shape:
+            sample_size *= item
+        seed = torch.linspace(
+            0.5,
+            1.5,
+            steps=sample_size,
+            dtype=reconstruction.dtype,
+            device=reconstruction.device,
+        ).reshape((1, *domain_shape))
+        vector = seed / seed.reshape(seed.shape[0], -1).norm(dim=1).clamp_min(1e-12).reshape(
+            (1,) + (1,) * len(domain_shape)
+        )
+        for _ in range(iterations):
+            image = operator.adjoint(operator.forward(vector))
+            if not _endpoint_finite_tensor(image):
+                raise ValueError("operator norm power iteration is non-finite")
+            norm = image.reshape(image.shape[0], -1).norm(dim=1)
+            if bool(torch.all(norm <= 1e-12)):
+                return 0.0, f"power_iteration_{iterations}"
+            vector = image / norm.clamp_min(1e-12).reshape(
+                (image.shape[0],) + (1,) * len(domain_shape)
+            )
+        image = operator.adjoint(operator.forward(vector))
+        if not _endpoint_finite_tensor(image):
+            raise ValueError("operator norm power iteration is non-finite")
+        squared = (vector * image).reshape(vector.shape[0], -1).sum(dim=1).clamp_min(0.0).max()
+        value = float(squared.item()) ** 0.5
+        source = f"power_iteration_{iterations}"
+    if not isfinite(value) or value < 0.0:
+        raise ValueError("operator_norm_estimate must be finite and nonnegative")
+    return value, source
+
+
 def _balanced_endpoint_subsets(num_angles: int, count: int) -> list[tuple[int, ...]]:
     count = int(count)
     if count <= 0 or count > int(num_angles):
@@ -924,7 +982,9 @@ def confirm_endpoint(
     iterations: int,
     max_iterations: int | None,
     parameters: Mapping[str, Any],
-    operator_norm_estimate: float,
+    operator_norm_estimate: float | None = None,
+    operator_norm_squared: float | None = None,
+    regularization_operator: Any | None = None,
 ) -> dict[str, Any]:
     """Independently recompute final evidence and audit the patience window."""
 
@@ -989,6 +1049,12 @@ def confirm_endpoint(
             endpoint_counter_before, _endpoint_operator_stats(operator)
         )
         return result
+    if operator_norm_estimate is None and parameters.get("operator_norm_estimate") is not None:
+        operator_norm_estimate = parameters.get("operator_norm_estimate")
+    if operator_norm_squared is None and parameters.get("operator_norm_squared") is not None:
+        operator_norm_squared = parameters.get("operator_norm_squared")
+    if regularization_operator is None and parameters.get("regularization_operator") is not None:
+        regularization_operator = parameters.get("regularization_operator")
     raw_discrepancy_target = (policy.get("effective", {}) or {}).get(
         "discrepancy_target", policy.get("discrepancy_target", float("inf"))
     )
@@ -1014,6 +1080,8 @@ def confirm_endpoint(
     native_details: dict[str, Any] = {}
     native_recomputation_error: str | None = None
     native_endpoint_consistent: bool | None = None
+    objective_endpoint_consistent: bool | None = None
+    endpoint_norm_source: str | None = None
     if algorithm in {"sirt", "landweber", "sart", "os_sart"} and finite_inputs:
         try:
             native_name, native_value, native_details = _row_action_endpoint_native(
@@ -1042,22 +1110,90 @@ def confirm_endpoint(
             + relative_tolerance * max(abs(float(native_trajectory_value)), abs(float(native_value)))
         )
     if algorithm in {"cgls", "lsqr"}:
-        gradient = operator.adjoint(native_residual) if native_residual is not None else torch.full_like(reconstruction, float("nan"))
         native_name = "normalized_normal_residual"
-        native_value = float(gradient.norm().item()) / max(float(operator_norm_estimate) * float(native_residual.norm().item()), 1e-12)
+        if finite_inputs and native_residual is not None:
+            try:
+                raw_power_iterations = policy.get("power_iterations", 8)
+                endpoint_power_iterations = (
+                    8 if raw_power_iterations is None else int(raw_power_iterations)
+                )
+                endpoint_norm, endpoint_norm_source = _endpoint_operator_norm_estimate(
+                    operator,
+                    reconstruction,
+                    supplied=operator_norm_estimate,
+                    supplied_squared=operator_norm_squared,
+                    power_iterations=endpoint_power_iterations,
+                )
+                damping = float(parameters.get("damping", 0.0) or 0.0) if algorithm == "lsqr" else 0.0
+                gradient = operator.adjoint(native_residual)
+                denominator = endpoint_norm * float(native_residual.norm().item())
+                if damping > 0.0:
+                    gradient = gradient + damping * damping * reconstruction
+                    denominator += damping * damping * float(reconstruction.norm().item())
+                native_value = float(gradient.norm().item()) / max(denominator, 1e-12)
+                result["normal_residual_denominator"] = denominator
+                result["operator_norm_estimate"] = endpoint_norm
+                result["operator_norm_squared"] = endpoint_norm * endpoint_norm
+                result["operator_norm_estimator"] = endpoint_norm_source
+                result["normal_residual_formula"] = (
+                    "||A^T(Ax-b) + damping^2*x||_2 / "
+                    "max(||A||_estimate*||Ax-b||_2 + damping^2*||x||_2, eps)"
+                    if damping > 0.0 else
+                    "||A^T(Ax-b)||_2 / max(||A||_estimate*||Ax-b||_2, eps)"
+                )
+            except OperatorBudgetExceeded:
+                raise
+            except Exception as error:
+                native_recomputation_error = str(error)
+                native_value = float("nan")
+        else:
+            native_value = float("nan")
         change = rows[-1].get("relative_iterate_change") if rows else None
-        native_ok = native_value <= normal_tol or (change is not None and float(change) <= iterate_tol)
+        native_ok = (
+            native_value is not None
+            and isfinite(float(native_value))
+            and (
+                float(native_value) <= normal_tol
+                or (change is not None and float(change) <= iterate_tol)
+            )
+        )
     elif algorithm == "tikhonov":
         strength = float(parameters.get("reg_strength", 0.0))
-        gradient = (
-            operator.adjoint(native_residual) + strength * reconstruction
-            if native_residual is not None else torch.full_like(reconstruction, float("nan"))
-        )
-        rhs = operator.adjoint(native_measurement)
         native_name = "normalized_regularized_normal_residual"
-        native_value = float(gradient.norm().item()) / max(float(rhs.norm().item()) + strength * float(reconstruction.norm().item()), 1e-12)
+        if finite_inputs and native_residual is not None:
+            try:
+                from .regularizers import TikhonovRegularizer
+
+                regularizer = TikhonovRegularizer(regularization_operator)
+                regularization_gradient = regularizer.gradient(reconstruction)
+                gradient = operator.adjoint(native_residual) + strength * regularization_gradient
+                rhs = operator.adjoint(native_measurement)
+                denominator = float(rhs.norm().item()) + strength * float(regularization_gradient.norm().item())
+                native_value = float(gradient.norm().item()) / max(denominator, 1e-12)
+                result["regularized_normal_residual_denominator"] = denominator
+                result["regularized_normal_residual_formula"] = (
+                    "||A^T(Ax-b) + lambda L^T Lx||_2 / "
+                    "max(||A^T b||_2 + lambda ||L^T Lx||_2, eps)"
+                )
+                result["composite_objective"] = float(
+                    0.5 * native_residual.square().sum().item()
+                    + strength * regularizer.value(reconstruction).sum().item()
+                )
+            except OperatorBudgetExceeded:
+                raise
+            except Exception as error:
+                native_recomputation_error = str(error)
+                native_value = float("nan")
+        else:
+            native_value = float("nan")
         change = rows[-1].get("relative_iterate_change") if rows else None
-        native_ok = native_value <= normal_tol and change is not None and float(change) <= iterate_tol
+        native_ok = (
+            native_value is not None
+            and isfinite(float(native_value))
+            and float(native_value) <= normal_tol
+            and change is not None
+            and float(change) <= iterate_tol
+        )
     elif algorithm == "tv_fista":
         from .regularizers import TVRegularizer
         tv = TVRegularizer(
@@ -1065,18 +1201,62 @@ def confirm_endpoint(
             num_iterations=int(parameters.get("tv_num_iterations", 50)),
             tolerance=float(parameters.get("tv_tolerance", 1e-5)),
         )
-        step = float((rows[-1].get("step_size") if rows else None) or parameters.get("step_size") or 1.0)
-        gradient = operator.adjoint(native_residual) if native_residual is not None else torch.full_like(reconstruction, float("nan"))
-        prox = tv.proximal(reconstruction - step * gradient, step * float(parameters.get("reg_strength", 0.0)))
+        raw_step = (rows[-1].get("step_size") if rows else None)
+        if raw_step is None:
+            raw_step = parameters.get("step_size")
+        step = float(raw_step if raw_step is not None else 1.0)
+        if not isfinite(step) or step <= 0.0:
+            native_recomputation_error = "step_size must be finite and positive"
+            native_value = float("nan")
+            objective_change = None
+        else:
+            gradient = operator.adjoint(native_residual) if native_residual is not None else torch.full_like(reconstruction, float("nan"))
+            prox = tv.proximal(reconstruction - step * gradient, step * float(parameters.get("reg_strength", 0.0)))
+            mapping = (reconstruction - prox) / step
+            mapping_denominator = max(float(reconstruction.norm().item()) / step, 1e-12)
+            native_value = float(mapping.norm().item()) / mapping_denominator
+            result["prox_gradient_mapping_denominator"] = mapping_denominator
+            result["prox_gradient_mapping_formula"] = (
+                "G_t(x) = (x - prox_(t*lambda*TV)(x - t*A^T(Ax-b))) / t"
+            )
+            composite_objective = (
+                float(0.5 * residual.square().sum().item() + float(parameters.get("reg_strength", 0.0)) * tv.value(reconstruction).sum().item())
+                if residual is not None else None
+            )
+            result["composite_objective"] = composite_objective
+            objective_values = [
+                float(row["objective"])
+                for row in rows
+                if row.get("objective") is not None and isfinite(float(row["objective"]))
+            ]
+            last_metadata = (rows[-1].get("metadata") or {}) if rows else {}
+            returned_state = last_metadata.get("objective_state") == "returned" and last_metadata.get("mapping_state") == "returned"
+            if composite_objective is not None and objective_values and returned_state:
+                objective_endpoint_consistent = abs(objective_values[-1] - composite_objective) <= (
+                    1e-7 + 1e-4 * max(abs(objective_values[-1]), abs(composite_objective))
+                )
+            if len(objective_values) >= 2 and returned_state:
+                objective_change = abs(objective_values[-1] - objective_values[-2]) / max(abs(objective_values[-2]), 1e-12)
+            elif last_metadata.get("previous_composite_objective") is not None and returned_state:
+                previous = float(last_metadata["previous_composite_objective"])
+                objective_change = abs(objective_values[-1] - previous) / max(abs(previous), 1e-12) if objective_values else None
+            elif returned_state:
+                objective_change = last_metadata.get("relative_composite_objective_change")
+            else:
+                objective_change = None
+            result["returned_state_trajectory"] = returned_state
+
         native_name = "normalized_prox_gradient_mapping"
-        native_value = float(((reconstruction - prox) / step).norm().item()) / max(float(reconstruction.norm().item()) / step, 1e-12)
-        objective_change = ((rows[-1].get("metadata") or {}).get("relative_composite_objective_change") if rows else None)
-        native_ok = native_value <= prox_tol and objective_change is not None and float(objective_change) <= objective_tol
-        result["relative_composite_objective_change"] = objective_change
-        result["composite_objective"] = (
-            float(0.5 * residual.square().sum().item() + float(parameters.get("reg_strength", 0.0)) * tv.value(reconstruction).sum().item())
-            if residual is not None else None
+        native_ok = (
+            native_value is not None
+            and isfinite(float(native_value))
+            and float(native_value) <= prox_tol
+            and objective_change is not None
+            and isfinite(float(objective_change))
+            and float(objective_change) <= objective_tol
+            and bool(result.get("returned_state_trajectory", False))
         )
+        result["relative_composite_objective_change"] = objective_change
     if native_value is not None and not isfinite(float(native_value)):
         finite = False
         result["reasons"].append("non_finite_native_criterion")
@@ -1084,6 +1264,18 @@ def confirm_endpoint(
         result["native_recomputation_error"] = native_recomputation_error
     if native_details:
         result["native_recomputation"] = native_details
+    if (
+        algorithm in {"cgls", "lsqr", "tikhonov", "tv_fista"}
+        and native_trajectory_value is not None
+        and native_value is not None
+        and isfinite(float(native_trajectory_value))
+        and isfinite(float(native_value))
+    ):
+        native_endpoint_consistent = abs(
+            float(native_trajectory_value) - float(native_value)
+        ) <= absolute_tolerance + relative_tolerance * max(
+            abs(float(native_trajectory_value)), abs(float(native_value))
+        )
     discrepancy_ok = (
         not discrepancy_available
         or bool(
@@ -1100,6 +1292,7 @@ def confirm_endpoint(
         "native_criterion_satisfied": native_ok,
         "trajectory_native_criterion_value": native_trajectory_value,
         "trajectory_endpoint_native_consistent": native_endpoint_consistent,
+        "objective_endpoint_consistent": objective_endpoint_consistent,
     })
     patience = int(policy.get("patience", 5))
     checked = [
@@ -1174,6 +1367,8 @@ def confirm_endpoint(
             result["reasons"].append("endpoint_native_recomputation_failed")
         if native_endpoint_consistent is False:
             result["reasons"].append("trajectory_endpoint_native_metric_mismatch")
+        if algorithm == "tv_fista" and objective_endpoint_consistent is not True:
+            result["reasons"].append("trajectory_endpoint_objective_mismatch")
         if endpoint_cfg.get("require_trajectory_consistency", True) and not trajectory_endpoint_consistent:
             result["reasons"].append("trajectory_endpoint_metric_mismatch")
     allowed = {

@@ -788,7 +788,7 @@ SOLVER_SPECS: dict[str, CTAlgorithmSpec] = {
         _common_parameters(10) + (_p("tol", minimum=0.0, default=1e-6, tunable=True, description="Residual tolerance."),),
         sparse_view=True, limited_angle=True,
         failure_modes=("ill_conditioning", "normal_equation_breakdown"),
-        convergence_criteria=("normal_residual", "data_residual", "relative_iterate_change"),
+        convergence_criteria=("normalized_normal_residual", "data_residual", "relative_iterate_change"),
     ),
     "lsqr": _algorithm(
         "lsqr", "LSQR", (2,), ("parallel_2d",), "Golub-Kahan LSQR.",
@@ -798,7 +798,7 @@ SOLVER_SPECS: dict[str, CTAlgorithmSpec] = {
             _p("btol", minimum=0.0, default=1e-6, tunable=True),
         ), sparse_view=True, limited_angle=True,
         failure_modes=("ill_conditioning", "premature_tolerance"),
-        convergence_criteria=("data_residual", "relative_iterate_change"),
+        convergence_criteria=("normalized_normal_residual", "data_residual", "relative_iterate_change"),
     ),
     "sart": _algorithm(
         "sart", "SART", (2,), ("parallel_2d",), "Ordered row-action reconstruction.",
@@ -877,7 +877,7 @@ SOLVER_SPECS: dict[str, CTAlgorithmSpec] = {
         ), family="variational", objective="quadratic_regularized_least_squares",
         regularizers=("tikhonov",), sparse_view=True, limited_angle=True,
         failure_modes=("normal_equation_breakdown", "over_smoothing"),
-        convergence_criteria=("normal_residual", "data_residual", "relative_iterate_change"),
+        convergence_criteria=("normalized_regularized_normal_residual", "data_residual", "relative_iterate_change"),
     ),
     "tv_fista": _algorithm(
         "tv_fista", "TV-FISTA", (2,), ("parallel_2d",), "TV-regularized FISTA.",
@@ -893,7 +893,7 @@ SOLVER_SPECS: dict[str, CTAlgorithmSpec] = {
         regularizers=("tv",), sparse_view=True, limited_angle=True,
         requires_proximal=True,
         failure_modes=("step_size_instability", "proximal_budget", "over_smoothing"),
-        convergence_criteria=("objective", "prox_mapping", "relative_iterate_change"),
+        convergence_criteria=("composite_objective", "prox_gradient_mapping", "relative_iterate_change"),
     ),
     "fdk": _algorithm(
         "fdk", "FDK", (3,), ("cone_3d",), "Cone-beam Feldkamp-Davis-Kress reconstruction.",

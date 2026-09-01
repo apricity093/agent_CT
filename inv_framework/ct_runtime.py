@@ -1142,13 +1142,18 @@ def run_case(
                 "divergence_relative_increase_tolerance": float(divergence_policy.get("relative_increase_tolerance", 1e-4)),
                 "divergence_patience": int(divergence_policy.get("patience", 5)),
             }
+        operator_norm_for_diagnostics = (
+            1.0
+            if operator_norm_squared is None
+            else math.sqrt(float(operator_norm_squared))
+        )
         control = SolveControl(
             max_iterations=max(1, requested_iterations or 1),
             tolerance=detail_tolerance,
             metadata={
                 "source": "ct_runtime", "solver": name,
                 "effective_stopping_policy": effective_stopping_policy,
-                "operator_norm_estimate": math.sqrt(float(operator_norm_squared or 1.0)),
+                "operator_norm_estimate": operator_norm_for_diagnostics,
             },
             max_trajectory_points=max(200, requested_iterations) if requested_stopping_policy is not None else 200,
             **control_kwargs,
@@ -1261,7 +1266,8 @@ def run_case(
             iterations=solve_result.actual_iterations,
             max_iterations=int(max_iterations) if max_iterations is not None else (requested_iterations or None),
             parameters=validation.parameters,
-            operator_norm_estimate=math.sqrt(float(operator_norm_squared or 1.0)),
+            operator_norm_estimate=operator_norm_for_diagnostics,
+            regularization_operator=getattr(solver, "regularization_operator", None),
         ) if requested_stopping_policy is not None else {
             "schema_version": "ct.endpoint_confirmation.v1", "status": "not_requested", "passed": True,
             "finite": bool(torch.isfinite(reconstruction).all()),

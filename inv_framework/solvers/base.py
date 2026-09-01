@@ -433,7 +433,13 @@ class IterationRecorder:
         # met a stopping criterion.  Use the recorded scalar trajectory only
         # to detect clear divergence/stagnation; never turn a budget stop
         # into a convergence claim.
-        if self.records and effective_status in {"max_iterations", "partial"}:
+        # Krylov residuals and accelerated variational objectives are not
+        # required to be monotone at every iteration.  Their native monitors
+        # already apply the configured persistent-worsening policy; applying
+        # the generic trajectory classifier here would turn an admissible
+        # non-monotone segment into a false divergence.
+        classifier_safe_algorithms = {"sirt", "landweber", "sart", "os_sart", "mlem", "osem"}
+        if self.records and effective_status in {"max_iterations", "partial"} and self.algorithm in classifier_safe_algorithms:
             try:
                 from ..convergence import classify_trajectory
 
