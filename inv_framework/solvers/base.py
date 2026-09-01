@@ -18,6 +18,13 @@ from typing import Any, Callable, Iterable, Mapping
 
 import torch
 
+from ..convergence import (
+    ConvergenceStatus,
+    _json_safe,
+    canonicalize_status,
+    sample_trajectory,
+    status_reason_class,
+)
 from ..operators.base import ForwardOperator
 
 
@@ -123,7 +130,7 @@ class IterationRecord:
         return self.algorithm_residual
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        return _json_safe({
             "iteration": int(self.iteration),
             "epoch": self.epoch,
             "data_residual": self.data_residual,
@@ -148,7 +155,7 @@ class IterationRecord:
             "subset": self.subset,
             "subset_count": self.subset_count,
             "metadata": dict(self.metadata),
-        }
+        })
 
 
 @dataclass(frozen=True)
@@ -167,6 +174,28 @@ class SolveResult:
     predicted_measurement: torch.Tensor | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        metadata = dict(self.metadata)
+        algorithm = metadata.get("algorithm")
+        raw = self.status.value if isinstance(self.status, ConvergenceStatus) else str(self.status)
+        normalized = canonicalize_status(
+            raw,
+            algorithm=str(algorithm) if algorithm is not None else None,
+            iterations=self.actual_iterations,
+            max_iterations=self.metadata.get("max_iterations"),
+            direct=bool(metadata.get("direct", False) or algorithm in {"fbp", "fdk"}),
+        )
+        stopping_reason = str(self.stopping_reason)
+        if normalized.value == "max_iterations" and raw != normalized.value:
+            stopping_reason = "maximum_iterations_reached"
+        if raw != normalized.value and raw in {"numerical_failure", "non_iterative_completed", "not_applicable", "partial"}:
+            metadata.setdefault("legacy_status", raw)
+        metadata["reason_code"] = stopping_reason
+        metadata["reason_class"] = status_reason_class(normalized)
+        object.__setattr__(self, "status", normalized.value)
+        object.__setattr__(self, "stopping_reason", stopping_reason)
+        object.__setattr__(self, "metadata", metadata)
+
     @property
     def iterations(self) -> int:
         """Short alias used by result consumers."""
@@ -180,19 +209,28 @@ class SolveResult:
     def to_dict(self) -> dict[str, Any]:
         """Serialize diagnostics without serializing tensors."""
 
-        return {
+        return _json_safe({
+            "schema_version": "ct.solve_result.v1",
             "actual_iterations": int(self.actual_iterations),
             "iterations": int(self.actual_iterations),
             "status": self.status,
+            "convergence_status": self.status,
             "stopping_reason": self.stopping_reason,
+            "reason_code": self.metadata.get("reason_code", self.stopping_reason),
+            "reason_class": self.metadata.get("reason_class"),
+            "legacy_status": self.metadata.get("legacy_status"),
             "trajectory_available": self.trajectory_available,
             "trajectory": [record.to_dict() for record in self.trajectory],
+            "terminal_evidence": {
+                "terminal": self.metadata.get("terminal_record"),
+                "patience_window": list(self.metadata.get("patience_window", ())),
+            },
             "resources": dict(self.resources),
             "final_residual": self.final_residual,
             "final_objective": self.final_objective,
             "relative_iterate_change": self.relative_iterate_change,
             "metadata": dict(self.metadata),
-        }
+        })
 
 
 def _tensor_norm(value: torch.Tensor | None) -> float | None:
@@ -201,8 +239,14 @@ def _tensor_norm(value: torch.Tensor | None) -> float | None:
     return float(value.detach().reshape(-1).norm().item())
 
 
-def _sample_records(records: Iterable[IterationRecord], limit: int) -> tuple[IterationRecord, ...]:
+def _sample_records(
+    records: Iterable[IterationRecord],
+    limit: int,
+    *,
+    patience: int = 0,
+) -> tuple[IterationRecord, ...]:
     rows = list(records)
+    limit = max(1, int(limit), max(1, int(patience)) if rows else 1)
     if len(rows) <= limit:
         return tuple(rows)
     if limit <= 1:
@@ -211,6 +255,7 @@ def _sample_records(records: Iterable[IterationRecord], limit: int) -> tuple[Ite
         round(index * (len(rows) - 1) / (limit - 1))
         for index in range(limit)
     }
+    positions.update(range(max(0, len(rows) - max(1, int(patience))), len(rows)))
     return tuple(rows[index] for index in sorted(positions))
 
 
@@ -234,6 +279,8 @@ class IterationRecorder:
         self.started = time.perf_counter()
         self.records: list[IterationRecord] = []
         self.previous: torch.Tensor | None = None
+        # Keep the old attribute as a compatibility alias.  New result
+        # payloads use the canonical ``numerical_error`` status.
         self.numerical_failure = False
         measurement_norm = measurement.detach().reshape(-1).norm().item()
         self.measurement_norm = max(float(measurement_norm), 1e-12)
@@ -348,7 +395,7 @@ class IterationRecorder:
         stats["runtime_seconds"] = time.perf_counter() - self.started
         stats.update(dict(resources or {}))
         if self.control.check_finite:
-            finite_result = bool(torch.isfinite(reconstruction).all())
+            finite_result = isinstance(reconstruction, torch.Tensor) and bool(torch.isfinite(reconstruction).all())
             if predicted_measurement is not None:
                 finite_result = finite_result and bool(torch.isfinite(predicted_measurement).all())
             for scalar in (final_residual, final_objective):
@@ -358,8 +405,16 @@ class IterationRecorder:
         effective_status = str(status)
         effective_reason = str(stopping_reason)
         if self.numerical_failure:
-            effective_status = "numerical_failure"
+            effective_status = "numerical_error"
             effective_reason = "non_finite_solver_state"
+        else:
+            effective_status = canonicalize_status(
+                effective_status,
+                algorithm=self.algorithm,
+                iterations=int(actual_iterations),
+                max_iterations=self.control.max_iterations,
+                direct=self.algorithm in {"fbp", "fdk"},
+            ).value
         evidence: dict[str, Any] = {}
         # A native loop can terminate at its configured limit without having
         # met a stopping criterion.  Use the recorded scalar trajectory only
@@ -387,7 +442,7 @@ class IterationRecorder:
                     algorithm=self.algorithm,
                 )
                 evidence["trajectory_classification"] = classification.status.value
-                if classification.status.value in {"diverged", "stalled", "numerical_failure"}:
+                if classification.status.value in {"diverged", "stalled", "numerical_error"}:
                     effective_status = classification.status.value
                     effective_reason = classification.stopping_reason
             except (ImportError, AttributeError, ValueError, TypeError):
@@ -399,13 +454,28 @@ class IterationRecorder:
             actual_iterations=int(actual_iterations),
             status=effective_status,
             stopping_reason=effective_reason,
-            trajectory=_sample_records(self.records, self.control.max_trajectory_points),
+            trajectory=_sample_records(
+                self.records,
+                self.control.max_trajectory_points,
+                patience=max(self.control.patience, self.control.stall_patience, self.control.divergence_patience),
+            ),
             resources=stats,
             final_residual=final_residual,
             final_objective=final_objective,
             relative_iterate_change=last_change,
             predicted_measurement=predicted_measurement,
-            metadata={"algorithm": self.algorithm, **dict(self.control.metadata), **dict(metadata or {}), **evidence},
+            metadata={
+                "algorithm": self.algorithm,
+                "max_iterations": self.control.max_iterations,
+                "terminal_record": self.records[-1].to_dict() if self.records else None,
+                "patience_window": [
+                    record.to_dict()
+                    for record in self.records[-max(self.control.patience, self.control.stall_patience, self.control.divergence_patience):]
+                ],
+                **dict(self.control.metadata),
+                **dict(metadata or {}),
+                **evidence,
+            },
         )
 
 

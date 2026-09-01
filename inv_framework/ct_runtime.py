@@ -32,7 +32,15 @@ from inv_framework.benchmarks import (
     restrict_ct_case,
     pareto_front,
 )
-from inv_framework.convergence import ConvergenceStatus, confirm_endpoint, post_run_validation
+from inv_framework.convergence import (
+    CORE_CT_ALGORITHMS,
+    ConvergenceReport,
+    ConvergenceStatus,
+    confirm_endpoint,
+    normalize_status,
+    post_run_validation,
+    status_reason_class,
+)
 from inv_framework.instrumentation import (
     CountingLinearOperator,
     OperatorBudgetExceeded,
@@ -84,6 +92,10 @@ SolverSpec = CTAlgorithmSpec
 
 class ConfigError(ValueError):
     """Raised for invalid user-authored CLI configuration."""
+
+
+class InvalidParametersError(ConfigError):
+    """Structured preflight rejection that must not enter a solver loop."""
 
 
 class BackendUnavailable(RuntimeError):
@@ -200,22 +212,28 @@ def load_yaml(path: str | Path) -> tuple[dict[str, Any], Path]:
 
 def load_algorithm_config(path: str | Path, expected_solver: str | None = None) -> tuple[str, dict[str, Any], Path]:
     payload, source = load_yaml(path)
-    _check_keys(payload, {"schema_version", "name", "parameters"}, "algorithm config")
-    if payload.get("schema_version", SCHEMA_VERSION) != SCHEMA_VERSION:
-        raise ConfigError(f"algorithm config schema_version must be {SCHEMA_VERSION}.")
-    name = payload.get("name")
-    if not isinstance(name, str) or name not in SOLVER_SPECS:
-        raise ConfigError(f"unknown solver in algorithm config: {name!r}")
-    if expected_solver is not None and name != expected_solver:
-        raise ConfigError(f"algorithm config names {name!r}, but command requested {expected_solver!r}.")
-    parameters = _require_mapping(payload.get("parameters", {}), "algorithm parameters")
+    try:
+        _check_keys(payload, {"schema_version", "name", "parameters"}, "algorithm config")
+        if payload.get("schema_version", SCHEMA_VERSION) != SCHEMA_VERSION:
+            raise ConfigError(f"algorithm config schema_version must be {SCHEMA_VERSION}.")
+        name = payload.get("name")
+        if not isinstance(name, str) or name not in SOLVER_SPECS:
+            raise ConfigError(f"unknown solver in algorithm config: {name!r}")
+        if expected_solver is not None and name != expected_solver:
+            raise ConfigError(f"algorithm config names {name!r}, but command requested {expected_solver!r}.")
+        parameters = _require_mapping(payload.get("parameters", {}), "algorithm parameters")
+    except ConfigError as error:
+        raise InvalidParametersError(str(error)) from error
     unknown = sorted(set(parameters) - set(SOLVER_SPECS[name].parameter_names))
     if unknown:
-        raise ConfigError(f"unsupported parameter(s) for {name}: {', '.join(unknown)}")
-    _validate_parameter_types(parameters)
+        raise InvalidParametersError(f"unsupported parameter(s) for {name}: {', '.join(unknown)}")
+    try:
+        _validate_parameter_types(parameters)
+    except ConfigError as error:
+        raise InvalidParametersError(str(error)) from error
     validation = validate_parameter_values(name, parameters)
     if validation.errors:
-        raise ConfigError(f"invalid parameters for {name}: {'; '.join(validation.errors)}")
+        raise InvalidParametersError(f"invalid parameters for {name}: {'; '.join(validation.errors)}")
     return name, validation.parameters, source
 
 
@@ -677,7 +695,9 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, torch.Tensor):
         return value.detach().cpu().tolist()
     if isinstance(value, np.generic):
-        return value.item()
+        return _jsonable(value.item())
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
     if isinstance(value, Mapping):
         return {str(key): _jsonable(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
@@ -686,7 +706,10 @@ def _jsonable(value: Any) -> Any:
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
-    path.write_text(json.dumps(_jsonable(payload), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(_jsonable(payload), indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -862,8 +885,46 @@ def _write_checksums(destination: Path) -> None:
     (destination / "artifacts.sha256").write_text(text, encoding="ascii")
 
 
-def _failure(destination: Path, status: str, error: BaseException) -> dict[str, Any]:
-    record = {"schema_version": SCHEMA_VERSION, "status": status, "error_type": type(error).__name__, "message": str(error)}
+def _failure(
+    destination: Path,
+    status: str,
+    error: BaseException,
+    *,
+    algorithm: str | None = None,
+    reason_code: str | None = None,
+    details: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    try:
+        canonical = normalize_status(
+            status,
+            algorithm=algorithm,
+            direct=algorithm in {"fbp", "fdk"},
+        ).value
+        reason_class = status_reason_class(canonical)
+    except ValueError:
+        # ``failed`` is a process-level legacy artifact status, not a
+        # convergence status.  Keep it serializable for the generic CLI
+        # exception path without pretending it is numerical convergence.
+        canonical = str(status)
+        reason_class = "execution"
+    reason = str(reason_code or {
+        "invalid_parameters": "parameter_validation_failed",
+        "unavailable": "backend_unavailable",
+        "resource_exhausted": "resource_budget_exhausted",
+        "numerical_error": "numerical_error",
+        "cancelled": "cancelled_by_callback",
+        "diverged": "persistent_worsening",
+    }.get(canonical, canonical))
+    record = {
+        "schema_version": SCHEMA_VERSION,
+        "status": canonical,
+        "convergence_status": canonical if reason_class != "execution" else None,
+        "reason_code": reason,
+        "reason_class": reason_class,
+        "error_type": type(error).__name__,
+        "message": str(error),
+        "details": dict(details or {}),
+    }
     _write_json(destination / "failure.json", record)
     (destination / "failure_report.md").write_text(
         f"# 运行失败\n\n- 状态：`{status}`\n- 类型：`{type(error).__name__}`\n- 原因：{error}\n",
@@ -872,6 +933,73 @@ def _failure(destination: Path, status: str, error: BaseException) -> dict[str, 
     (destination / "traceback.log").write_text("".join(traceback.format_exception(error)), encoding="utf-8")
     _write_checksums(destination)
     return record
+
+
+def _structured_failure(
+    destination: Path,
+    *,
+    status: str,
+    error: BaseException,
+    algorithm: str | None = None,
+    reason_code: str | None = None,
+    parameters: Mapping[str, Any] | None = None,
+    resources: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Write a portable no-loop/error result and keep status layers aligned."""
+
+    canonical = normalize_status(
+        status,
+        algorithm=algorithm,
+        direct=algorithm in {"fbp", "fdk"},
+    ).value
+    reason = str(reason_code or {
+        "invalid_parameters": "parameter_validation_failed",
+        "unavailable": "backend_unavailable",
+        "resource_exhausted": "resource_budget_exhausted",
+        "numerical_error": "numerical_error",
+    }.get(canonical, canonical))
+    report = ConvergenceReport(
+        status=canonical,
+        stopping_reason=reason,
+        algorithm=algorithm,
+        failure_reason=str(error),
+        terminal_evidence=(
+            {"validation_errors": [str(error)], "parameters": dict(parameters or {})}
+            if canonical == "invalid_parameters" else {}
+        ),
+    )
+    record = _failure(
+        destination,
+        canonical,
+        error,
+        algorithm=algorithm,
+        reason_code=reason,
+        details={"parameters": dict(parameters or {})} if parameters else None,
+    )
+    diagnostics = {
+        "schema_version": SCHEMA_VERSION,
+        "status": canonical,
+        "execution_status": canonical,
+        "convergence_status": canonical,
+        "stopping_reason": reason,
+        "reason_code": report.reason_code,
+        "reason_class": report.reason_class,
+        "iterations_requested": 0,
+        "iterations_completed": 0,
+        "convergence": report.to_dict(),
+        "resources": dict(resources or {}),
+    }
+    _write_json(destination / "diagnostics.json", diagnostics)
+    _write_checksums(destination)
+    return {
+        "status": canonical,
+        "execution_status": canonical,
+        "convergence_status": canonical,
+        "stopping_reason": reason,
+        "output_dir": destination,
+        "diagnostics": diagnostics,
+        **record,
+    }
 
 
 def run_case(
@@ -906,14 +1034,17 @@ def run_case(
         if parameter_overrides:
             unknown = sorted(set(parameter_overrides) - set(SOLVER_SPECS[name].parameter_names))
             if unknown:
-                raise ConfigError(
+                raise InvalidParametersError(
                     f"unsupported parameter override(s) for {name}: {', '.join(unknown)}"
                 )
             parameters = {**parameters, **dict(parameter_overrides)}
-            _validate_parameter_types(parameters)
+            try:
+                _validate_parameter_types(parameters)
+            except ConfigError as error:
+                raise InvalidParametersError(str(error)) from error
             override_validation = validate_parameter_values(name, parameters)
             if override_validation.errors:
-                raise ConfigError(
+                raise InvalidParametersError(
                     f"invalid parameter overrides for {name}: "
                     f"{'; '.join(override_validation.errors)}"
                 )
@@ -935,7 +1066,10 @@ def run_case(
             case = restrict_ct_case(full_case, fit, partition="fit")
             heldout_case = restrict_ct_case(full_case, heldout, partition="heldout")
         domain = observation_domain or _case_observation_domain(case)
-        spec = validate_solver_case(name, case, domain)
+        try:
+            spec = validate_solver_case(name, case, domain)
+        except ConfigError as error:
+            raise InvalidParametersError(str(error)) from error
         operator = build_operator(case, device)
         start_memory_tracing()
         counted_operator = CountingLinearOperator(
@@ -956,13 +1090,16 @@ def run_case(
         )
         validation_counters = counted_operator.stats()
         if validation.errors:
-            raise ConfigError(f"invalid parameters for {name}: {'; '.join(validation.errors)}")
+            raise InvalidParametersError(f"invalid parameters for {name}: {'; '.join(validation.errors)}")
         requested_iterations = int(validation.parameters.get("num_iterations", 0) or 0)
         if max_iterations is not None and requested_iterations > int(max_iterations):
-            raise ConfigError(
+            raise InvalidParametersError(
                 f"config requests {requested_iterations} iterations; budget allows {int(max_iterations)}"
             )
-        solver = build_solver(name, validation.parameters, case)
+        try:
+            solver = build_solver(name, validation.parameters, case)
+        except ConfigError as error:
+            raise InvalidParametersError(str(error)) from error
         operator_norm_squared = validation.estimates.get("operator_norm_squared")
         if requested_stopping_policy is not None and name not in {"fbp", "fdk"} and operator_norm_squared is None:
             operator_norm_squared = estimate_lipschitz_squared(counted_operator, case.measurement, num_iterations=8)
@@ -983,7 +1120,10 @@ def run_case(
             stalled_policy = dict(effective_stopping_policy.get("stalled", {}) or {})
             divergence_policy = dict(effective_stopping_policy.get("divergence", {}) or {})
             discrepancy_cfg = dict(effective_stopping_policy.get("discrepancy", {}) or {})
-            target = _discrepancy_target(case, effective_stopping_policy) if discrepancy_cfg.get("enabled", True) else None
+            try:
+                target = _discrepancy_target(case, effective_stopping_policy) if discrepancy_cfg.get("enabled", True) else None
+            except ConfigError as error:
+                raise InvalidParametersError(str(error)) from error
             effective_stopping_policy["effective"] = {"discrepancy_target": target}
             control_kwargs = {
                 "min_iterations": int(effective_stopping_policy["min_iterations"]),
@@ -1016,6 +1156,8 @@ def run_case(
         solve_result = solver.solve_detailed(case.measurement, counted_operator, control=control)
         solver_counters = counted_operator.stats()
         reconstruction = solve_result.reconstruction
+        if not isinstance(reconstruction, torch.Tensor):
+            raise NumericalFailure(f"solver returned {type(reconstruction).__name__}, expected a tensor")
         if tuple(reconstruction.shape) != tuple(case.truth.shape):
             raise NumericalFailure(f"solver returned shape {tuple(reconstruction.shape)}, expected {tuple(case.truth.shape)}")
         if not torch.isfinite(reconstruction).all():
@@ -1121,11 +1263,11 @@ def run_case(
             parameters=validation.parameters,
             operator_norm_estimate=math.sqrt(float(operator_norm_squared or 1.0)),
         ) if requested_stopping_policy is not None else {
-            "schema_version": "1.0", "status": "not_requested", "passed": True,
+            "schema_version": "ct.endpoint_confirmation.v1", "status": "not_requested", "passed": True,
             "finite": bool(torch.isfinite(reconstruction).all()),
             "normalized_data_residual": endpoint_report.final_residual,
         }
-        if endpoint_report.status == ConvergenceStatus.NUMERICAL_FAILURE:
+        if endpoint_report.status == ConvergenceStatus.NUMERICAL_ERROR:
             raise NumericalFailure(endpoint_report.failure_reason or endpoint_report.stopping_reason)
         counters = counted_operator.stats()
         phase_resources = {
@@ -1141,15 +1283,36 @@ def run_case(
         convergence["requested_policy"] = requested_stopping_policy
         convergence["effective_policy"] = effective_stopping_policy
         if solve_result.status == "converged" and not endpoint_confirmation.get("passed", False):
-            convergence["status"] = "partial"
+            convergence["status"] = ConvergenceStatus.NUMERICAL_ERROR.value
             convergence["stopping_reason"] = "endpoint_confirmation_failed"
+            convergence["reason_code"] = "endpoint_confirmation_failed"
+            convergence["reason_class"] = status_reason_class(ConvergenceStatus.NUMERICAL_ERROR)
+            convergence["failure_reason"] = "; ".join(endpoint_confirmation.get("reasons", ())) or "endpoint confirmation failed"
         if name in {"fbp", "fdk"}:
-            convergence["status"] = "not_applicable"
+            convergence["status"] = ConvergenceStatus.COMPLETED_VALID.value
             convergence["stopping_reason"] = "direct_reconstruction"
+            convergence["reason_code"] = "direct_reconstruction"
+            convergence["reason_class"] = status_reason_class(ConvergenceStatus.COMPLETED_VALID)
         convergence["converged_at_budget_boundary"] = bool(endpoint_confirmation.get("converged_at_budget_boundary", False))
-        convergence_status = str(convergence["status"])
+        convergence_status = normalize_status(
+            convergence["status"],
+            algorithm=name,
+            iterations=solve_result.actual_iterations,
+            max_iterations=int(max_iterations) if max_iterations is not None else (requested_iterations or None),
+            direct=name in {"fbp", "fdk"},
+        ).value
+        convergence["status"] = convergence_status
+        convergence["convergence_status"] = convergence_status
+        convergence.setdefault("reason_code", convergence.get("stopping_reason"))
+        convergence["reason_class"] = status_reason_class(convergence_status)
         convergence_reason = str(convergence["stopping_reason"])
-        execution_status = "completed" if requested_stopping_policy is not None and solve_result.status not in {"diverged", "numerical_failure", "cancelled"} else solve_result.status
+        execution_status = (
+            "completed"
+            if requested_stopping_policy is not None and convergence_status not in {
+                "diverged", "numerical_error", "cancelled", "resource_exhausted", "invalid_parameters",
+            }
+            else convergence_status
+        )
         bundle["execution_status"] = execution_status
         bundle["convergence_status"] = convergence_status
         bundle["stopping_reason"] = convergence_reason
@@ -1160,6 +1323,8 @@ def run_case(
             "schema_version": SCHEMA_VERSION,
             "solver": name,
             "algorithm": name,
+            "status": convergence_status,
+            "convergence_status": convergence_status,
             "regularizer": spec.regularizers[0] if spec.regularizers else None,
             "initialization": spec.initialization,
             "dtype": str(case.measurement.dtype),
@@ -1176,6 +1341,8 @@ def run_case(
             "geometry_type": str(case.geometry.get("type", "")),
             "ground_truth_available": truth_available,
             "execution_status": execution_status,
+            "reason_code": convergence.get("reason_code", convergence_reason),
+            "reason_class": status_reason_class(convergence_status),
             "stopping_reason": convergence_reason,
             "iterations_requested": requested_iterations,
             "iterations_completed": solve_result.actual_iterations,
@@ -1211,7 +1378,7 @@ def run_case(
         _plot_comparison(destination / "comparison.png", case.truth, reconstruction, dimension, truth_available=truth_available)
         manifest = {
             "schema_version": SCHEMA_VERSION,
-            "status": "success",
+            "status": convergence_status if convergence_status in {"diverged", "numerical_error"} else "success",
             "solver": spec.to_dict(),
             "parameters": validation.parameters,
             "parameter_sources": validation.sources,
@@ -1226,6 +1393,8 @@ def run_case(
             "ground_truth_available": truth_available,
             "execution_status": execution_status,
             "convergence_status": convergence_status,
+            "reason_code": convergence.get("reason_code", convergence_reason),
+            "reason_class": status_reason_class(convergence_status),
             "stopping_reason": convergence_reason,
             "diagnostics": "diagnostics.json",
             "device": str(device),
@@ -1235,11 +1404,26 @@ def run_case(
         }
         _write_json(destination / "manifest.json", manifest)
         _write_checksums(destination)
-        if solve_result.status in {"diverged", "numerical_failure"}:
-            record = _failure(destination, solve_result.status, NumericalFailure(solve_result.stopping_reason))
+        if convergence_status in {"diverged", "numerical_error"}:
+            record = _failure(
+                destination,
+                convergence_status,
+                NumericalFailure(convergence_reason),
+                algorithm=name,
+                reason_code=convergence.get("reason_code", convergence_reason),
+            )
             _write_json(destination / "diagnostics.json", diagnostics)
             _write_checksums(destination)
-            return {"status": solve_result.status, "output_dir": destination, "metrics": metrics, "diagnostics": diagnostics, **record}
+            return {
+                "status": convergence_status,
+                "execution_status": execution_status,
+                "convergence_status": convergence_status,
+                "stopping_reason": convergence_reason,
+                "output_dir": destination,
+                "metrics": metrics,
+                "diagnostics": diagnostics,
+                **record,
+            }
         return {
             # Keep the old successful-process API stable.  Consumers needing
             # the actual solver termination use execution_status or the
@@ -1247,38 +1431,47 @@ def run_case(
             # as converged.
             "status": "success",
             "execution_status": execution_status,
+            "convergence_status": convergence_status,
+            "stopping_reason": convergence_reason,
+            "reason_code": convergence.get("reason_code", convergence_reason),
+            "reason_class": status_reason_class(convergence_status),
             "output_dir": destination,
             "metrics": metrics,
             "diagnostics": diagnostics,
         }
+    except InvalidParametersError as error:
+        return _structured_failure(
+            destination,
+            status="invalid_parameters",
+            error=error,
+            algorithm=locals().get("name", solver_name),
+            parameters=locals().get("parameters"),
+        )
     except BackendUnavailable as error:
-        return {"status": "unavailable", "output_dir": destination, **_failure(destination, "unavailable", error)}
+        return _structured_failure(
+            destination,
+            status="unavailable",
+            error=error,
+            algorithm=locals().get("name", solver_name),
+        )
     except OperatorBudgetExceeded as error:
-        record = _failure(destination, "resource_exhausted", error)
-        diagnostics = {
-            "schema_version": SCHEMA_VERSION,
-            "status": "resource_exhausted",
-            "convergence": {"status": ConvergenceStatus.NUMERICAL_FAILURE.value, "stopping_reason": "operator_call_budget_exhausted"},
-            "resources": counted_operator.stats() if counted_operator is not None else {},
-        }
-        _write_json(destination / "diagnostics.json", diagnostics)
-        _write_checksums(destination)
-        return {"status": "resource_exhausted", "output_dir": destination, **record, "diagnostics": diagnostics}
+        return _structured_failure(
+            destination,
+            status="resource_exhausted",
+            error=error,
+            algorithm=locals().get("name", solver_name),
+            reason_code="operator_call_budget_exhausted",
+            resources=counted_operator.stats() if counted_operator is not None else None,
+        )
     except NumericalFailure as error:
-        record = _failure(destination, "numerical_failure", error)
-        diagnostics = {
-            "schema_version": SCHEMA_VERSION,
-            "status": "numerical_failure",
-            "convergence": {
-                "status": ConvergenceStatus.NUMERICAL_FAILURE.value,
-                "stopping_reason": "invalid_solver_output",
-                "failure_reason": str(error),
-            },
-            "resources": counted_operator.stats() if counted_operator is not None else {},
-        }
-        _write_json(destination / "diagnostics.json", diagnostics)
-        _write_checksums(destination)
-        return {"status": "numerical_failure", "output_dir": destination, **record, "diagnostics": diagnostics}
+        return _structured_failure(
+            destination,
+            status="numerical_error",
+            error=error,
+            algorithm=locals().get("name", solver_name),
+            reason_code="invalid_solver_output",
+            resources=counted_operator.stats() if counted_operator is not None else None,
+        )
     except Exception as error:
         _failure(destination, "failed", error)
         raise

@@ -1,4 +1,10 @@
-"""Convergence reports and post-run validation for CT reconstructions."""
+"""Canonical convergence reports and post-run validation for CT reconstructions.
+
+The runtime historically exposed several names for equivalent outcomes.  This
+module is the compatibility boundary: legacy inputs remain parseable, while
+core CT reports use one canonical status vocabulary and retain the evidence
+needed to audit a terminal decision.
+"""
 
 from __future__ import annotations
 
@@ -10,16 +16,150 @@ from typing import Any, Iterable, Mapping
 import torch
 
 
+CONVERGENCE_SCHEMA_VERSION = "ct.convergence.v1"
+
+# This is a status-normalization contract, not a second registry.  Keeping it
+# local avoids making the low-level diagnostics module depend on solver specs.
+CORE_CT_ALGORITHMS = frozenset({
+    "fbp", "sirt", "landweber", "cgls", "lsqr", "sart", "os_sart",
+    "mlem", "osem", "tikhonov", "tv_fista", "fdk",
+})
+
+
 class ConvergenceStatus(str, Enum):
     CONVERGED = "converged"
-    PARTIAL = "partial"
     STALLED = "stalled"
     DIVERGED = "diverged"
     MAX_ITERATIONS = "max_iterations"
+    NUMERICAL_ERROR = "numerical_error"
+    INVALID_PARAMETERS = "invalid_parameters"
+    COMPLETED_VALID = "completed_valid"
+    UNAVAILABLE = "unavailable"
+    CANCELLED = "cancelled"
+    RESOURCE_EXHAUSTED = "resource_exhausted"
+
+    # Migration-only values.  They remain parseable for old callers but are
+    # normalized before a core CT report is serialized.
+    PARTIAL = "partial"
+    NUMERICAL_FAILURE = "numerical_failure"
     NON_ITERATIVE_COMPLETED = "non_iterative_completed"
     NOT_APPLICABLE = "not_applicable"
-    INVALID_PARAMETERS = "invalid_parameters"
-    NUMERICAL_FAILURE = "numerical_failure"
+
+
+CANONICAL_CONVERGENCE_STATUSES = (
+    "converged", "stalled", "diverged", "max_iterations", "numerical_error",
+    "invalid_parameters", "completed_valid", "unavailable", "cancelled",
+    "resource_exhausted",
+)
+
+LEGACY_STATUS_ALIASES = {
+    "numerical_failure": "numerical_error",
+    "non_iterative_completed": "completed_valid",
+    "not_applicable": "completed_valid",
+}
+
+STATUS_REASON_CLASSES = {
+    "converged": "convergence",
+    "stalled": "stagnation",
+    "diverged": "divergence",
+    "max_iterations": "iteration_budget",
+    "numerical_error": "numerical",
+    "invalid_parameters": "invalid_parameters",
+    "completed_valid": "completed_valid",
+    "unavailable": "capability",
+    "cancelled": "cancelled",
+    "resource_exhausted": "resource_budget",
+    "partial": "insufficient_evidence",
+}
+
+DEFAULT_REASON_CODES = {
+    "converged": "criterion_satisfied",
+    "stalled": "stalled_before_convergence",
+    "diverged": "persistent_worsening",
+    "max_iterations": "maximum_iterations_reached",
+    "numerical_error": "numerical_error",
+    "invalid_parameters": "parameter_validation_failed",
+    "completed_valid": "direct_reconstruction_valid",
+    "unavailable": "backend_unavailable",
+    "cancelled": "cancelled_by_callback",
+    "resource_exhausted": "resource_budget_exhausted",
+    "partial": "insufficient_termination_evidence",
+}
+
+
+def is_core_algorithm(algorithm: str | None) -> bool:
+    return algorithm is not None and str(algorithm) in CORE_CT_ALGORITHMS
+
+
+def status_reason_class(status: ConvergenceStatus | str) -> str:
+    """Return the single reason class assigned to a canonical status."""
+
+    value = status.value if isinstance(status, ConvergenceStatus) else str(status)
+    value = LEGACY_STATUS_ALIASES.get(value, value)
+    try:
+        return STATUS_REASON_CLASSES[value]
+    except KeyError as error:
+        raise ValueError(f"unknown convergence status {status!r}") from error
+
+
+def normalize_status(
+    status: ConvergenceStatus | str,
+    *,
+    algorithm: str | None = None,
+    iterations: int | None = None,
+    max_iterations: int | None = None,
+    direct: bool = False,
+) -> ConvergenceStatus:
+    """Normalize one status without promoting a budget stop to convergence."""
+
+    raw = status.value if isinstance(status, ConvergenceStatus) else str(status)
+    value = LEGACY_STATUS_ALIASES.get(raw, raw)
+    if raw == "converged" and max_iterations is not None and iterations is not None and int(iterations) >= int(max_iterations):
+        value = "max_iterations"
+    elif raw == "partial" and direct:
+        value = "completed_valid"
+    elif raw == "partial" and is_core_algorithm(algorithm):
+        if max_iterations is not None and iterations is not None and int(iterations) >= int(max_iterations):
+            value = "max_iterations"
+        else:
+            value = "numerical_error"
+    try:
+        return ConvergenceStatus(value)
+    except ValueError as error:
+        raise ValueError(f"unknown convergence status {status!r}") from error
+
+
+canonicalize_status = normalize_status
+normalize_convergence_status = normalize_status
+
+
+def _json_safe(value: Any) -> Any:
+    """Make diagnostic payloads JSON-compatible without NaN/Inf literals."""
+
+    if isinstance(value, torch.Tensor):
+        return _json_safe(value.detach().cpu().tolist())
+    if isinstance(value, float):
+        return value if isfinite(value) else None
+    if hasattr(value, "item") and value.__class__.__module__.startswith("numpy"):
+        return _json_safe(value.item())
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def _evidence_rows(rows: list[Mapping[str, Any]], patience: int) -> tuple[dict[str, Any], ...]:
+    if not rows:
+        return ()
+    return tuple(_json_safe(dict(row)) for row in rows[-max(1, int(patience)):])
+
+
+def _report_evidence(rows: list[Mapping[str, Any]], patience: int) -> dict[str, Any]:
+    return {
+        "terminal": _json_safe(dict(rows[-1])) if rows else None,
+        "patience_window": list(_evidence_rows(rows, patience)),
+    }
 
 
 @dataclass(frozen=True)
@@ -27,7 +167,7 @@ class ConvergenceReport:
     """Portable convergence state independent of a solver implementation."""
 
     status: ConvergenceStatus | str
-    stopping_reason: str
+    stopping_reason: str = ""
     iterations: int = 0
     max_iterations: int | None = None
     final_residual: float | None = None
@@ -36,20 +176,43 @@ class ConvergenceReport:
     trajectory: tuple[dict[str, Any], ...] = ()
     warnings: tuple[str, ...] = ()
     failure_reason: str | None = None
-    schema_version: int = 1
+    schema_version: str = CONVERGENCE_SCHEMA_VERSION
+    algorithm: str | None = None
+    reason_code: str | None = None
+    reason_class: str | None = None
+    legacy_status: str | None = None
+    terminal_evidence: Mapping[str, Any] = field(default_factory=dict)
+    endpoint_confirmation: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if isinstance(self.status, str):
-            try:
-                object.__setattr__(self, "status", ConvergenceStatus(self.status))
-            except ValueError:
-                raise ValueError(f"unknown convergence status {self.status!r}")
+        raw = self.status.value if isinstance(self.status, ConvergenceStatus) else str(self.status)
+        normalized = normalize_status(
+            raw,
+            algorithm=self.algorithm,
+            iterations=self.iterations,
+            max_iterations=self.max_iterations,
+            direct=bool(self.algorithm in {"fbp", "fdk"}),
+        )
+        object.__setattr__(self, "status", normalized)
+        if raw != normalized.value and raw in (*LEGACY_STATUS_ALIASES, "partial"):
+            object.__setattr__(self, "legacy_status", raw)
+        reason = str(self.stopping_reason or DEFAULT_REASON_CODES[normalized.value])
+        if normalized == ConvergenceStatus.MAX_ITERATIONS and raw != normalized.value:
+            reason = DEFAULT_REASON_CODES[normalized.value]
+        object.__setattr__(self, "stopping_reason", reason)
+        object.__setattr__(self, "reason_code", str(self.reason_code or reason))
+        object.__setattr__(self, "reason_class", status_reason_class(normalized))
+        object.__setattr__(self, "iterations", max(0, int(self.iterations)))
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "schema_version": self.schema_version,
             "status": self.status.value,
             "stopping_reason": self.stopping_reason,
+            "reason_code": self.reason_code,
+            "reason_class": self.reason_class,
+            "legacy_status": self.legacy_status,
+            "algorithm": self.algorithm,
             "iterations": int(self.iterations),
             "max_iterations": self.max_iterations,
             "final_residual": self.final_residual,
@@ -58,16 +221,59 @@ class ConvergenceReport:
             "trajectory": [dict(item) for item in self.trajectory],
             "warnings": list(self.warnings),
             "failure_reason": self.failure_reason,
+            "terminal_evidence": dict(self.terminal_evidence),
+            "endpoint_confirmation": dict(self.endpoint_confirmation),
         }
+        return _json_safe(payload)
 
     @classmethod
-    def invalid_parameters(cls, errors: Iterable[str]) -> "ConvergenceReport":
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ConvergenceReport":
+        """Parse current reports and legacy status payloads."""
+
+        value = dict(payload)
+        allowed = {
+            "schema_version", "status", "stopping_reason", "reason_code",
+            "reason_class", "legacy_status", "algorithm", "iterations",
+            "max_iterations", "final_residual", "final_objective",
+            "relative_iterate_change", "trajectory", "warnings",
+            "failure_reason", "terminal_evidence", "endpoint_confirmation",
+        }
+        return cls(**{key: value[key] for key in allowed if key in value})
+
+    @classmethod
+    def invalid_parameters(
+        cls,
+        errors: Iterable[str],
+        *,
+        algorithm: str | None = None,
+        parameters: Mapping[str, Any] | None = None,
+    ) -> "ConvergenceReport":
         messages = tuple(str(error) for error in errors)
         return cls(
             status=ConvergenceStatus.INVALID_PARAMETERS,
             stopping_reason="parameter_validation_failed",
+            algorithm=algorithm,
+            terminal_evidence={"validation_errors": list(messages), "parameters": dict(parameters or {})},
             warnings=messages,
             failure_reason="; ".join(messages),
+        )
+
+    @classmethod
+    def unavailable(cls, reason: str, *, algorithm: str | None = None) -> "ConvergenceReport":
+        return cls(
+            status=ConvergenceStatus.UNAVAILABLE,
+            stopping_reason="backend_unavailable",
+            algorithm=algorithm,
+            failure_reason=str(reason),
+        )
+
+    @classmethod
+    def resource_exhausted(cls, reason: str, *, algorithm: str | None = None) -> "ConvergenceReport":
+        return cls(
+            status=ConvergenceStatus.RESOURCE_EXHAUSTED,
+            stopping_reason="resource_budget_exhausted",
+            algorithm=algorithm,
+            failure_reason=str(reason),
         )
 
 
@@ -75,18 +281,24 @@ def sample_trajectory(
     trajectory: Iterable[Mapping[str, Any]],
     *,
     max_points: int = 100,
+    patience: int = 0,
 ) -> tuple[dict[str, Any], ...]:
-    """Keep a deterministic, evenly spaced subset of a long trajectory."""
+    """Keep a bounded sample while retaining the terminal patience window."""
 
     rows = [dict(row) for row in trajectory]
     limit = max(1, int(max_points))
+    # A complete terminal window is stronger evidence than an arbitrary
+    # uniform sample.  Grow the effective bound only when the requested bound
+    # is too small to retain that configured window.
+    limit = max(limit, max(1, int(patience)) if rows else 1)
     if len(rows) <= limit:
-        return tuple(rows)
+        return tuple(_json_safe(row) for row in rows)
     positions = {
         round(index * (len(rows) - 1) / (limit - 1)) if limit > 1 else 0
         for index in range(limit)
     }
-    return tuple(rows[index] for index in sorted(positions))
+    positions.update(range(max(0, len(rows) - max(1, int(patience))), len(rows)))
+    return tuple(_json_safe(rows[index]) for index in sorted(positions))
 
 
 def _metric(row: Mapping[str, Any], names: tuple[str, ...]) -> float | None:
@@ -96,7 +308,7 @@ def _metric(row: Mapping[str, Any], names: tuple[str, ...]) -> float | None:
             try:
                 result = float(value)
             except (TypeError, ValueError):
-                return None
+                return float("nan")
             return result
     return None
 
@@ -131,13 +343,16 @@ def classify_trajectory(
     """Classify a trajectory without treating a fixed iteration count as success."""
 
     rows = list(trajectory)
-    sampled = sample_trajectory(rows)
+    sampled = sample_trajectory(rows, patience=patience)
     if not rows:
+        empty_status = ConvergenceStatus.NUMERICAL_ERROR if is_core_algorithm(algorithm) else ConvergenceStatus.PARTIAL
         return ConvergenceReport(
-            status=ConvergenceStatus.PARTIAL,
+            status=empty_status,
             stopping_reason="no_iteration_trajectory",
             max_iterations=max_iterations,
             warnings=("solver did not expose an iteration trajectory",),
+            algorithm=algorithm,
+            terminal_evidence=_report_evidence(rows, patience),
         )
 
     residuals = [_metric(row, ("normalized_residual", "data_residual", "residual", "normal_residual", "objective")) for row in rows]
@@ -145,15 +360,39 @@ def classify_trajectory(
     objective = [_metric(row, ("objective",)) for row in rows]
     if any(value is not None and not isfinite(value) for value in [*residuals, *relative_changes, *objective]):
         return ConvergenceReport(
-            status=ConvergenceStatus.NUMERICAL_FAILURE,
+            status=ConvergenceStatus.NUMERICAL_ERROR,
             stopping_reason="non_finite_trajectory_value",
             iterations=len(rows),
             max_iterations=max_iterations,
             trajectory=sampled,
             failure_reason="trajectory contains NaN or Inf",
+            algorithm=algorithm,
+            terminal_evidence=_report_evidence(rows, patience),
         )
 
-    explicit = [str(row.get("status")) for row in rows if row.get("status")]
+    explicit = [
+        normalize_status(
+            row["status"],
+            algorithm=algorithm,
+            iterations=len(rows),
+            max_iterations=max_iterations,
+        ).value
+        for row in rows if row.get("status")
+    ]
+    if any(status == ConvergenceStatus.NUMERICAL_ERROR.value for status in explicit):
+        return ConvergenceReport(
+            status=ConvergenceStatus.NUMERICAL_ERROR,
+            stopping_reason="solver_reported_numerical_error",
+            iterations=len(rows),
+            max_iterations=max_iterations,
+            final_residual=residuals[-1],
+            final_objective=objective[-1],
+            relative_iterate_change=relative_changes[-1],
+            trajectory=sampled,
+            failure_reason="solver reported a numerical error",
+            algorithm=algorithm,
+            terminal_evidence=_report_evidence(rows, patience),
+        )
     if any(status == ConvergenceStatus.DIVERGED.value for status in explicit):
         return ConvergenceReport(
             status=ConvergenceStatus.DIVERGED,
@@ -165,6 +404,35 @@ def classify_trajectory(
             relative_iterate_change=relative_changes[-1],
             trajectory=sampled,
             failure_reason="solver reported divergence",
+            algorithm=algorithm,
+            terminal_evidence=_report_evidence(rows, patience),
+        )
+    if any(status == ConvergenceStatus.RESOURCE_EXHAUSTED.value for status in explicit):
+        return ConvergenceReport(
+            status=ConvergenceStatus.RESOURCE_EXHAUSTED,
+            stopping_reason="resource_budget_exhausted",
+            iterations=len(rows), max_iterations=max_iterations,
+            final_residual=residuals[-1], final_objective=objective[-1],
+            relative_iterate_change=relative_changes[-1], trajectory=sampled,
+            algorithm=algorithm, terminal_evidence=_report_evidence(rows, patience),
+        )
+    if any(status == ConvergenceStatus.CANCELLED.value for status in explicit):
+        return ConvergenceReport(
+            status=ConvergenceStatus.CANCELLED,
+            stopping_reason="cancelled_by_callback",
+            iterations=len(rows), max_iterations=max_iterations,
+            final_residual=residuals[-1], final_objective=objective[-1],
+            relative_iterate_change=relative_changes[-1], trajectory=sampled,
+            algorithm=algorithm, terminal_evidence=_report_evidence(rows, patience),
+        )
+    if any(status == ConvergenceStatus.MAX_ITERATIONS.value for status in explicit):
+        return ConvergenceReport(
+            status=ConvergenceStatus.MAX_ITERATIONS,
+            stopping_reason="maximum_iterations_reached",
+            iterations=len(rows), max_iterations=max_iterations,
+            final_residual=residuals[-1], final_objective=objective[-1],
+            relative_iterate_change=relative_changes[-1], trajectory=sampled,
+            algorithm=algorithm, terminal_evidence=_report_evidence(rows, patience),
         )
 
     bad_run = 0
@@ -184,7 +452,26 @@ def classify_trajectory(
                 relative_iterate_change=relative_changes[-1],
                 trajectory=sampled,
                 failure_reason="residual/objective increased for the patience window",
+                algorithm=algorithm,
+                terminal_evidence=_report_evidence(rows, patience),
             )
+
+    # Reaching the configured boundary is a budget outcome.  It must not be
+    # promoted to convergence merely because the last sampled row happens to
+    # satisfy a residual/change threshold.
+    if max_iterations is not None and len(rows) >= int(max_iterations):
+        return ConvergenceReport(
+            status=ConvergenceStatus.MAX_ITERATIONS,
+            stopping_reason="maximum_iterations_reached",
+            iterations=len(rows),
+            max_iterations=max_iterations,
+            final_residual=residuals[-1],
+            final_objective=objective[-1],
+            relative_iterate_change=relative_changes[-1],
+            trajectory=sampled,
+            algorithm=algorithm,
+            terminal_evidence=_report_evidence(rows, patience),
+        )
 
     final_residual = residuals[-1]
     final_change = relative_changes[-1]
@@ -207,6 +494,8 @@ def classify_trajectory(
             final_objective=objective[-1],
             relative_iterate_change=final_change,
             trajectory=sampled,
+            algorithm=algorithm,
+            terminal_evidence=_report_evidence(rows, patience),
         )
 
     stall_limit = float(stall_tolerance if stall_tolerance is not None else max(float(tolerance) * 0.1, 1e-12))
@@ -221,6 +510,8 @@ def classify_trajectory(
             final_objective=objective[-1],
             relative_iterate_change=final_change,
             trajectory=sampled,
+            algorithm=algorithm,
+            terminal_evidence=_report_evidence(rows, patience),
         )
 
     if max_iterations is not None and len(rows) >= int(max_iterations):
@@ -233,10 +524,13 @@ def classify_trajectory(
             final_objective=objective[-1],
             relative_iterate_change=final_change,
             trajectory=sampled,
+            algorithm=algorithm,
+            terminal_evidence=_report_evidence(rows, patience),
         )
 
+    incomplete_status = ConvergenceStatus.NUMERICAL_ERROR if is_core_algorithm(algorithm) else ConvergenceStatus.PARTIAL
     return ConvergenceReport(
-        status=ConvergenceStatus.PARTIAL,
+        status=incomplete_status,
         stopping_reason="trajectory_ended_before_convergence",
         iterations=len(rows),
         max_iterations=max_iterations,
@@ -245,6 +539,8 @@ def classify_trajectory(
         relative_iterate_change=final_change,
         trajectory=sampled,
         warnings=(f"algorithm={algorithm}",) if algorithm else (),
+        algorithm=algorithm,
+        terminal_evidence=_report_evidence(rows, patience),
     )
 
 
@@ -267,25 +563,62 @@ def post_run_validation(
 
     if not isinstance(reconstruction, torch.Tensor):
         return ConvergenceReport(
-            status=ConvergenceStatus.NUMERICAL_FAILURE,
+            status=ConvergenceStatus.NUMERICAL_ERROR,
             stopping_reason="solver_returned_non_tensor",
             failure_reason=f"got {type(reconstruction).__name__}",
+            algorithm=algorithm,
         )
     if not torch.isfinite(reconstruction).all():
         return ConvergenceReport(
-            status=ConvergenceStatus.NUMERICAL_FAILURE,
+            status=ConvergenceStatus.NUMERICAL_ERROR,
             stopping_reason="non_finite_reconstruction",
             iterations=iterations,
             max_iterations=max_iterations,
             failure_reason="solver returned NaN or Inf",
+            algorithm=algorithm,
+        )
+    if measurement is not None and not torch.isfinite(measurement).all():
+        return ConvergenceReport(
+            status=ConvergenceStatus.NUMERICAL_ERROR,
+            stopping_reason="non_finite_measurement",
+            iterations=iterations,
+            max_iterations=max_iterations,
+            failure_reason="measurement contains NaN or Inf",
+            algorithm=algorithm,
+        )
+    if predicted_measurement is not None and not torch.isfinite(predicted_measurement).all():
+        return ConvergenceReport(
+            status=ConvergenceStatus.NUMERICAL_ERROR,
+            stopping_reason="non_finite_prediction",
+            iterations=iterations,
+            max_iterations=max_iterations,
+            failure_reason="predicted measurement contains NaN or Inf",
+            algorithm=algorithm,
+        )
+    if (
+        measurement is not None
+        and predicted_measurement is not None
+        and tuple(measurement.shape) != tuple(predicted_measurement.shape)
+    ):
+        return ConvergenceReport(
+            status=ConvergenceStatus.NUMERICAL_ERROR,
+            stopping_reason="measurement_shape_mismatch",
+            iterations=iterations,
+            max_iterations=max_iterations,
+            failure_reason=(
+                f"measurement shape {tuple(measurement.shape)} does not match "
+                f"prediction shape {tuple(predicted_measurement.shape)}"
+            ),
+            algorithm=algorithm,
         )
     if operator is not None and tuple(reconstruction.shape[1:]) != tuple(operator.domain_shape):
         return ConvergenceReport(
-            status=ConvergenceStatus.NUMERICAL_FAILURE,
+            status=ConvergenceStatus.NUMERICAL_ERROR,
             stopping_reason="reconstruction_shape_mismatch",
             iterations=iterations,
             max_iterations=max_iterations,
             failure_reason=f"expected (B, {tuple(operator.domain_shape)}), got {tuple(reconstruction.shape)}",
+            algorithm=algorithm,
         )
 
     if predicted_measurement is None and operator is not None:
@@ -299,11 +632,13 @@ def post_run_validation(
         )
     if non_iterative:
         return ConvergenceReport(
-            status=ConvergenceStatus.NON_ITERATIVE_COMPLETED,
+            status=ConvergenceStatus.COMPLETED_VALID,
             stopping_reason="direct_solver_completed",
             iterations=0,
             max_iterations=max_iterations,
             final_residual=final_residual,
+            algorithm=algorithm,
+            terminal_evidence={"terminal": {"iterations": 0}},
         )
 
     if trajectory is not None:
@@ -326,15 +661,24 @@ def post_run_validation(
                 trajectory=report.trajectory,
                 warnings=report.warnings,
                 failure_reason=report.failure_reason,
+                schema_version=report.schema_version,
+                algorithm=report.algorithm,
+                reason_code=report.reason_code,
+                reason_class=report.reason_class,
+                legacy_status=report.legacy_status,
+                terminal_evidence=report.terminal_evidence,
+                endpoint_confirmation=report.endpoint_confirmation,
             )
         return report
 
-    if final_residual is not None and final_residual <= float(tolerance):
-        status = ConvergenceStatus.CONVERGED
-        reason = "post_run_residual_tolerance"
-    elif max_iterations is not None and int(iterations) >= int(max_iterations):
+    # A residual-only post-run observation is not enough to claim convergence:
+    # no trajectory means no native criterion or patience window was observed.
+    if max_iterations is not None and int(iterations) >= int(max_iterations):
         status = ConvergenceStatus.MAX_ITERATIONS
         reason = "maximum_iterations_reached_without_trajectory"
+    elif is_core_algorithm(algorithm):
+        status = ConvergenceStatus.NUMERICAL_ERROR
+        reason = "no_iteration_trajectory"
     else:
         status = ConvergenceStatus.PARTIAL
         reason = "solver_did_not_expose_trajectory"
@@ -345,6 +689,8 @@ def post_run_validation(
         max_iterations=max_iterations,
         final_residual=final_residual,
         warnings=("solver did not expose an iteration trajectory",),
+        algorithm=algorithm,
+        terminal_evidence={"terminal": {"iterations": int(iterations), "residual": final_residual}},
     )
 
 
@@ -373,31 +719,50 @@ def confirm_endpoint(
     """Independently recompute final evidence and audit the patience window."""
 
     rows = [dict(row) for row in trajectory]
+    solver_status_value = normalize_status(
+        solver_status,
+        algorithm=algorithm,
+        iterations=iterations,
+        max_iterations=max_iterations,
+        direct=algorithm in {"fbp", "fdk"},
+    ).value
     prediction = operator.forward(reconstruction) if predicted_measurement is None else predicted_measurement
-    residual = prediction - measurement
+    finite_inputs = (
+        isinstance(reconstruction, torch.Tensor)
+        and isinstance(measurement, torch.Tensor)
+        and isinstance(prediction, torch.Tensor)
+        and bool(torch.isfinite(reconstruction).all())
+        and bool(torch.isfinite(measurement).all())
+        and bool(torch.isfinite(prediction).all())
+    )
+    residual = prediction - measurement if finite_inputs else None
     native_residual = residual
     native_measurement = measurement
-    if valid_measurement_mask is not None:
+    if residual is not None and valid_measurement_mask is not None:
         mask = valid_measurement_mask.to(device=measurement.device, dtype=torch.bool)
         if mask.ndim == measurement.ndim - 1:
             mask = mask.unsqueeze(0)
         if tuple(mask.shape) == tuple(measurement.shape):
             native_residual = residual.masked_fill(~mask, 0.0)
             native_measurement = measurement.masked_fill(~mask, 0.0)
-    endpoint_data_residual = _relative_measurement_residual(
-        measurement, prediction, valid_measurement_mask
+    endpoint_data_residual = (
+        _relative_measurement_residual(measurement, prediction, valid_measurement_mask)
+        if finite_inputs else None
     )
-    finite = bool(torch.isfinite(reconstruction).all() and torch.isfinite(prediction).all())
+    finite = finite_inputs
+    reconstruction_min = float(reconstruction.min().item()) if finite else None
+    reconstruction_max = float(reconstruction.max().item()) if finite else None
     result: dict[str, Any] = {
-        "schema_version": "1.0",
+        "schema_version": "ct.endpoint_confirmation.v1",
         "status": "not_applicable" if algorithm in {"fbp", "fdk"} else "not_requested",
         "passed": algorithm in {"fbp", "fdk"},
         "finite": finite,
-        "reconstruction_min": float(reconstruction.min().item()),
-        "reconstruction_max": float(reconstruction.max().item()),
+        "reconstruction_min": reconstruction_min,
+        "reconstruction_max": reconstruction_max,
         "normalized_data_residual": endpoint_data_residual,
-        "solver_status": solver_status,
+        "solver_status": solver_status_value,
         "solver_stopping_reason": solver_stopping_reason,
+        "solver_reason_class": status_reason_class(solver_status_value),
         "reasons": [],
     }
     if algorithm in {"fbp", "fdk"}:
@@ -415,14 +780,17 @@ def confirm_endpoint(
     native_value = rows[-1].get("relative_iterate_change") if rows else None
     native_ok = native_value is not None and float(native_value) <= iterate_tol
     if algorithm in {"cgls", "lsqr"}:
-        gradient = operator.adjoint(native_residual)
+        gradient = operator.adjoint(native_residual) if native_residual is not None else torch.full_like(reconstruction, float("nan"))
         native_name = "normalized_normal_residual"
         native_value = float(gradient.norm().item()) / max(float(operator_norm_estimate) * float(native_residual.norm().item()), 1e-12)
         change = rows[-1].get("relative_iterate_change") if rows else None
         native_ok = native_value <= normal_tol or (change is not None and float(change) <= iterate_tol)
     elif algorithm == "tikhonov":
         strength = float(parameters.get("reg_strength", 0.0))
-        gradient = operator.adjoint(native_residual) + strength * reconstruction
+        gradient = (
+            operator.adjoint(native_residual) + strength * reconstruction
+            if native_residual is not None else torch.full_like(reconstruction, float("nan"))
+        )
         rhs = operator.adjoint(native_measurement)
         native_name = "normalized_regularized_normal_residual"
         native_value = float(gradient.norm().item()) / max(float(rhs.norm().item()) + strength * float(reconstruction.norm().item()), 1e-12)
@@ -436,15 +804,21 @@ def confirm_endpoint(
             tolerance=float(parameters.get("tv_tolerance", 1e-5)),
         )
         step = float((rows[-1].get("step_size") if rows else None) or parameters.get("step_size") or 1.0)
-        gradient = operator.adjoint(native_residual)
+        gradient = operator.adjoint(native_residual) if native_residual is not None else torch.full_like(reconstruction, float("nan"))
         prox = tv.proximal(reconstruction - step * gradient, step * float(parameters.get("reg_strength", 0.0)))
         native_name = "normalized_prox_gradient_mapping"
         native_value = float(((reconstruction - prox) / step).norm().item()) / max(float(reconstruction.norm().item()) / step, 1e-12)
         objective_change = ((rows[-1].get("metadata") or {}).get("relative_composite_objective_change") if rows else None)
         native_ok = native_value <= prox_tol and objective_change is not None and float(objective_change) <= objective_tol
         result["relative_composite_objective_change"] = objective_change
-        result["composite_objective"] = float(0.5 * residual.square().sum().item() + float(parameters.get("reg_strength", 0.0)) * tv.value(reconstruction).sum().item())
-    discrepancy_ok = endpoint_data_residual <= discrepancy_target
+        result["composite_objective"] = (
+            float(0.5 * residual.square().sum().item() + float(parameters.get("reg_strength", 0.0)) * tv.value(reconstruction).sum().item())
+            if residual is not None else None
+        )
+    discrepancy_ok = bool(
+        endpoint_data_residual is not None
+        and endpoint_data_residual <= discrepancy_target
+    )
     result.update({
         "discrepancy_target": discrepancy_target,
         "discrepancy_satisfied": discrepancy_ok,
@@ -463,11 +837,17 @@ def confirm_endpoint(
     endpoint_cfg = dict(policy.get("endpoint_confirmation", {}) or {})
     absolute_tolerance = float(endpoint_cfg.get("absolute_tolerance", 1e-7))
     relative_tolerance = float(endpoint_cfg.get("relative_tolerance", 1e-4))
-    trajectory_endpoint_consistent = last_data is not None and abs(float(last_data) - endpoint_data_residual) <= absolute_tolerance + relative_tolerance * max(abs(float(last_data)), abs(endpoint_data_residual))
+    trajectory_endpoint_consistent = bool(
+        last_data is not None
+        and endpoint_data_residual is not None
+        and abs(float(last_data) - endpoint_data_residual)
+        <= absolute_tolerance
+        + relative_tolerance * max(abs(float(last_data)), abs(endpoint_data_residual))
+    )
     result["trajectory_endpoint_consistent"] = trajectory_endpoint_consistent
     if not finite:
         result["reasons"].append("non_finite_endpoint")
-    if solver_status == "converged":
+    if solver_status_value == "converged":
         if not discrepancy_ok: result["reasons"].append("endpoint_discrepancy_unmet")
         if not native_ok: result["reasons"].append("endpoint_native_criterion_unmet")
         if not monotonic: result["reasons"].append("trajectory_not_monotonic")
@@ -485,9 +865,9 @@ def confirm_endpoint(
         "tikhonov": "discrepancy_regularized_normal_and_iterate_patience",
         "tv_fista": "discrepancy_prox_gradient_and_objective_patience",
     }
-    if solver_status == "converged" and solver_stopping_reason != allowed.get(algorithm):
+    if solver_status_value == "converged" and solver_stopping_reason != allowed.get(algorithm):
         result["reasons"].append("stopping_reason_not_allowed")
-    result["converged_at_budget_boundary"] = bool(solver_status == "converged" and max_iterations is not None and iterations == max_iterations)
-    result["passed"] = finite and (solver_status != "converged" or not result["reasons"])
+    result["converged_at_budget_boundary"] = bool(solver_status_value == "converged" and max_iterations is not None and iterations == max_iterations)
+    result["passed"] = finite and (solver_status_value != "converged" or not result["reasons"])
     result["status"] = "passed" if result["passed"] else "failed"
     return result

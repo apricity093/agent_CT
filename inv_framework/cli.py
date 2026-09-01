@@ -147,7 +147,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 fixed_compute=args.fixed_compute,
             )
             print(result["output_dir"])
-            return 0 if result["status"] == "success" else 1
+            if result["status"] == "success":
+                return 0
+            if result["status"] == "invalid_parameters":
+                print(result.get("message", "invalid CT parameters"), file=sys.stderr)
+                return 2
+            return 1
         if args.command == "eval":
             result = evaluate_run(args.run_dir, args.protocol)
             print(f"{args.run_dir}/evaluation.md")

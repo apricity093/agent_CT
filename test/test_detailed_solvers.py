@@ -108,12 +108,12 @@ def test_statistical_solver_rejects_signed_observations():
         MLEMSolver(num_iterations=1).solve(measurement, operator)
 
 
-def test_detailed_result_marks_nonfinite_state_as_numerical_failure():
+def test_detailed_result_marks_nonfinite_state_as_numerical_error():
     operator = IdentityOperator()
     measurement = torch.full((1, *operator.range_shape), float("nan"))
     result = CGLSSolver(num_iterations=2, tol=0.0).solve_detailed(measurement, operator)
 
-    assert result.status == "numerical_failure"
+    assert result.status == "numerical_error"
     assert result.stopping_reason == "non_finite_solver_state"
 
 
