@@ -68,6 +68,26 @@ registry 同时声明算法族、目标函数、支持的观测域、正则项�
 能力。不兼容组合会明确失败，不会被记录为成功运行。例如 MLEM/OSEM 只接受
 `nonnegative_counts` 或 `intensity`，不会把 `log_projection` 当作计数数据运行。
 
+### Registry contract
+
+版本化 registry schema `ct.algorithm_registry.v1` 的 ordinary-CT canonical IDs 固定为：
+
+```text
+fbp, sirt, landweber, cgls, lsqr, sart, os_sart, mlem, osem,
+tikhonov, tv_fista, fdk
+```
+
+registry、runtime build map、`configs/algorithms/*.yaml` 和 Agent-visible inventory
+必须是这 12 个 ID 的集合。Python helper `ossart` 只是 `os_sart` 的实现入口，不是
+额外的 registry alias；当前 alias map 为空。`tikhonov` 固定使用 `tikhonov` 正则，
+`tv_fista` 固定使用 `tv` 正则，不能由 Agent 任意替换。
+
+MLEM/OSEM 的边界是显式的 Poisson emission/count observation model；非负数值本身
+不足以把 X-ray `line_integral` 或 `log_projection` 变成 emission 数据。FDK 的
+metadata 明确要求 CUDA、ASTRA CUDA、`cone_3d` 和 cubic 3-D volume。registry 的
+参数约束、适用性、兼容性 reason codes 和诊断字段均可序列化为有限 JSON 数值，供
+Agent 在构造 solver 前进行合法性检查。
+
 每次运行都会生成 `diagnostics.json`，记录归一化参数、必要时由算子幂迭代得到的
 `||A||^2` 估计、收敛状态、停止原因、最终数据残差/目标函数、迭代数、forward/adjoint
 调用数、运行时间和资源信息。迭代 solver 的固定迭代数不等于“已收敛”；状态包括

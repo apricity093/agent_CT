@@ -13,7 +13,7 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 import torch
@@ -56,11 +56,17 @@ from inv_framework.solvers import (
     SolveControl,
 )
 from inv_framework.solvers.specs import (
+    ALGORITHM_ALIASES,
+    CANONICAL_ALGORITHM_IDS,
     CTAlgorithmSpec,
+    EMISSION_OBSERVATION_MODELS,
+    REGISTRY_SCHEMA_VERSION,
     SOLVER_SPECS,
     ParameterValidationResult,
+    registry_digest,
     regularizer_records,
     solver_records as _solver_records,
+    validate_registry,
     validate_compatibility,
     validate_parameter_values,
 )
@@ -89,10 +95,74 @@ class NumericalFailure(RuntimeError):
 
 
 def solver_records() -> list[dict[str, Any]]:
+    """Return the canonical registry, annotated with runtime reachability."""
+
+    validate_registry()
+    records = {record["name"]: record for record in _solver_records()}
+    digest = registry_digest()
     return [
-        {**record, "stopping_policy_versions": ["1.0"], "endpoint_confirmation": True}
-        for record in _solver_records()
+        {
+            **records[name],
+            "canonical_id": name,
+            "build_reachable": name in SOLVER_BUILDERS,
+            "config_filename": f"{name}.yaml",
+            "registry_digest": digest,
+            "stopping_policy_versions": ["1.0"],
+            "endpoint_confirmation": True,
+        }
+        for name in CANONICAL_ALGORITHM_IDS
     ]
+
+
+def algorithm_config_ids(config_root: str | Path | None = None) -> tuple[str, ...]:
+    """Return algorithm IDs represented by YAML files in a config directory."""
+
+    root = (
+        Path(config_root).expanduser().resolve()
+        if config_root is not None
+        else Path(__file__).resolve().parents[1] / "configs" / "algorithms"
+    )
+    if not root.is_dir():
+        return ()
+    file_ids = {path.stem for path in root.glob("*.yaml") if path.is_file()}
+    return tuple(
+        name for name in CANONICAL_ALGORITHM_IDS if name in file_ids
+    ) + tuple(sorted(file_ids - set(CANONICAL_ALGORITHM_IDS)))
+
+
+def runtime_registry_contract(config_root: str | Path | None = None) -> dict[str, Any]:
+    """Describe registry/build/config identity without executing a solver."""
+
+    registry_ids = tuple(SOLVER_SPECS)
+    build_ids = tuple(SOLVER_BUILDERS)
+    config_ids = algorithm_config_ids(config_root)
+    return {
+        "schema_version": REGISTRY_SCHEMA_VERSION,
+        "registry_digest": registry_digest(),
+        "canonical_algorithm_ids": list(CANONICAL_ALGORITHM_IDS),
+        "registry_ids": list(registry_ids),
+        "build_ids": list(build_ids),
+        "config_ids": list(config_ids),
+        "aliases": dict(ALGORITHM_ALIASES),
+        "missing_from_registry": sorted(set(CANONICAL_ALGORITHM_IDS) - set(registry_ids)),
+        "extra_in_registry": sorted(set(registry_ids) - set(CANONICAL_ALGORITHM_IDS)),
+        "missing_from_build": sorted(set(CANONICAL_ALGORITHM_IDS) - set(build_ids)),
+        "extra_in_build": sorted(set(build_ids) - set(CANONICAL_ALGORITHM_IDS)),
+        "missing_configs": sorted(set(CANONICAL_ALGORITHM_IDS) - set(config_ids)),
+        "extra_configs": sorted(set(config_ids) - set(CANONICAL_ALGORITHM_IDS)),
+        "all_build_reachable": set(registry_ids) == set(build_ids) == set(CANONICAL_ALGORITHM_IDS),
+        "all_configured": set(config_ids) == set(CANONICAL_ALGORITHM_IDS),
+    }
+
+
+def validate_runtime_registry(config_root: str | Path | None = None) -> dict[str, Any]:
+    """Fail closed when registry, build map, or YAML inventory drifts."""
+
+    validate_registry()
+    report = runtime_registry_contract(config_root)
+    if not report["all_build_reachable"] or not report["all_configured"]:
+        raise ValueError(f"ordinary CT registry/build/config contract mismatch: {report}")
+    return report
 
 
 def regularizer_records_public() -> list[dict[str, Any]]:
@@ -207,6 +277,15 @@ def _case_observation_domain(case: Any) -> str:
     return "line_integral"
 
 
+def _case_observation_model(case: Any) -> str | None:
+    """Read the public likelihood/observation model, if one is declared."""
+
+    metadata = getattr(case, "metadata", {}) or {}
+    measurement = metadata.get("measurement", {}) or {}
+    value = measurement.get("observation_model", metadata.get("observation_model"))
+    return str(value) if value is not None and str(value) else None
+
+
 def _explicit_problem_bounds(problem_constraints: Mapping[str, Any] | None) -> tuple[float | None, float | None]:
     """Read caller-provided value bounds without inspecting ground truth."""
 
@@ -281,6 +360,7 @@ def validate_parameters(
         elif geometry.get("range_shape") and len(geometry["range_shape"]) >= 2:
             views = int(geometry["range_shape"][-2])
     domain = observation_domain or (_case_observation_domain(case) if case is not None else None)
+    observation_model = _case_observation_model(case) if case is not None else None
     supplied = dict(parameters or {})
     sources: dict[str, str] = {str(key): str(value) for key, value in (parameter_sources or {}).items()}
     lower, upper = _explicit_problem_bounds(problem_constraints)
@@ -311,6 +391,17 @@ def validate_parameters(
         geometry_type=geometry_type,
         dimension=int(dimension) if dimension is not None else None,
         observation_domain=domain,
+        observation_model=observation_model,
+        observation_min=(
+            float(case.measurement.min().item())
+            if case is not None and isinstance(getattr(case, "measurement", None), torch.Tensor)
+            and case.measurement.numel() else None
+        ),
+        observation_finite=(
+            bool(torch.isfinite(case.measurement).all().item())
+            if case is not None and isinstance(getattr(case, "measurement", None), torch.Tensor)
+            else None
+        ),
         estimated_lipschitz=estimated,
         parameter_estimates=estimates,
         parameter_sources=sources,
@@ -330,6 +421,7 @@ def validate_solver_case(name: str, case: Any, observation_domain: str | None = 
             f"and geometry={geometry_type!r}."
         )
     domain = observation_domain or _case_observation_domain(case)
+    observation_model = _case_observation_model(case)
     if name in {"mlem", "osem"}:
         measurement_meta = dict(case.metadata.get("measurement", {}) or {})
         observation_model = str(
@@ -338,11 +430,11 @@ def validate_solver_case(name: str, case: Any, observation_domain: str | None = 
         # Nonnegative values alone do not establish the Poisson emission
         # model.  X-ray line integrals, including positive ones, are not
         # interchangeable with counts/intensities for EM updates.
-        if str(measurement_meta.get("kind", "")).lower() == "line_integral" and observation_model not in {
-            "emission",
-            "emission_counts",
-            "poisson_emission",
-        }:
+        measurement_kind = str(measurement_meta.get("kind", "")).lower()
+        if (
+            measurement_kind in {"line_integral", "log_projection", "transmission"}
+            or observation_model not in EMISSION_OBSERVATION_MODELS
+        ):
             raise ConfigError(
                 f"solver {name!r} requires an explicit Poisson emission/count "
                 "observation_model; X-ray line-integral data are incompatible"
@@ -352,6 +444,7 @@ def validate_solver_case(name: str, case: Any, observation_domain: str | None = 
         geometry_type=geometry_type,
         dimension=dimension,
         observation_domain=domain,
+        observation_model=observation_model,
     )
     if incompatibilities:
         raise ConfigError("; ".join(incompatibilities))
@@ -368,6 +461,11 @@ def build_operator(case: Any, device: str | torch.device):
         angles = torch.as_tensor(case.geometry["angles_rad"], dtype=torch.float32, device=resolved)
         return ParallelBeamRadon2D(domain[-1], angles=angles, device=str(resolved), in_channels=domain[0])
     if geometry_type == "cone_3d":
+        # Check the invariant device requirement before importing the optional
+        # ASTRA adapter.  This keeps the public failure reason deterministic
+        # when a caller requests CPU, even on a host without ASTRA installed.
+        if resolved.type != "cuda" or not torch.cuda.is_available():
+            raise BackendUnavailable("FDK requires --device cuda, PyTorch CUDA, and ASTRA CUDA.")
         try:
             from inv_framework.operators.ct import ASTRAFDKOperator3D
             from inv_framework.operators.ct import astra_adapter as astra_backend
@@ -376,7 +474,7 @@ def build_operator(case: Any, device: str | torch.device):
         if not astra_backend._HAS_ASTRA:
             raise BackendUnavailable("astra-toolbox is not installed.")
         astra = astra_backend.astra
-        if not astra.use_cuda() or not torch.cuda.is_available() or resolved.type != "cuda":
+        if not astra.use_cuda():
             raise BackendUnavailable("FDK requires --device cuda, PyTorch CUDA, and ASTRA CUDA.")
         domain = tuple(int(v) for v in case.geometry["domain_shape"])
         if len(domain) != 3 or len(set(domain)) != 1:
@@ -397,8 +495,44 @@ def build_operator(case: Any, device: str | torch.device):
     raise ConfigError(f"unsupported CT geometry type: {geometry_type!r}")
 
 
+def _build_tv_fista(**parameters: Any):
+    """Construct the fixed TV-FISTA/prior pairing from normalized parameters."""
+
+    params = dict(parameters)
+    tv = TVRegularizer(
+        mode=params.pop("tv_mode", "isotropic"),
+        num_iterations=int(params.pop("tv_num_iterations", 50)),
+        tolerance=float(params.pop("tv_tolerance", 1e-5)),
+    )
+    return TVFISTASolver(regularizer=tv, **params)
+
+
+# Keep this map at module scope so reachability is inspectable and testable.
+# The values are constructors, not additional algorithm registrations.
+SOLVER_BUILDERS: dict[str, Callable[..., Any]] = {
+    "fbp": FBPSolver,
+    "sirt": SIRTSolver,
+    "landweber": LandweberSolver,
+    "cgls": CGLSSolver,
+    "lsqr": LSQRSolver,
+    "sart": SARTSolver,
+    "os_sart": OSSARTSolver,
+    "mlem": MLEMSolver,
+    "osem": OSEMSolver,
+    "tikhonov": TikhonovSolver,
+    "tv_fista": _build_tv_fista,
+    "fdk": FDKSolver,
+}
+BUILD_SOLVER_MAP = SOLVER_BUILDERS
+BUILD_ALGORITHM_IDS = tuple(SOLVER_BUILDERS)
+
+
 def build_solver(name: str, parameters: Mapping[str, Any], case: Any):
     params = dict(parameters)
+    if name not in SOLVER_SPECS:
+        raise ConfigError(f"unknown solver: {name!r}")
+    if name not in SOLVER_BUILDERS:
+        raise ConfigError(f"solver {name!r} has no registered build path")
     num_views = int(case.measurement.shape[-2])
     if name in {"os_sart", "osem"} and params.get("subset_count") is not None:
         count = int(params.pop("subset_count"))
@@ -416,28 +550,15 @@ def build_solver(name: str, parameters: Mapping[str, Any], case: Any):
             start += size
         params.pop("block_size", None)
         params["subset_indices"] = subsets
-    classes = {
-        "fbp": FBPSolver,
-        "sirt": SIRTSolver,
-        "landweber": LandweberSolver,
-        "cgls": CGLSSolver,
-        "lsqr": LSQRSolver,
-        "sart": SARTSolver,
-        "os_sart": OSSARTSolver,
-        "mlem": MLEMSolver,
-        "osem": OSEMSolver,
-        "tikhonov": TikhonovSolver,
-        "fdk": FDKSolver,
-    }
-    if name == "tv_fista":
-        tv = TVRegularizer(
-            mode=params.pop("tv_mode", "isotropic"),
-            num_iterations=int(params.pop("tv_num_iterations", 50)),
-            tolerance=float(params.pop("tv_tolerance", 1e-5)),
-        )
-        return TVFISTASolver(regularizer=tv, **params)
+    elif name in {"os_sart", "osem"}:
+        # ``None`` is a valid registry default for the optional subset count,
+        # but it is not a constructor keyword.  Leave backend-derived subset
+        # partitioning to the solver when neither subset_count nor block_size
+        # was supplied.
+        params.pop("subset_count", None)
+    builder = SOLVER_BUILDERS[name]
     try:
-        return classes[name](**params)
+        return builder(**params)
     except (TypeError, ValueError) as error:
         raise ConfigError(f"invalid parameters for {name}: {error}") from error
 

@@ -1,15 +1,33 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 
 from inv_framework.convergence import ConvergenceStatus, classify_trajectory
 from inv_framework.solvers import ConsecutiveStoppingMonitor, SolveControl
-from inv_framework.ct_runtime import run_case
+from inv_framework.ct_runtime import (
+    SOLVER_BUILDERS,
+    algorithm_config_ids,
+    build_solver,
+    run_case,
+    validate_runtime_registry,
+)
 from pathlib import Path
 from inv_framework.instrumentation import CountingLinearOperator, OperatorBudgetExceeded
 from inv_framework.operators.base import LinearOperator
-from inv_framework.solvers.specs import SOLVER_SPECS, validate_parameter_values
+from inv_framework.solvers.specs import (
+    ALGORITHM_ALIASES,
+    CANONICAL_ALGORITHM_IDS,
+    COMPATIBILITY_REASON_CODES,
+    NON_APPLICABLE_PARAMETER_CATEGORIES,
+    SOLVER_SPECS,
+    compatibility_diagnostics,
+    registry_contract,
+    registry_digest,
+    validate_parameter_values,
+)
 
 
 class IdentityOperator(LinearOperator):
@@ -24,7 +42,7 @@ class IdentityOperator(LinearOperator):
 
 
 def test_registry_contains_complete_metadata_and_statistical_domain_gate():
-    assert len(SOLVER_SPECS) == 12
+    assert tuple(SOLVER_SPECS) == CANONICAL_ALGORITHM_IDS
     for spec in SOLVER_SPECS.values():
         assert spec.parameter_names == tuple(parameter.name for parameter in spec.parameters)
         assert spec.observation_domains
@@ -32,6 +50,69 @@ def test_registry_contains_complete_metadata_and_statistical_domain_gate():
     result = validate_parameter_values("mlem", {}, observation_domain="log_projection")
     assert not result.valid
     assert any("observation domain" in error for error in result.errors)
+    missing_model = validate_parameter_values("mlem", {}, observation_domain="nonnegative_counts")
+    assert not missing_model.valid
+    assert "emission_observation_model_required" in missing_model.reason_codes
+
+
+def test_registry_build_config_bijection_is_json_stable():
+    report = validate_runtime_registry()
+    assert report["canonical_algorithm_ids"] == list(CANONICAL_ALGORITHM_IDS)
+    assert set(report["registry_ids"]) == set(CANONICAL_ALGORITHM_IDS)
+    assert set(report["build_ids"]) == set(CANONICAL_ALGORITHM_IDS)
+    assert set(report["config_ids"]) == set(CANONICAL_ALGORITHM_IDS)
+    assert set(SOLVER_BUILDERS) == set(CANONICAL_ALGORITHM_IDS)
+    assert algorithm_config_ids() == CANONICAL_ALGORITHM_IDS
+    assert report["all_build_reachable"] is True
+    assert report["all_configured"] is True
+    assert report["aliases"] == ALGORITHM_ALIASES == {}
+    assert registry_contract()["schema_version"] == "ct.algorithm_registry.v1"
+    assert report["registry_digest"] == registry_digest()
+
+
+def test_every_canonical_builder_constructs_from_registry_defaults():
+    case = SimpleNamespace(
+        measurement=torch.zeros(1, 16, 4),
+        geometry={"type": "parallel_2d"},
+    )
+    constructed = {
+        name: type(build_solver(name, validate_parameter_values(name, {}).parameters, case)).__name__
+        for name in CANONICAL_ALGORITHM_IDS
+    }
+    assert set(constructed) == set(CANONICAL_ALGORITHM_IDS)
+
+
+def test_registry_exposes_fixed_pairings_and_non_applicable_categories():
+    assert SOLVER_SPECS["tikhonov"].regularizer_pairing == "tikhonov"
+    assert SOLVER_SPECS["tv_fista"].regularizer_pairing == "tv"
+    assert SOLVER_SPECS["tikhonov"].regularizer_pairing_policy == "fixed"
+    assert SOLVER_SPECS["tv_fista"].regularizer_pairing_policy == "fixed"
+    for spec in SOLVER_SPECS.values():
+        for category in NON_APPLICABLE_PARAMETER_CATEGORIES:
+            assert spec.parameter_applicability[category] == "not_applicable"
+    assert {
+        "parameter_not_applicable",
+        "free_momentum_not_applicable",
+    } <= set(COMPATIBILITY_REASON_CODES)
+
+
+def test_structured_compatibility_diagnostics_explain_emission_boundary():
+    issues = compatibility_diagnostics(
+        "mlem",
+        observation_domain="line_integral",
+        observation_model="xray_transmission",
+    )
+    codes = {issue["code"] for issue in issues}
+    assert "observation_domain_unsupported" in codes
+    assert "observation_model_unsupported" in codes
+    assert "emission_observation_model_required" in codes
+    assert all({"code", "severity", "message", "details"} <= set(issue) for issue in issues)
+
+
+def test_fdk_metadata_advertises_backend_and_volume_requirements():
+    spec = SOLVER_SPECS["fdk"]
+    assert {"ASTRA CUDA", "CUDA", "ASTRA", "cone_3d", "cubic_voxels"} <= set(spec.requirements)
+    assert "backend_capabilities" in spec.required_metadata
 
 
 @pytest.mark.parametrize(
