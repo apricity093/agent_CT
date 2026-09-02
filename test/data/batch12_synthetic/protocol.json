@@ -1,0 +1,33 @@
+{
+  "schema_version": "ct.batch12_synthetic_protocol.v1",
+  "purpose": "Deterministic ordinary-CT quick status matrix; no quality benchmark or USCT input.",
+  "seeds": [17, 29, 43],
+  "sizes": [16, 32],
+  "iterative_scenarios": [
+    "normal",
+    "max_iterations",
+    "stalled",
+    "diverged",
+    "nonfinite",
+    "invalid_parameters",
+    "tolerance_sensitivity",
+    "trajectory_consistency"
+  ],
+  "direct_scenarios": [
+    "valid",
+    "nonfinite",
+    "invalid_parameters",
+    "unavailable",
+    "max_iterations:not_applicable",
+    "stalled:not_applicable",
+    "diverged:not_applicable",
+    "tolerance_sensitivity:not_applicable",
+    "trajectory_consistency:not_applicable"
+  ],
+  "limits": {
+    "max_solver_iterations": 8,
+    "max_size": 32,
+    "device": "cpu",
+    "dtype": "float64"
+  }
+}
