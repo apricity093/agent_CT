@@ -1,0 +1,92 @@
+{
+  "agent_commit": "010e3a2fd0f330b292301bf227dc525d48382cb1",
+  "agent_tracked_worktree_clean": true,
+  "algorithm_fdk": "fdk",
+  "algorithms_2d": [
+    "fbp",
+    "sirt",
+    "landweber",
+    "cgls",
+    "lsqr",
+    "sart",
+    "tikhonov",
+    "tv_fista"
+  ],
+  "automatic_retries": 0,
+  "cases": {
+    "parallel_2d/tissue_breast_sparse_poisson_128": {
+      "arrays_sha256": "7bd2662a6c5c32a9a559ef73e8c427e2590dc599d0df21113c553c451c21a8e2",
+      "manifest_sha256": "3cd02062e461fe6d1ff541bdfc855d82a9f7bf4b91075d3312633a9aca1a85a6"
+    },
+    "cone_3d/modified_shepp_logan_64_clean": {
+      "arrays_sha256": "baeefe3524d593e0703f1ff91989c75325adf833711d304c471ec2268b5ac5a5",
+      "manifest_sha256": "a220e560dee880aa64a1519b6538759a4a373a4a25925ca05915a1a18194d1ec",
+      "volume_shape": [
+        64,
+        64,
+        64
+      ],
+      "measurement_shape": [
+        128,
+        180,
+        128
+      ],
+      "generator": "modified_shepp_logan_3d_v1 + ASTRA FP3D_CUDA",
+      "noise_model": "none"
+    }
+  },
+  "comparison_policy": "fixed_defaults/v1; no tuning; no retry; independent axes; no cross-geometry ranking",
+  "config_sha256": {
+    "cgls": "d3567d8525261e864e1ac985a95213258f219de05c3c10051061016747a6d951",
+    "fbp": "475cb421563ff813d2ff50f87f772d675c3e78a1a14337330f56a5fe7953a1a5",
+    "fdk": "c36b7c397684bb808f0ae486738cf50132bd3d9cc2a94a871068600414ab85b3",
+    "landweber": "cf1c7251825da59a926a553324ef98c22420d2384fce4e419e13cbba0f9f3f1a",
+    "lsqr": "6427f02f506ffd31e3dd6540871546e4a0d34b73b0fab006ef2149dcc31695e5",
+    "sart": "7bafec660b26ebf21ce1dfdbe1991d95b0865f49337273b12e834169bc31369d",
+    "sirt": "ed43ff677fbc93f25137411d8dd3834cf0c5b38ce1a8f7e3152f2c5838d469f1",
+    "tikhonov": "a87e9774fca10d813f69cb02025d5cf94adc6066184932db11dc450e953b2ae1",
+    "tv_fista": "0b752c33bca9114e3c29b4a9bd2a123b1f0690c2ef61464b7dab2f760486692d"
+  },
+  "ct_commit": "28d658418c919239fd618ceb0de522207011e405",
+  "ct_worktree_clean": true,
+  "environment_2d": {
+    "cuda_available": false,
+    "cuda_device": null,
+    "executable": "D:\\anaconda3\\envs\\inverse-agent-round1\\python.exe",
+    "h5py": "3.16.0",
+    "matplotlib": "3.11.1",
+    "numpy": "2.5.2",
+    "pydantic": "2.13.5",
+    "python": "3.12.14",
+    "torch": "2.5.1"
+  },
+  "environment_fdk": {
+    "astra": "2.2.0",
+    "astra_cuda": true,
+    "cuda_available": true,
+    "cuda_device": "NVIDIA GeForce GTX 1650",
+    "executable": "D:\\anaconda3\\envs\\fno\\python.exe",
+    "h5py": "3.15.1",
+    "matplotlib": "3.10.5",
+    "numpy": "2.2.4",
+    "pydantic": "2.12.5",
+    "python": "3.11.11",
+    "torch": "2.5.1"
+  },
+  "formal_entrypoint": "python -m inverse_agent.cli run-experiment --request <request.json> --ct-repo external/ct-benchlab",
+  "frozen_at": "2026-09-02T12:03:04.718020+00:00",
+  "parameter_policy": "fixed_defaults/v1 from the pinned repository YAML; Agent selection audit retained without an unfinished recommendation plan",
+  "schema_version": "ct.readme_final_agent_protocol.v1",
+  "scope": "ordinary CT only; USCT excluded",
+  "stopping_policy_2d": "solver defaults from the pinned repository configuration",
+  "truth_access": "evaluation_only",
+  "tuning": false,
+  "frozen_at_fdk": "2026-09-02T12:24:49.373908+00:00",
+  "fdk_agent_run_id": "readme-fdk-agent64-20260902",
+  "fdk_parameters": {
+    "filter_type": "ram-lak",
+    "short_scan": false,
+    "voxel_supersampling": 1
+  },
+  "fdk_truth_policy": "withheld from backend; evaluation_only"
+}

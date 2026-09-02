@@ -1,61 +1,52 @@
 # inv_framework
 
-`inv_framework` 是一个面向 X-ray CT 重建与评测的轻量 Python 框架。项目将 CT
-前向算子、经典求解算法、版本化测试数据和评测协议组织为统一接口，并提供可安装的
-`invct` 命令行工具，用于复现单次重建和批量 benchmark。
+`inv_framework` 是一个面向 X-ray CT 重建与评测的轻量 Python 框架。它将 CT
+前向/伴随算子、经典重建算法、版本化测试数据、参数验证、收敛诊断和公平比较协议
+组织为统一接口，并提供 `invct` 命令行工具。
 
-项目当前提供 12 个传统 CT solver、纯 PyTorch 2D parallel-beam Radon、ASTRA
-3D/FDK 后端、统一质量指标，以及包含 tensor、图像、manifest 和 SHA256 的可审计产物。
+当前版本提供 12 个 ordinary-CT solver、纯 PyTorch 2D parallel-beam Radon、ASTRA
+3D/FDK 后端，以及可供上层 inverse-problem Agent 程序化读取的算法 metadata。
+CT 与 USCT 是独立问题域；本仓库不包含或替代 USCT 算法。
 
-## CT 是什么？
+## CT 重建模型
 
-计算机断层成像（Computed Tomography, CT）从不同角度采集 X-ray 投影，再根据扫描
-几何恢复物体内部的线性衰减系数。二维 parallel-beam CT 的测量通常称为 sinogram；
-三维 cone-beam CT 的测量则由多角度二维投影组成。
-
-CT 重建的核心困难包括有限角度、稀疏角度、测量噪声和大型三维数据。解析算法速度快，
-迭代算法能够更灵活地加入约束与正则化，不同算法应当在相同数据、几何和指标协议下比较。
-
-## 数学形式
-
-离散 CT 前向模型写作：
+离散线性 CT 前向模型为：
 
 ```text
 y = A x + n
 ```
 
-- `x`：待重建的二维图像或三维体数据
-- `A`：由扫描几何确定的正投影算子
-- `y`：探测器测量
-- `n`：高斯噪声、Poisson 光子噪声或其他误差
+- `x`：二维衰减图或三维体数据；
+- `A`：由扫描几何确定的正投影算子；
+- `y`：探测器测量；
+- `n`：高斯噪声、Poisson 光子噪声或其他误差。
 
-线性 CT 中，`A^T` 表示伴随算子。常见的正则化重建目标为：
+常见的正则化重建目标为：
 
 ```text
 min_x  0.5 * ||A x - y||_2^2 + lambda * R(x)
 ```
 
-CGLS 和 LSQR 直接处理线性最小二乘问题，SART 与 OSEM 使用投影子集，Tikhonov
-使用二次正则，TV-FISTA 使用总变分正则，FBP 和 FDK 则属于解析或近似解析重建方法。
+算法比较必须保持投影数据、几何、预处理、分辨率、初始化、数值精度和预算协议一致。
 
 ## 支持的算法
 
-| CLI 名称 | 算法 | 维度与几何 | 主要配置 | 后端 |
+| CLI 名称 | 算法 | 几何 | 主要配置 | 后端 |
 | --- | --- | --- | --- | --- |
 | `fbp` | Filtered Backprojection | 2D parallel | `scale` | PyTorch CPU/CUDA |
 | `sirt` | SIRT | 2D parallel | `num_iterations`、上下界 | PyTorch CPU/CUDA |
 | `landweber` | Landweber | 2D parallel | `num_iterations`、`step_size` | PyTorch CPU/CUDA |
 | `cgls` | CGLS | 2D parallel | `num_iterations`、`tol` | PyTorch CPU/CUDA |
-| `lsqr` | LSQR | 2D parallel | `num_iterations`、`damping` | PyTorch CPU/CUDA |
+| `lsqr` | LSQR | 2D parallel | `num_iterations`、`atol`、`btol` | PyTorch CPU/CUDA |
 | `sart` | SART | 2D parallel | `block_size`、`relaxation` | PyTorch CPU/CUDA |
 | `os_sart` | Ordered-subsets SART | 2D parallel | `subset_count`、`relaxation` | PyTorch CPU/CUDA |
 | `mlem` | MLEM | 2D parallel | `num_iterations`、`initial_value` | PyTorch CPU/CUDA |
 | `osem` | OSEM | 2D parallel | `subset_count`、`initial_value` | PyTorch CPU/CUDA |
 | `tikhonov` | Tikhonov CG | 2D parallel | `reg_strength`、`tolerance` | PyTorch CPU/CUDA |
 | `tv_fista` | TV-FISTA | 2D parallel | `reg_strength`、TV proximal 参数 | PyTorch CPU/CUDA |
-| `fdk` | Feldkamp-Davis-Kress | 3D circular cone | short scan、voxel supersampling | ASTRA CUDA |
+| `fdk` | Feldkamp-Davis-Kress | 3D circular cone | filter、short scan、supersampling | ASTRA CUDA |
 
-查看 registry 及每个 solver 的默认参数和能力要求：
+查询 registry、默认参数和能力约束：
 
 ```bash
 invct list-solvers
@@ -63,97 +54,17 @@ invct list-solvers --json
 invct list-regularizers --json
 ```
 
-registry 同时声明算法族、目标函数、支持的观测域、正则项、参数约束、初始化策略、
-复杂度和失败模式。运行前会检查 solver、参数类型、数据维度、扫描几何、观测域和后端
-能力。不兼容组合会明确失败，不会被记录为成功运行。例如 MLEM/OSEM 只接受
-`nonnegative_counts` 或 `intensity`，不会把 `log_projection` 当作计数数据运行。
-
-### Registry contract
-
-版本化 registry schema `ct.algorithm_registry.v1` 的 ordinary-CT canonical IDs 固定为：
+canonical solver ID 固定为：
 
 ```text
 fbp, sirt, landweber, cgls, lsqr, sart, os_sart, mlem, osem,
 tikhonov, tv_fista, fdk
 ```
 
-registry、runtime build map、`configs/algorithms/*.yaml` 和 Agent-visible inventory
-必须是这 12 个 ID 的集合。Python helper `ossart` 只是 `os_sart` 的实现入口，不是
-额外的 registry alias；当前 alias map 为空。`tikhonov` 固定使用 `tikhonov` 正则，
-`tv_fista` 固定使用 `tv` 正则，不能由 Agent 任意替换。
-
-MLEM/OSEM 的边界是显式的 Poisson emission/count observation model；非负数值本身
-不足以把 X-ray `line_integral` 或 `log_projection` 变成 emission 数据。FDK 的
-metadata 明确要求 CUDA、ASTRA CUDA、`cone_3d` 和 cubic 3-D volume。registry 的
-参数约束、适用性、兼容性 reason codes 和诊断字段均可序列化为有限 JSON 数值，供
-Agent 在构造 solver 前进行合法性检查。
-
-每次运行都会生成 `diagnostics.json`，记录归一化参数、必要时由算子幂迭代得到的
-`||A||^2` 估计、收敛状态、停止原因、最终数据残差/目标函数、迭代数、forward/adjoint
-调用数、运行时间和资源信息。迭代 solver 的固定迭代数不等于“已收敛”；状态包括
-`converged`、`partial`、`stalled`、`diverged`、`max_iterations`、
-`non_iterative_completed`、`invalid_parameters` 和 `numerical_failure`。
-
-Stopping-policy schema `1.0` 在保留 solver-native 数学判据的同时统一
-`min_iterations`、`check_every` 和连续 `patience` 状态机。SART/OS-SART 仅在完整
-epoch 后检查；CGLS/LSQR 使用归一化 normal residual；Tikhonov 使用正则化 normal
-residual；TV-FISTA 使用完整 composite objective 和归一化 prox-gradient mapping。
-endpoint confirmation 从最终 reconstruction 独立重算证据，其 forward/adjoint 调用与
-optimization calls 分开记账。预算耗尽或正常进程退出绝不改写为 `converged`。
-
-### Batch 5 termination semantics
-
-MLEM/OSEM 只在完整迭代（OSEM 为完整 subset sweep）后记录并检查证据：使用归一化
-Poisson deviance、相对图像变化和连续 patience；OSEM 还记录 subset-cycle evidence。
-计数/强度数据必须显式声明 Poisson emission/count observation model，不能把
-`line_integral` 或 `log_projection` 当作 emission 数据。目标未达到而证据停滞记为
-`stalled`，Poisson deviance 持续增长或出现非有限值记为 `diverged` 或
-`numerical_error`，不会伪装成收敛。
-
-FBP/FDK 是 direct solver：有限、形状正确且参数有效的输出状态为
-`completed_valid`，不是 `converged`；参数错误为 `invalid_parameters`，非有限输出为
-`numerical_error`。FDK 缺少 CUDA/ASTRA 或不满足其后端能力时为 `unavailable`，不会回退
-到 CPU 假装完成。
-
-### Batch 6 参数验证与理论初始化
-
-所有 12 个 canonical solver 的参数约束由 `inv_framework.solvers.specs` registry
-声明，并在构造 solver 前执行。数值参数必须有限；迭代次数、容差、正则化强度和
-epsilon 遵守各自的非负/正值下界；`min_value <= max_value`；`block_size` 与
-`subset_count` 不得超过公开 view 数，二者同时给出时还必须描述同一个 balanced
-partition。MLEM/OSEM 需要显式的非负 count/intensity observation domain 和 Poisson
-emission model。提供 runtime/context 时，`dimension` 必须是严格正整数；request-only
-校验仍允许省略它。FDK 需要 `cone_3d`、CUDA 与 ASTRA CUDA 能力，且每个提供的
-`domain_shape`/`image_shape` 都必须恰好是三个严格正整数并组成 cubic volume。
-
-Landweber 使用严格的
-`0 < step_size < 2 / ||A||^2`，TV-FISTA 使用
-`0 < step_size <= 1 / ||A||^2`。省略步长时，runtime 在构造公开算子后以固定
-`linspace(0.5, 1.5, prod(domain_shape))` 初始向量执行 deterministic power
-iteration，并使用 `0.9 / ||A||^2`（Landweber）或 `0.99 / ||A||^2`（TV-FISTA）。
-估计阶段的 forward/adjoint 调用单独计入 `parameter_estimation`，不会混入 solver
-迭代调用；没有算子时只返回 request-only warning，不伪造谱估计。
-
-每个验证结果包含归一化参数、参数来源、估计值、`reason_codes` 和
-`warning_codes`。无效参数在进入 solver loop 前返回 `invalid_parameters`，solver
-迭代数为零；ADMM `rho`、primal/dual step 与 free momentum 对当前 registry 显式
-标记为 not applicable，TV-FISTA 的 Nesterov momentum 是内部固定序列。
-
-在 Agent 的 public staging 中，`truth/x` 仅保留外部 loader 所需的零值形状占位符，真实
-truth 及其动态范围元数据不会进入 backend。此时 `metrics.json` 只报告数据一致性与资源
-指标，不生成 RMSE、PSNR、SSIM；图像质量指标由独立 evaluator 从私有源计算。
-
-## Benchmark protocol
-
-生产比较应明确记录以下协议之一：
-
-- `fixed_defaults`：所有 solver 使用 registry/config 默认值，不进行 truth 调参；
-- `equal_operator_calls`：所有候选共享相同的 forward/adjoint 调参预算；
-- `oracle_calibration`：允许使用 truth 的离线校准，结果不得与前两种在线协议混报。
-
-比较结果分别报告图像质量、投影一致性/收敛和 runtime、operator calls、memory；不把这些
-轴压成一个总分。`BenchmarkBudget` 会校验协议与调用预算，`pareto_front` 和分组排名
-保留非支配候选及各指标的独立排序。
+`tikhonov` 固定搭配 Tikhonov 正则，`tv_fista` 固定搭配 TV 正则。MLEM/OSEM 只接受
+显式的非负 emission/count observation model；不能把 X-ray `line_integral` 或
+`log_projection` 当成计数数据。FDK 要求 `cone_3d`、cubic volume、PyTorch CUDA 和
+ASTRA CUDA。
 
 ## 安装
 
@@ -162,54 +73,28 @@ truth 及其动态范围元数据不会进入 backend。此时 `metrics.json` �
 ```bash
 git clone https://github.com/apricity093/agent_CT.git
 cd agent_CT
-python -m pip install -e .
+python -m pip install -e ".[dev]"
 ```
 
-安装后可以使用 `invct`，也可以通过 Python 模块入口执行同一套命令：
+安装后可使用控制台入口，也可使用等价的模块入口：
 
 ```bash
 invct --help
 python -m inv_framework --help
 ```
 
-主要依赖由 `pyproject.toml` 声明，包括 PyTorch、NumPy、h5py、PyYAML 和
-Matplotlib。开发环境可安装：
+FDK 还需要安装带 CUDA 支持的
+[ASTRA Toolbox](https://github.com/astra-toolbox/astra-toolbox)。二维算法可在 CPU 或
+CUDA 上运行；FDK 不会回退到语义不同的 CPU 实现。
 
-```bash
-python -m pip install -e ".[dev]"
-```
+## 数据查询与校验
 
-FDK 还需要安装带 CUDA 支持的 [ASTRA Toolbox](https://github.com/astra-toolbox/astra-toolbox)。
-
-## 运行环境与 GPU
-
-算法可以在 GPU 上运行。`fbp` 到 `tv_fista` 的 11 个二维算法都基于 PyTorch，
-指定 `--device cuda` 后，case tensor、Radon operator 和 solver 计算都会位于 CUDA
-设备。没有可用 GPU 时，这些二维算法可以改用 `--device cpu`。
-
-README 中的单算法示例优先使用 CUDA
-
-FDK 的能力边界不同：`fdk` 必须同时满足以下条件，不能回退到 CPU：
-
-- 命令指定 `--device cuda`
-- PyTorch CUDA 可用
-- ASTRA 已安装且 `astra.use_cuda()` 为真
-- case 使用受支持的 regular circular cone geometry 和 cubic voxels
-
-## 准备和检查数据
-
-仓库提供 JSON catalog、case manifest 和 HDF5 数组。可以先查询数据：
+默认数据根目录为 `test/data`。查询 catalog：
 
 ```bash
 invct data list
 invct data list --dimension 2
 invct data list --geometry parallel_2d --tag quality
-invct data list --json
-```
-
-查看单个 case：
-
-```bash
 invct data show parallel_2d/tissue_breast_dense_clean_128
 ```
 
@@ -220,214 +105,244 @@ invct data validate
 invct data validate parallel_2d/tissue_breast_dense_clean_128
 ```
 
-默认数据根目录为仓库内的 `test/data`。使用外部 catalog 时可为数据命令或 `run`
-显式传入 `--root PATH` / `--data-root PATH`。
-
-每个 case 的 HDF5 数据使用统一键：
+外部 catalog 可通过 `--root PATH`（数据子命令）或 `--data-root PATH`（`run`）传入。
+每个 case 的 HDF5 使用以下统一键：
 
 | 路径 | 含义 |
 | --- | --- |
 | `truth/x` | ground truth，shape 为 `(B, *domain_shape)` |
 | `measurement/y_clean` | 无噪测量 |
-| `measurement/y_observed` | 实际输入 solver 的测量 |
+| `measurement/y_observed` | solver 的实际输入 |
 | `masks/roi` | 可选图像 ROI |
 | `masks/valid_measurement` | 可选有效测量 mask |
 
 ## 运行单个算法
 
-每个 solver使用各自的严格 YAML 配置；未知字段、错误类型和几何不兼容会在数值计算前失败。
+每个 solver 使用自己的严格 YAML 配置。未知字段、错误类型、无效参数、几何或观测域
+不兼容会在数值迭代前失败。
 
-### FBP
-
-```bash
-invct run fbp --case parallel_2d/tissue_breast_dense_clean_128 --config configs/algorithms/fbp.yaml --out artifacts/fbp_dense_cuda --device cuda
-```
-
-### SIRT
+CPU 示例：
 
 ```bash
-invct run sirt --case parallel_2d/tissue_breast_dense_clean_128 --config configs/algorithms/sirt.yaml --out artifacts/sirt_dense_cuda --device cuda
+invct run cgls \
+  --case parallel_2d/tissue_breast_dense_clean_128 \
+  --config configs/algorithms/cgls.yaml \
+  --out artifacts/cgls_dense_cpu \
+  --device cpu
 ```
 
-### Landweber
+CUDA 示例：
 
 ```bash
-invct run landweber --case parallel_2d/tissue_breast_dense_clean_128 --config configs/algorithms/landweber.yaml --out artifacts/landweber_dense_cuda --device cuda
+invct run tv_fista \
+  --case parallel_2d/tissue_breast_sparse_poisson_128 \
+  --config configs/algorithms/tv_fista.yaml \
+  --out artifacts/tv_fista_sparse_cuda \
+  --device cuda
 ```
 
-### CGLS
+FDK 示例：
 
 ```bash
-invct run cgls --case parallel_2d/tissue_breast_dense_clean_128 --config configs/algorithms/cgls.yaml --out artifacts/cgls_dense_cuda --device cuda
+invct run fdk \
+  --case cone_3d/spheres_astra_12 \
+  --config configs/algorithms/fdk.yaml \
+  --out artifacts/fdk_cone_cuda \
+  --device cuda
 ```
 
-### LSQR
+MLEM/OSEM 必须使用明确声明 `nonnegative_counts` 或 `intensity` 的 emission catalog。
+不要将上面的 transmission case 替换进统计重建命令。SART/OS-SART 的
+`block_size`/`subset_count` 还必须与公开 view 数形成合法 partition。
 
-```bash
-invct run lsqr --case parallel_2d/tissue_breast_dense_clean_128 --config configs/algorithms/lsqr.yaml --out artifacts/lsqr_dense_cuda --device cuda
-```
-
-### SART
-
-```bash
-invct run sart --case parallel_2d/tissue_breast_dense_clean_128 --config configs/algorithms/sart.yaml --out artifacts/sart_dense_cuda --device cuda
-```
-
-### OS-SART
-
-```bash
-invct run os_sart --case parallel_2d/tissue_breast_dense_clean_128 --config configs/algorithms/os_sart.yaml --out artifacts/os_sart_dense_cuda --device cuda
-```
-
-### MLEM
-
-```bash
-invct run mlem --case parallel_2d/tissue_breast_dense_clean_128 --config configs/algorithms/mlem.yaml --out artifacts/mlem_dense_cuda --device cuda
-```
-
-### OSEM
-
-```bash
-invct run osem --case parallel_2d/tissue_breast_dense_clean_128 --config configs/algorithms/osem.yaml --out artifacts/osem_dense_cuda --device cuda
-```
-
-### Tikhonov
-
-```bash
-invct run tikhonov --case parallel_2d/tissue_breast_dense_clean_128 --config configs/algorithms/tikhonov.yaml --out artifacts/tikhonov_dense_cuda --device cuda
-```
-
-### TV-FISTA
-
-```bash
-invct run tv_fista --case parallel_2d/tissue_breast_dense_clean_128 --config configs/algorithms/tv_fista.yaml --out artifacts/tv_fista_dense_cuda --device cuda
-```
-
-### FDK
-
-FDK 使用单独的 3D cone-beam case，并要求 ASTRA CUDA：
-
-```bash
-invct run fdk --case cone_3d/spheres_astra_12 --config configs/algorithms/fdk.yaml --out artifacts/fdk_cone_cuda --device cuda
-```
-
-输出目录非空时默认拒绝运行，以防旧结果与新 manifest 混合。确认替换该次 run 产物时，
-在相应命令末尾显式加入 `--overwrite`。
+输出目录非空时命令默认拒绝运行，防止新旧 manifest 混合。只有确认替换该次 run
+产物时才显式添加 `--overwrite`。
 
 ## 离线评估
 
-`eval` 直接读取 run 保存的 tensor bundle，重新计算指标，不会重新运行 solver，也不
-依赖当前机器上的 projector 或 ASTRA：
+`eval` 从已保存的 tensor bundle 重算指标，不重新运行 solver，也不依赖原机器上的
+projector 或 ASTRA：
 
 ```bash
-invct eval --run artifacts/fbp_dense_cuda --protocol /path/to/single_run_protocol.yaml
+invct eval \
+  --run artifacts/cgls_dense_cpu \
+  --protocol configs/protocols/traditional_quality.yaml
 ```
 
-单次评估 protocol 可以写为：
-
-```yaml
-schema_version: 1
-name: single_run
-expected_statuses: [success]
-min_records: 1
-required_metrics: [relative_error, rmse, psnr, ssim, data_residual, runtime_seconds]
-thresholds:
-  psnr: {min: 15.0}
-  ssim: {min: 0.5}
-  data_residual: {max: 1.0}
-```
-
-protocol 使用显式 `{min: ...}` 或 `{max: ...}` 声明阈值方向。评估会生成
-`evaluation.json` 与中文 `evaluation.md` 报告。统一指标包括：
-
-- relative error
-- RMSE
-- PSNR
-- SSIM
-- data residual
-- runtime
-
-二维 case 使用 2D SSIM；3D FDK 使用所有 axial slices 的平均 SSIM。
+评估 protocol 使用显式 `{min: ...}` 或 `{max: ...}` 表示阈值方向。存在私有 ground
+truth 时可报告 RMSE、PSNR、SSIM 和 relative error；Agent public staging 不向 backend
+暴露 truth，此时 backend 只报告数据一致性、优化和资源指标，图像质量由独立 evaluator
+计算。
 
 ## 运行 benchmark
 
-suite 使用 group 表达“算法配置列表 x case 列表”，因此 registry 中的 11 个二维算法
-和 FDK 可以分别使用合适的几何；质量 suite 只选择其中 9 个与 transmission/log-domain
-观测模型兼容的二维算法：
+版本化 suite 将算法配置列表与 case 列表分组，并按几何和观测模型过滤不兼容组合：
 
 ```bash
 invct bench --suite configs/benchmarks/traditional_quality.yaml
 ```
 
-仓库自带的质量 suite 在三个 128x128 parallel-beam case 上运行 9 个兼容的二维
-transmission/log-domain 算法，并在独立 3D cone-beam case 上运行 FDK，共产生 28 个
-独立 job。MLEM/OSEM 是 emission-style Poisson solver，不会被错误地用于这些
-X-ray line-integral/poisson-log case。suite 配置使用
-`device: cuda`，要求 PyTorch CUDA 和 ASTRA CUDA。
+公平比较协议可在不执行重建的情况下校验：
 
-需要无 ground-truth 调参时，在 group 中声明确定性的 held-out angle split：
-
-```yaml
-benchmark_protocol: fixed_defaults
-groups:
-  - heldout_split: {folds: 3, protocol_version: heldout_projection_cv/v1}
-    algorithms:
-      - {name: tikhonov, config: ../algorithms/tikhonov.yaml}
-    cases: [parallel_2d/tissue_breast_dense_clean_128]
+```bash
+invct protocol-check \
+  --protocol configs/fair_protocols/equal_operator_calls_v1.yaml
 ```
 
-每个 fold 使用同一组原始角度的互补 fit/held-out 子集，split hash 会写入每条
-benchmark record；不会用 truth 选择参数。`equal_operator_calls` 还会将 solver
-设置为 fixed-compute，并在 `benchmark.json` 中保留公平性检查和 Pareto front。
+支持固定默认值、等 trial、等调参时间、等 operator calls、公共验证集，以及单独标记的
+离线 oracle upper bound。在线选择不得使用测试 truth。结果按图像质量、数据一致性、
+优化行为、计算效率和鲁棒性分别报告，不合成为无依据的总分。
 
-`oracle_calibration` 必须显式声明互不重叠的 `calibration_cases`、冻结的
-`oracle_metric` 和每个算法等长的 `parameter_grid`；`budget.tuning_trials` 必须与
-网格长度一致。runner 只在 development/calibration cases 上选择参数，随后在
-`cases` 上执行一次最终运行，并把全部 calibration 成功/失败记录和选择结果写入
-`benchmark.json`。校准参数的来源标记为
-`oracle_calibration_development_only`，不能与 measurement-only 结果混排。
+## 在 inverse-problem Agent 中使用
 
-## 输出文件
+本仓库可以独立运行，也可以作为
+[`inverse_problem_agent`](https://github.com/zoe5xy/inverse_problem_agent) 的 CT backend。
+在 Agent 项目根目录执行：
 
-单次 `run` 生成：
+```bash
+inverse-agent list-cases \
+  --modality ct \
+  --ct-repo external/ct-benchlab
+
+inverse-agent list-algorithms \
+  --modality ct \
+  --ct-repo external/ct-benchlab
+
+inverse-agent select-ct-candidates \
+  --request request.json \
+  --ct-repo external/ct-benchlab
+
+inverse-agent validate-run \
+  --request request.json \
+  --ct-repo external/ct-benchlab
+
+inverse-agent run-experiment \
+  --request request.json \
+  --ct-repo external/ct-benchlab
+```
+
+完整执行路径为：
+
+```text
+RunRequest
+  -> Agent candidate selection and compatibility filtering
+  -> Agent parameter/budget validation
+  -> CTAdapter
+  -> invct subprocess
+  -> CT solver and diagnostics
+  -> Agent convergence gate and independent evaluation
+```
+
+Agent 负责问题解释、候选选择、参数来源、尝试谱系和跨运行比较；CT backend 负责数值
+合法性、solver-native 停止判据、operator-call 记账及低层诊断。达到最大迭代数或预算
+耗尽不会被 Agent 改写为 `converged`。
+
+## 输出与诊断
+
+单次成功运行生成：
 
 ```text
 run-directory/
 ├── reconstruction.pt
 ├── metrics.json
+├── diagnostics.json
 ├── manifest.json
 ├── comparison.png
 └── artifacts.sha256
 ```
 
-`reconstruction.pt` 保存 CPU 版 tensor bundle，包括 reconstruction、truth、observed
-measurement、predicted measurement、masks 和必要元数据。CPU 序列化保证结果可以在
-没有原运行 GPU 的机器上离线复评。
+`reconstruction.pt` 保存 CPU tensor bundle，便于在没有原运行 GPU 的机器上离线复评。
+manifest 记录 Python、PyTorch、平台、CUDA、Git revision、dirty patch hash、输入来源、
+参数和参数来源。失败运行写入结构化 failure 文件，不会从 benchmark 中静默删除。
 
-如果运行失败，输出目录会写入 `failure_report.md`，记录错误类型、消息和运行上下文。
-
-benchmark suite 额外生成：
+常见 convergence status 包括：
 
 ```text
-suite-output/
-├── <solver>/<case-slug>/...
-├── metrics.json
-├── metrics.csv
-├── calibration_metrics.csv  # oracle_calibration 时生成
-├── evaluation.json
-├── benchmark.json
-├── manifest.json
-├── report.md
-└── artifacts.sha256
+converged
+completed_valid
+max_iterations
+stalled
+diverged
+operator_budget_exhausted
+numerical_error
+invalid_parameters
+unavailable
 ```
 
-manifest 记录 Python、PyTorch、平台、CUDA 可用性、Git revision、dirty patch hash、
-solver 参数、参数来源和输入来源。失败候选仍保留在 `metrics.json`/`metrics.csv`，
-不会从比较表中静默删除。
+直接算法在输出有限、shape 正确且参数有效时报告 `completed_valid`，不是数学意义上的
+`converged`。诊断同时记录 stopping reason、objective/residual、最终残差、
+forward/adjoint calls、运行时间和资源信息。
+
+Landweber 必须满足 `0 < step_size < 2 / ||A||^2`，TV-FISTA 必须满足
+`0 < step_size <= 1 / ||A||^2`。省略步长时，runtime 使用确定性 power iteration 估计
+`||A||^2`，并把估计阶段的 operator calls 与 solver 迭代分开记账。
+
+## 最终版 Agent 端到端结果
+
+以下结果于 2026-09-02 使用最终版程序重新生成，不是直接运行 CT benchmark：
+
+- Agent commit：`010e3a2fd0f330b292301bf227dc525d48382cb1`；
+- CT commit：`28d658418c919239fd618ceb0de522207011e405`；
+- 正式路径：`inverse-agent -> CTAdapter -> invct -> solver -> Agent evaluator`；
+- 参数策略：固定仓库 YAML 默认值，无调参、无自动重试；
+- truth policy：只允许独立 evaluator 使用，backend public staging 不含 truth；
+- 2D case：`parallel_2d/tissue_breast_sparse_poisson_128`，CPU/float32；
+- FDK case：`cone_3d/modified_shepp_logan_64_clean`，64³ volume、
+  128×128 detector、180 views，`fno` 环境、GTX 1650、ASTRA CUDA；
+- 完整紧凑证据：[artifacts/agent_final_20260902](artifacts/agent_final_20260902)。
+
+### 2D transmission 重建
+
+Agent 在该 case 上接纳 8 个算法。OS-SART 因默认 `subset_count=10` 与 48 views 无法形成
+合法 balanced partition 而被兼容性过滤；MLEM/OSEM 属于 emission/count stratum；FDK
+属于独立 3D geometry。它们没有被强行混入二维 transmission 比较。
+
+![最终版 Agent 的二维 CT 重建结果](artifacts/agent_final_20260902/reconstruction_montage_2d.png)
+
+| Solver | 状态 | 迭代/epoch | PSNR | SSIM | Runtime | Forward/Adjoint |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| FBP | `completed_valid` | 0 | 18.31 dB | 0.304 | 0.530 s | 1 / 1 |
+| SIRT | `max_iterations` | 25 | 19.48 dB | 0.525 | 1.772 s | 27 / 26 |
+| Landweber | `max_iterations` | 50 | 20.15 dB | 0.500 | 3.812 s | 64 / 63 |
+| CGLS | `max_iterations` | 25 | 18.38 dB | 0.405 | 2.440 s | 52 / 26 |
+| LSQR | `max_iterations` | 25 | 18.38 dB | 0.405 | 2.647 s | 52 / 26 |
+| SART | `max_iterations` | 5 epochs | 20.12 dB | 0.558 | 3.599 s | 485 / 480 |
+| Tikhonov | `max_iterations` | 100 | 17.85 dB | 0.320 | 6.083 s | 102 / 102 |
+| TV-FISTA | `max_iterations` | 50 | 18.25 dB | 0.386 | 3.636 s | 60 / 59 |
+
+这些迭代算法都完成了有限重建，但均达到固定 YAML 上限，不能写成已收敛。单个合成 case
+上的 PSNR/SSIM 不能外推为普遍算法排名。
+
+### FDK CUDA 重建
+
+FDK 使用 `D:\anaconda3\envs\fno\python.exe`，PyTorch 2.5.1、ASTRA 2.2.0，
+`astra.use_cuda() == True`。这是一次严格冻结的单次运行：modified Shepp–Logan 64³
+体数据、128×128 detector、180 个等角度 views、SOD/ODD 各 320、无噪声 line-integral；
+参数固定为 Ram-Lak、`short_scan=false`、`voxel_supersampling=1`，无调参、无自动重试。
+backend 执行期间 truth 被隔离；下图由独立 evaluator 在运行结束后使用本次 truth 与本次
+reconstruction 的中间轴向切片生成。
+
+![最终版 Agent 的 FDK CUDA 重建结果](artifacts/agent_final_20260902/comparison_fdk.png)
+
+| Solver | 状态 | PSNR | SSIM | RMSE | Runtime | Forward/Adjoint |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| FDK | `completed_valid` | 28.13 dB | 0.825 | 0.000784 | 1.364 s | 1 / 0 |
+
+表中 runtime 是 CT backend 原生指标；完整 Agent wall time 为 16.422 s，其中包含 case
+隔离 staging、子进程启动、endpoint validation、一次 forward data-consistency 检查和独立
+三维评估。FDK CUDA backend reconstruction 本身为 0.167 s。
+
+原始结构化记录位于
+[`comparison.json`](artifacts/agent_final_20260902/comparison.json)，冻结协议位于
+[`protocol.json`](artifacts/agent_final_20260902/protocol.json)，文件摘要位于
+[`checksums.sha256`](artifacts/agent_final_20260902/checksums.sha256)。FDK 的精简 Agent
+结果与正式请求分别见
+[`fdk_agent64_result.json`](artifacts/agent_final_20260902/fdk_agent64_result.json) 和
+[`request_fdk.json`](artifacts/agent_final_20260902/request_fdk.json)。
 
 ## Python API
 
-CLI 与 Python API 使用相同的 case 和 operator。下面是在 CUDA 上运行 CGLS 的最小示例：
+CLI 与 Python API 使用相同的 case 和 operator：
 
 ```python
 import torch
@@ -451,151 +366,83 @@ solver = CGLSSolver(num_iterations=25, min_value=0.0, max_value=0.02)
 reconstruction = solver.solve(case.measurement, operator)
 ```
 
-自定义线性 CT 算子需要实现项目已有的 `LinearOperator.forward()` 与
-`LinearOperator.adjoint()`；自定义 solver 应实现统一的
-`InverseProblemSolver.solve(y, operator, **kwargs)` 接口。
-
-## 示例结果
-
-下图第一幅为 `parallel_2d/tissue_breast_dense_clean_128` 的原始参考图像，其余为
-11 个二维算法在相同 case 上的重建结果。每幅结果上方标注对应 PSNR 与 SSIM。
-
-![二维 CT 原始参考图像与 11 个算法重建结果](artifacts/ct_all_solvers_remote_20260804/parallel_2d__tissue_breast_dense_clean_128_reconstructions.png)
-
-### 三维 FDK 原始切片与重建切片
-
-下图比较modified Shepp-Logan 原始体数据和 FDK 重建体数据的中间轴向切片。
-
-![最新 FDK 原始参考切片与重建切片](artifacts/fdk_simulated_smoke_20260805_run2_remote/fdk_simulated_smoke_20260805_run2/result/comparison.png)
-
-代表性指标如下，参数来自仓库当前示例 YAML：
-
-| Solver | Case | PSNR | SSIM | Runtime |
-| --- | --- | ---: | ---: | ---: |
-| FBP | dense clean 128 | 19.17 dB | 0.72 | 2.28 s |
-| CGLS | dense clean 128 | 20.23 dB | 0.77 | 2.19 s |
-| TV-FISTA | dense clean 128 | 18.82 dB | 0.72 | 3.41 s |
-| FDK | modified Shepp-Logan 64^3 | 28.13 dB | — | 0.207 s |
-
-## 能力边界
-
-- `ASTRAFDKOperator3D` 只接受 ASTRA regular circular `cone` geometry 和 cubic voxels。
-- `parallel3d`、任意 `cone_vec` 和非等边体素不会被伪装成已经支持。
-- ASTRA FDK 使用官方 `FDK_CUDA`，支持 Ram-Lak、Parker short-scan weighting 和
-  voxel supersampling；不支持的 filter 会明确报错。
-- 框架原生 TV-FISTA 不宣称与其他 CUDA TV 内核或 C backend 数值等价。
-- `model_matched` case 适合接口回归，不构成独立物理真实性证据。
-- 128x128 tissue case 是确定性合成 phantom，不是患者数据。
-- 外部真实数据只登记 catalog，不自动下载，也不会绕过原数据许可。
-
-## 常见问题
-
-### 为什么 `fdk` 返回 unavailable？
-
-请检查命令是否使用 `--device cuda`、PyTorch CUDA 是否可用、ASTRA 是否安装，以及
-`astra.use_cuda()` 是否为真。FDK 不会在 CPU 环境回退到语义不同的替代实现。
-
-### 如何使用自己的 CT 数据？
-
-将数据转换为 catalog、`case.json` 和 `arrays.h5` 结构，或使用 `write_ct_case()` 写入。
-几何、单位、layout、noise 和 provenance 应进入 manifest，不应由 solver 隐式猜测。
+自定义线性 CT 算子需要实现 `LinearOperator.forward()` 与
+`LinearOperator.adjoint()`；自定义 solver 应实现
+`InverseProblemSolver.solve(y, operator, **kwargs)`。
 
 ## 项目结构
 
 ```text
-invframework/
+agent_CT/
 ├── inv_framework/
 │   ├── cli.py                 # invct 命令解析
 │   ├── ct_runtime.py          # registry、run、eval、bench
 │   ├── benchmarks/            # 版本化 case API
-│   ├── operators/             # forward / linear / CT operators
+│   ├── operators/             # forward / adjoint / CT operators
 │   ├── solvers/               # 经典、子集、统计与正则化算法
 │   ├── regularizers/          # Tikhonov、TV
 │   └── utils/                 # PSNR、SSIM
 ├── configs/
-│   ├── algorithms/            # 12 个 solver YAML
-│   ├── benchmarks/            # suite YAML
-│   └── protocols/             # 评估阈值 YAML
-├── test/                      # 新增测试
-├── tests/                     # 既有测试基线
+│   ├── algorithms/            # solver YAML
+│   ├── benchmarks/            # benchmark suite
+│   ├── fair_protocols/        # 公平比较协议
+│   └── protocols/             # 评估阈值
+├── test/                      # CT runtime 与集成测试
+├── tests/                     # 算子和既有回归测试
 ├── examples/
-├── tools/                     # 远程运行与结果回收脚本
-├── artifacts/                 # benchmark 结果
+├── tools/
+├── artifacts/                 # 版本化示例和紧凑证据
 └── pyproject.toml
 ```
 
 ## 开发与测试
 
-### 公平比较协议（Batch 10）
-
-`configs/fair_protocols/` 固化六个可复现的版本化协议：`fixed_defaults/v1`、
-`equal_trials/v1`、`equal_tuning_time/v1`、`equal_operator_calls/v1`、
-`common_validation/v1` 和仅供离线参考的 `oracle_upper_bound/v1`。可在不运行
-重建的情况下验证配置和生成协议摘要：
-
-```bash
-python -m inv_framework.cli protocol-check --protocol configs/fair_protocols/equal_operator_calls_v1.yaml
-```
-
-排名前必须冻结并验证输入/投影摘要、几何、预处理、归一化、分辨率和 mask、
-初始化、seed、device/dtype/precision、warm-up/timing、依赖/硬件环境以及 tuning
-预算。Transmission、emission/count 与 FDK backend 是独立 strata；跨 stratum、
-context digest 不一致、预算超限或缺少依据的 exception 会标记为不可排名。
-结果以质量、数据一致性、优化行为、计算效率和鲁棒性五个独立 axis 输出，不生成
-隐含加权总分。旧的未版本化协议名仍可读取，但新 manifest 应写入 `/v1` 名称和 digest。
-
-### 预算化 32x32 基准（Batch 13）
-
-冻结配置位于 `configs/benchmarks/batch13_budgeted_32.yaml`。它只覆盖普通 CT：
-27 个 transmission fixed-default runs、2 个显式 Poisson emission/count runs、
-FDK capability gate、7 个可调算法的共享 3-fold/4-candidate history，以及
-2 seeds × 2 noise/count levels × 2 view counts × 2 angle coverages 的鲁棒性矩阵。
-同一 tuning history 被四个公平协议视图复用，避免重复计算和重复计费；正常选择
-仅使用 held-out projection residual，oracle PSNR 是单独标记的离线参考，不能进入
-Agent 或正常排名。
-
-原始 reconstruction、trajectory 和失败诊断保存在被 Git 忽略的
-`.batch13-runtime/`，每个 job 使用 `pending -> temporary -> finalized` 状态并可按
-digest 恢复。仅紧凑证据位于 `artifacts/ct_agent_trustworthy_v1/`。运行和验证：
-
-```bash
-python test/batch13_budgeted_benchmark.py --estimate-only
-python test/batch13_budgeted_benchmark.py
-python test/batch13_budgeted_benchmark.py --validate-only
-python -m pytest -q test/test_batch13_budgeted_benchmark.py
-```
-
-硬上限保持为 4 小时、8 GiB RAM、1 GiB runtime results；每算法最多 6 个唯一
-tuning trials、180 秒 tuning time、360 forward 和 360 adjoint calls。结果继续按
-质量、数据一致性、优化行为、计算效率和鲁棒性五轴报告，不生成总分。
-
-新增测试统一放入 `test/`。运行完整测试：
+运行全部测试：
 
 ```bash
 python -m pytest -q test tests
 ```
 
-运行 CLI 定向测试：
+运行 CLI、registry、参数和收敛相关的快速验证：
 
 ```bash
-python -m pytest -q test/test_invct_cli.py
+python -m pytest -q \
+  test/test_invct_cli.py \
+  test/test_registry_diagnostics.py \
+  test/test_batch6_parameter_validation.py \
+  test/test_convergence_protocol.py
 ```
 
-## 数据与外部后端
+验证公平协议和紧凑 benchmark 证据：
 
-仓库内置数据均为项目生成的测试或合成数据。大型或受许可约束的数据集只登记在
-`test/data/external_catalog.json`：
+```bash
+python -m pytest -q \
+  test/test_batch10_fair_protocols.py \
+  test/test_batch13_budgeted_benchmark.py
+```
 
-- [2DeteCT](https://zenodo.org/records/6802615)：2D 真实投影 benchmark，CC BY 4.0
-- [FIPS Walnut CT](https://fips.fi/dataset.php)：3D cone-beam 数据，使用时遵守随附条款
+小规模代码验证与完整 CT benchmark 应分开执行。修改 forward/adjoint operator 时还应
+执行数值伴随一致性检查：
 
-可选数值后端：
+```text
+<A x, y> approximately equals <x, A* y>
+```
 
-- [ASTRA Toolbox](https://github.com/astra-toolbox/astra-toolbox)，GPL-3.0
-- [LLNL LEAP](https://github.com/LLNL/LEAP)，MIT
+## 能力边界与数据许可
 
-本项目仅通过公开 API 调用这些后端，不复制其数值内核。分发或部署时应分别遵守依赖
-和数据集的许可证与使用条款。
+- `ASTRAFDKOperator3D` 只接受 ASTRA regular circular `cone` geometry 和 cubic voxels；
+- `parallel3d`、任意 `cone_vec` 和非等边体素不会被伪装成已支持；
+- ASTRA FDK 使用官方 `FDK_CUDA`，支持 Ram-Lak、Parker short-scan weighting 和
+  voxel supersampling；
+- 128×128 tissue case 和 32×32 Shepp-Logan case 是确定性合成 phantom，不是患者数据；
+- 大型或受许可约束的数据集只登记在 `test/data/external_catalog.json`，不会自动下载。
+
+外部数据与可选后端：
+
+- [2DeteCT](https://zenodo.org/records/6802615)：CC BY 4.0；
+- [FIPS Walnut CT](https://fips.fi/dataset.php)：使用时遵守数据集条款；
+- [ASTRA Toolbox](https://github.com/astra-toolbox/astra-toolbox)：GPL-3.0；
+- [LLNL LEAP](https://github.com/LLNL/LEAP)：MIT。
 
 ## 许可证
 

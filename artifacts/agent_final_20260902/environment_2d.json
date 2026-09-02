@@ -1,0 +1,11 @@
+{
+  "cuda_available": false,
+  "cuda_device": null,
+  "executable": "D:\\anaconda3\\envs\\inverse-agent-round1\\python.exe",
+  "h5py": "3.16.0",
+  "matplotlib": "3.11.1",
+  "numpy": "2.5.2",
+  "pydantic": "2.13.5",
+  "python": "3.12.14",
+  "torch": "2.5.1"
+}
