@@ -12,6 +12,7 @@ from inv_framework.ct_runtime import (
     ConfigError,
     SOLVER_SPECS,
     evaluate_run,
+    load_comparison_protocol,
     regularizer_records_public,
     run_case,
     run_suite,
@@ -67,6 +68,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     bench = commands.add_parser("bench", help="Run a YAML benchmark suite.")
     bench.add_argument("--suite", required=True)
+    protocol_check = commands.add_parser(
+        "protocol-check", help="Validate and digest a fair-comparison protocol without running CT."
+    )
+    protocol_check.add_argument("--protocol", required=True)
     return parser
 
 
@@ -161,6 +166,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = run_suite(args.suite)
             print(result["output_root"])
             return 0 if result["evaluation"]["passed"] else 1
+        if args.command == "protocol-check":
+            protocol, source = load_comparison_protocol(args.protocol)
+            print(json.dumps({"source": str(source), **protocol}, indent=2, sort_keys=True))
+            return 0
     except (ConfigError, FileNotFoundError, KeyError, ValueError) as error:
         print(f"invct: {error}", file=sys.stderr)
         return 2

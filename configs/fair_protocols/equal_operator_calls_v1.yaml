@@ -1,0 +1,10 @@
+schema_version: ct.fair_benchmark_protocol.v1
+protocol_id: equal_operator_calls/v1
+agent_available: true
+include_in_normal_ranking: true
+budget:
+  max_forward_calls: 60
+  max_adjoint_calls: 60
+  tuning_trials: 4
+  tuning_max_forward_calls: 60
+  tuning_max_adjoint_calls: 60

@@ -22,15 +22,22 @@ from inv_framework.benchmarks import (
     BENCHMARK_PROTOCOLS,
     BenchmarkBudget,
     BenchmarkResult,
+    ComparisonProtocol,
+    FairComparisonContext,
+    FairnessException,
+    canonical_digest,
+    canonical_protocol,
     check_fairness,
     EQUAL_OPERATOR_CALLS,
     ORACLE_CALIBRATION,
     enforce_budget,
+    environment_snapshot,
     list_ct_cases,
     load_ct_case,
     make_heldout_projection_split,
     restrict_ct_case,
     pareto_front,
+    per_axis_rankings,
 )
 from inv_framework.convergence import (
     CORE_CT_ALGORITHMS,
@@ -1800,6 +1807,17 @@ def load_protocol(path: str | Path) -> tuple[dict[str, Any], Path]:
     return payload, source
 
 
+def load_comparison_protocol(path: str | Path) -> tuple[dict[str, Any], Path]:
+    """Load, validate and digest a fair-comparison protocol document."""
+
+    payload, source = load_yaml(path)
+    try:
+        protocol = ComparisonProtocol.from_mapping(payload)
+    except (TypeError, ValueError) as error:
+        raise ConfigError(f"invalid fair comparison protocol: {error}") from error
+    return protocol.to_dict(), source
+
+
 def evaluate_metrics(records: Sequence[Mapping[str, Any]], protocol: Mapping[str, Any]) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     allowed = set(protocol["expected_statuses"])
@@ -1863,7 +1881,7 @@ def load_suite(path: str | Path) -> tuple[dict[str, Any], Path]:
         {
             "schema_version", "name", "data_root", "output_root", "device",
             "overwrite", "continue_on_error", "protocol", "benchmark_protocol",
-            "budget", "retry_budget", "groups",
+            "budget", "retry_budget", "shared_context", "groups",
         },
         "benchmark suite",
     )
@@ -1881,16 +1899,22 @@ def load_suite(path: str | Path) -> tuple[dict[str, Any], Path]:
     for flag in ("overwrite", "continue_on_error"):
         if flag in payload and not isinstance(payload[flag], bool):
             raise ConfigError(f"suite {flag} must be a bool.")
-    if "benchmark_protocol" in payload and payload["benchmark_protocol"] not in BENCHMARK_PROTOCOLS:
-        raise ConfigError(
-            f"suite benchmark_protocol must be one of {list(BENCHMARK_PROTOCOLS)}."
-        )
+    if "benchmark_protocol" in payload:
+        try:
+            canonical_protocol(payload["benchmark_protocol"])
+        except ValueError as error:
+            raise ConfigError(str(error)) from error
     if "budget" in payload:
         try:
             suite_budget = BenchmarkBudget.from_mapping(payload["budget"])
             suite_budget.validate()
         except (TypeError, ValueError) as error:
             raise ConfigError(f"invalid suite benchmark budget: {error}") from error
+    if "shared_context" in payload:
+        try:
+            payload["shared_context"] = FairComparisonContext.from_mapping(payload["shared_context"]).to_dict()
+        except (TypeError, ValueError) as error:
+            raise ConfigError(f"invalid suite shared_context: {error}") from error
     if "retry_budget" in payload and (
         isinstance(payload["retry_budget"], bool)
         or not isinstance(payload["retry_budget"], int)
@@ -1908,19 +1932,36 @@ def load_suite(path: str | Path) -> tuple[dict[str, Any], Path]:
                 "algorithms", "cases", "benchmark_protocol", "budget",
                 "observation_domain", "problem_constraints", "max_iterations",
                 "retry_budget", "heldout_split", "calibration_cases", "oracle_metric",
+                "shared_context", "fairness_exceptions",
             },
             f"suite group {index}",
         )
-        if "benchmark_protocol" in group and group["benchmark_protocol"] not in BENCHMARK_PROTOCOLS:
-            raise ConfigError(
-                f"suite group {index} benchmark_protocol must be one of {list(BENCHMARK_PROTOCOLS)}."
-            )
+        if "benchmark_protocol" in group:
+            try:
+                canonical_protocol(group["benchmark_protocol"])
+            except ValueError as error:
+                raise ConfigError(f"suite group {index}: {error}") from error
         if "budget" in group:
             try:
                 group_budget = BenchmarkBudget.from_mapping(group["budget"])
                 group_budget.validate()
             except (TypeError, ValueError) as error:
                 raise ConfigError(f"invalid suite group {index} budget: {error}") from error
+        if "shared_context" in group:
+            try:
+                group["shared_context"] = FairComparisonContext.from_mapping(group["shared_context"]).to_dict()
+            except (TypeError, ValueError) as error:
+                raise ConfigError(f"invalid suite group {index} shared_context: {error}") from error
+        if "fairness_exceptions" in group:
+            exceptions = group["fairness_exceptions"]
+            if not isinstance(exceptions, list):
+                raise ConfigError(f"suite group {index} fairness_exceptions must be a list")
+            try:
+                group["fairness_exceptions"] = [
+                    FairnessException.from_mapping(value).to_dict() for value in exceptions
+                ]
+            except (TypeError, ValueError) as error:
+                raise ConfigError(f"invalid suite group {index} fairness exception: {error}") from error
         if "retry_budget" in group and (
             isinstance(group["retry_budget"], bool)
             or not isinstance(group["retry_budget"], int)
@@ -1994,6 +2035,8 @@ def load_suite(path: str | Path) -> tuple[dict[str, Any], Path]:
             effective_protocol = group["budget"].get("protocol")
         if effective_protocol is None and isinstance(payload.get("budget"), Mapping):
             effective_protocol = payload["budget"].get("protocol")
+        if effective_protocol is not None:
+            effective_protocol = canonical_protocol(effective_protocol)
         if effective_protocol == ORACLE_CALIBRATION:
             calibration_cases = group.get("calibration_cases")
             if not calibration_cases:
@@ -2068,6 +2111,8 @@ def _suite_record(
     case_id: str,
     budget: BenchmarkBudget,
     protocol: str,
+    shared_context: Mapping[str, Any] | None = None,
+    fairness_exceptions: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """Normalize a single run into the multi-axis benchmark schema."""
 
@@ -2123,10 +2168,27 @@ def _suite_record(
         "initialization": diagnostics.get("initialization"),
         "preprocessing": diagnostics.get("preprocessing"),
         "mask_id": diagnostics.get("mask_id"),
+        "resources": resources,
+        "tuning_usage": resources.get("tuning_usage", {}),
+        "optimization_trajectories": convergence.get("trajectories", {}),
+        "fairness_exceptions": list(fairness_exceptions) or resources.get("fairness_exceptions", []),
+        "shared_context": dict(shared_context or {}),
+        "context_digest": (shared_context or {}).get("context_digest"),
+        "environment_digest": ((shared_context or {}).get("environment") or {}).get("digest"),
+        "protocol_digest": canonical_digest({"protocol": canonical_protocol(protocol), "budget": budget.to_dict()}),
+        "relative_l2_error": metrics.get("relative_error"),
+        "normalized_residual": metrics.get("normalized_residual"),
+        "data_fidelity": metrics.get("data_fidelity", metrics.get("deviance")),
     }
     if status != "success" and result.get("message"):
         record["failure_reason"] = result["message"]
-    return record
+    normalized = {**record, **BenchmarkResult.from_mapping(record).to_dict()}
+    normalized.update({
+        "execution_status": execution_status,
+        "parameter_overrides": record["parameter_overrides"],
+        "tuning_protocol": protocol,
+    })
+    return normalized
 
 
 def _suite_group_summary(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -2143,10 +2205,15 @@ def _suite_group_summary(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]
         by_case.setdefault(case_key, []).append(record)
     fairness: dict[str, Any] = {}
     fronts: dict[str, list[dict[str, Any]]] = {}
+    rankings: dict[str, dict[str, list[str]]] = {}
     for case_id, rows in by_case.items():
         fairness[case_id] = check_fairness(rows)
-        fronts[case_id] = [row.to_dict() for row in pareto_front(rows)]
-    return {"fairness": fairness, "pareto_front": fronts}
+        fronts[case_id] = (
+            [row.to_dict() for row in pareto_front(rows)]
+            if fairness[case_id]["rankable"] else []
+        )
+        rankings[case_id] = per_axis_rankings(rows) if fairness[case_id]["rankable"] else {}
+    return {"fairness": fairness, "pareto_front": fronts, "per_axis_rankings": rankings}
 
 
 def _suite_split_cases(
@@ -2244,7 +2311,10 @@ def run_suite(path: str | Path) -> dict[str, Any]:
     oracle_selection: dict[str, dict[str, Any]] = {}
     for group_index, group in enumerate(suite["groups"]):
         budget = _suite_budget(suite, group)
-        protocol_name = budget.protocol
+        serialized_protocol = budget.protocol
+        protocol_name = canonical_protocol(serialized_protocol)
+        shared_context = group.get("shared_context", suite.get("shared_context"))
+        fairness_exceptions = tuple(group.get("fairness_exceptions", ()))
         retry_budget = group.get("retry_budget", suite.get("retry_budget", 0))
         if retry_budget:
             raise ConfigError(
@@ -2330,7 +2400,7 @@ def run_suite(path: str | Path) -> dict[str, Any]:
                                 solver=algorithm["name"],
                                 case_id=calibration_case_id,
                                 budget=budget,
-                                protocol=protocol_name,
+                                protocol=serialized_protocol,
                                 trial_index=trial_index,
                                 parameters=override,
                                 reason="tuning runtime budget exhausted",
@@ -2360,7 +2430,9 @@ def run_suite(path: str | Path) -> dict[str, Any]:
                                     solver=algorithm["name"],
                                     case_id=calibration_case_id,
                                     budget=budget,
-                                    protocol=protocol_name,
+                                    protocol=serialized_protocol,
+                                    shared_context=shared_context,
+                                    fairness_exceptions=fairness_exceptions,
                                 )
                             except Exception as error:
                                 record = {
@@ -2370,7 +2442,7 @@ def run_suite(path: str | Path) -> dict[str, Any]:
                                     "status": "failed",
                                     "execution_status": "failed",
                                     "message": str(error),
-                                    "tuning_protocol": protocol_name,
+                                    "tuning_protocol": serialized_protocol,
                                     "parameter_source": _ORACLE_PARAMETER_SOURCE,
                                     "parameter_sources": {
                                         str(name): _ORACLE_PARAMETER_SOURCE for name in override
@@ -2532,7 +2604,9 @@ def run_suite(path: str | Path) -> dict[str, Any]:
                             solver=algorithm["name"],
                             case_id=case_id,
                             budget=budget,
-                            protocol=protocol_name,
+                            protocol=serialized_protocol,
+                            shared_context=shared_context,
+                            fairness_exceptions=fairness_exceptions,
                         )
                         if split_payload is not None:
                             record.update({
@@ -2568,7 +2642,7 @@ def run_suite(path: str | Path) -> dict[str, Any]:
                             "case_id": case_id,
                             "status": "failed",
                             "message": str(error),
-                            "tuning_protocol": protocol_name,
+                            "tuning_protocol": serialized_protocol,
                             "budget": budget.to_dict(),
                         }
                         if not suite.get("continue_on_error", True):
@@ -2609,15 +2683,21 @@ def run_suite(path: str | Path) -> dict[str, Any]:
     if benchmark_protocol is None:
         benchmark_protocol = protocols_used[0] if len(protocols_used) == 1 else "mixed"
     _write_json(output_root / "benchmark.json", {
-        "schema_version": "inv_framework.ct_benchmark.v1",
+        "schema_version": "ct.benchmark_collection.v2",
         "protocol": benchmark_protocol,
         "protocols_used": protocols_used,
+        "protocol_digests": sorted({str(record["protocol_digest"]) for record in records if record.get("protocol_digest")}),
+        "context_digests": sorted({str(record["context_digest"]) for record in records if record.get("context_digest")}),
         "calibration_records": calibration_records,
         "oracle_selection": oracle_selection,
         "comparison": comparison,
         "records": records,
     })
-    _write_json(output_root / "manifest.json", {"schema_version": SCHEMA_VERSION, "suite": suite, "suite_source": str(source), "device": device, "record_count": len(records), "calibration_record_count": len(calibration_records), "passed": evaluation["passed"], "benchmark": "benchmark.json", "repository_provenance": _git_provenance(Path(__file__).resolve().parents[1]), "environment": {"python": sys.version, "torch": torch.__version__, "platform": platform.platform(), "git_revision": _git_revision()}})
+    environment = environment_snapshot(
+        dependencies={"numpy": np.__version__, "torch": torch.__version__},
+        hardware={"device": device, "cuda_available": torch.cuda.is_available()},
+    )
+    _write_json(output_root / "manifest.json", {"schema_version": SCHEMA_VERSION, "suite": suite, "suite_source": str(source), "device": device, "record_count": len(records), "calibration_record_count": len(calibration_records), "passed": evaluation["passed"], "benchmark": "benchmark.json", "repository_provenance": _git_provenance(Path(__file__).resolve().parents[1]), "environment": {**environment, "git_revision": _git_revision()}})
     report = ["# CT Benchmark 汇总", "", f"- Suite：`{suite['name']}`", f"- 结果：**{'通过' if evaluation['passed'] else '未通过'}**", f"- 记录数：{len(records)}", "", "| Solver | Case | Status | PSNR | SSIM |", "| --- | --- | --- | ---: | ---: |"]
     for record in records:
         report.append(f"| {record.get('solver', '')} | {record.get('case_id', '')} | {record.get('status', '')} | {record.get('psnr', '')} | {record.get('ssim', '')} |")

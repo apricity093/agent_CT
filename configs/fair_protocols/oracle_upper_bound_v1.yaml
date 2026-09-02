@@ -1,0 +1,11 @@
+schema_version: ct.fair_benchmark_protocol.v1
+protocol_id: oracle_upper_bound/v1
+agent_available: false
+include_in_normal_ranking: false
+budget:
+  tuning_trials: 4
+  tuning_runtime_seconds: 30.0
+  tuning_max_forward_calls: 60
+  tuning_max_adjoint_calls: 60
+validation:
+  purpose: offline_reference_only

@@ -1,0 +1,6 @@
+schema_version: ct.fair_benchmark_protocol.v1
+protocol_id: fixed_defaults/v1
+agent_available: true
+include_in_normal_ranking: true
+budget:
+  tuning_trials: 0

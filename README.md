@@ -526,6 +526,24 @@ invframework/
 
 ## 开发与测试
 
+### 公平比较协议（Batch 10）
+
+`configs/fair_protocols/` 固化六个可复现的版本化协议：`fixed_defaults/v1`、
+`equal_trials/v1`、`equal_tuning_time/v1`、`equal_operator_calls/v1`、
+`common_validation/v1` 和仅供离线参考的 `oracle_upper_bound/v1`。可在不运行
+重建的情况下验证配置和生成协议摘要：
+
+```bash
+python -m inv_framework.cli protocol-check --protocol configs/fair_protocols/equal_operator_calls_v1.yaml
+```
+
+排名前必须冻结并验证输入/投影摘要、几何、预处理、归一化、分辨率和 mask、
+初始化、seed、device/dtype/precision、warm-up/timing、依赖/硬件环境以及 tuning
+预算。Transmission、emission/count 与 FDK backend 是独立 strata；跨 stratum、
+context digest 不一致、预算超限或缺少依据的 exception 会标记为不可排名。
+结果以质量、数据一致性、优化行为、计算效率和鲁棒性五个独立 axis 输出，不生成
+隐含加权总分。旧的未版本化协议名仍可读取，但新 manifest 应写入 `/v1` 名称和 digest。
+
 新增测试统一放入 `test/`。运行完整测试：
 
 ```bash
