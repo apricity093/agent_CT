@@ -43,7 +43,9 @@ from inv_framework.convergence import (
 )
 from inv_framework.instrumentation import (
     CountingLinearOperator,
+    OperatorCounters,
     OperatorBudgetExceeded,
+    ResourceAccounting,
     start_memory_tracing,
 )
 from inv_framework.operators.ct import ParallelBeamRadon2D
@@ -707,13 +709,41 @@ def _resource_delta(before: Mapping[str, Any], after: Mapping[str, Any]) -> dict
     """Return phase-local operator counters without losing aggregate totals."""
 
     result: dict[str, Any] = {}
-    for name in ("forward_calls", "adjoint_calls", "total_operator_calls"):
+    for name in (
+        "forward_calls", "adjoint_calls", "forward_attempts", "adjoint_attempts",
+        "forward_executed_calls", "adjoint_executed_calls", "forward_failed_calls",
+        "adjoint_failed_calls", "budget_rejected_forward_calls", "budget_rejected_adjoint_calls",
+        "total_operator_calls", "total_operator_attempts", "executed_operator_calls",
+        "backend_reconstruction_calls", "backend_executed_calls", "backend_failed_calls",
+        "backend_exception_count", "prox_calls", "prox_failed_calls", "prox_iterations",
+    ):
         if before.get(name) is not None and after.get(name) is not None:
             result[name] = int(after[name]) - int(before[name])
-    for name in ("forward_seconds", "adjoint_seconds", "operator_runtime_seconds"):
+    for name in (
+        "forward_seconds", "adjoint_seconds", "operator_runtime_seconds",
+        "backend_seconds", "backend_runtime_seconds", "prox_seconds", "prox_runtime_seconds",
+    ):
         if before.get(name) is not None and after.get(name) is not None:
             result[name] = max(0.0, float(after[name]) - float(before[name]))
+    for name in ("forward_gpu_seconds", "adjoint_gpu_seconds", "gpu_runtime_seconds", "backend_gpu_seconds", "prox_gpu_seconds"):
+        if after.get(name) is not None:
+            result[name] = max(0.0, float(after[name]) - float(before.get(name) or 0.0))
+        else:
+            result[name] = None
     return result
+
+
+def _accounted_resources(
+    accounting: ResourceAccounting | None,
+    operator: CountingLinearOperator | None = None,
+) -> dict[str, Any] | None:
+    """Return one aggregate resource record for success and failure paths."""
+
+    if accounting is not None:
+        return accounting.to_dict()
+    if operator is not None:
+        return operator.stats()
+    return None
 
 
 def _metrics(bundle: Mapping[str, Any], runtime_seconds: float | None = None) -> dict[str, Any]:
@@ -1141,6 +1171,11 @@ def _structured_failure(
         "parameter_validation": validation_record,
         "parameter_sources": dict(validation.sources) if validation is not None else {},
         "estimates": dict(validation.estimates) if validation is not None else {},
+        "fairness_exceptions": ([{
+            "code": "native_backend_reconstruction",
+            "field": "backend_reconstruction_calls",
+            "basis": "FDK is executed by a native backend and is not expressible as A/A^T calls",
+        }] if algorithm == "fdk" else []),
     }
     _write_json(destination / "diagnostics.json", diagnostics)
     _write_checksums(destination)
@@ -1180,9 +1215,17 @@ def run_case(
     fixed_compute: bool = False,
 ) -> dict[str, Any]:
     destination = _prepare_output(output_dir, overwrite)
+    run_started = time.perf_counter()
     diagnostics: dict[str, Any] = {}
     counted_operator: CountingLinearOperator | None = None
+    resource_accounting = ResourceAccounting(
+        OperatorCounters(),
+        max_forward_calls=max_forward_calls,
+        max_adjoint_calls=max_adjoint_calls,
+    )
     validation: ParameterValidationResult | None = None
+    start_memory_tracing()
+    resource_accounting.start_phase("preparation")
     try:
         name, parameters, config_source = load_algorithm_config(config_path, solver_name)
         if parameter_overrides:
@@ -1233,14 +1276,15 @@ def run_case(
         except ConfigError as error:
             raise InvalidParametersError(str(error)) from error
         operator = build_operator(case, device)
-        start_memory_tracing()
         counted_operator = CountingLinearOperator(
             operator,
             max_forward_calls=max_forward_calls,
             max_adjoint_calls=max_adjoint_calls,
+            counters=resource_accounting.counters,
         )
-        run_started = time.perf_counter()
+        resource_accounting.finish_phase("preparation")
         initial_counters = counted_operator.stats()
+        resource_accounting.start_phase("parameter_estimation")
         validation = validate_parameters(
             name,
             parameters,
@@ -1264,16 +1308,21 @@ def run_case(
             raise InvalidParametersError(
                 f"config requests {requested_iterations} iterations; budget allows {int(max_iterations)}"
             )
+        resource_accounting.finish_phase("parameter_estimation")
         try:
             solver = build_solver(name, validation.parameters, case)
         except ConfigError as error:
             raise InvalidParametersError(str(error)) from error
         operator_norm_squared = validation.estimates.get("operator_norm_squared")
         if requested_stopping_policy is not None and name not in {"fbp", "fdk"} and operator_norm_squared is None:
-            operator_norm_squared = estimate_lipschitz_squared(counted_operator, case.measurement, num_iterations=8)
-            validation.estimates["operator_norm_squared"] = operator_norm_squared
-            validation.estimates["operator_norm_estimator"] = "power_iteration_8_for_stopping_policy"
-            validation_counters = counted_operator.stats()
+            resource_accounting.start_phase("parameter_estimation")
+            try:
+                operator_norm_squared = estimate_lipschitz_squared(counted_operator, case.measurement, num_iterations=8)
+                validation.estimates["operator_norm_squared"] = operator_norm_squared
+                validation.estimates["operator_norm_estimator"] = "power_iteration_8_for_stopping_policy"
+                validation_counters = counted_operator.stats()
+            finally:
+                resource_accounting.finish_phase("parameter_estimation")
         # Detailed solver paths expose the actual loop boundary.  The
         # configured iteration count remains the execution upper bound; it is
         # never converted into a convergence claim.
@@ -1326,7 +1375,11 @@ def run_case(
             max_trajectory_points=max(200, requested_iterations) if requested_stopping_policy is not None else 200,
             **control_kwargs,
         )
-        solve_result = solver.solve_detailed(case.measurement, counted_operator, control=control)
+        resource_accounting.start_phase("solver")
+        try:
+            solve_result = solver.solve_detailed(case.measurement, counted_operator, control=control)
+        finally:
+            resource_accounting.finish_phase("solver")
         solver_counters = counted_operator.stats()
         # Detailed solvers expose canonical termination failures without
         # throwing from the numerical loop.  Convert those states back to the
@@ -1346,24 +1399,32 @@ def run_case(
             raise NumericalFailure(f"solver returned shape {tuple(reconstruction.shape)}, expected {tuple(case.truth.shape)}")
         if not torch.isfinite(reconstruction).all():
             raise NumericalFailure("solver returned non-finite values")
-        predicted = solve_result.predicted_measurement
-        if predicted is None:
-            predicted = counted_operator.forward(reconstruction).detach()
-        else:
-            predicted = predicted.detach()
-        if not torch.isfinite(predicted).all():
-            raise NumericalFailure("solver returned a non-finite predicted measurement")
+        resource_accounting.start_phase("final_evaluation")
+        try:
+            predicted = solve_result.predicted_measurement
+            if predicted is None:
+                predicted = counted_operator.forward(reconstruction).detach()
+            else:
+                predicted = predicted.detach()
+            if not torch.isfinite(predicted).all():
+                raise NumericalFailure("solver returned a non-finite predicted measurement")
+        finally:
+            resource_accounting.finish_phase("final_evaluation")
         heldout_predicted = None
         if heldout_case is not None:
-            heldout_operator = CountingLinearOperator(
-                build_operator(heldout_case, device),
-                max_forward_calls=max_forward_calls,
-                max_adjoint_calls=max_adjoint_calls,
-                counters=counted_operator.counters,
-            )
-            heldout_predicted = heldout_operator.forward(reconstruction).detach()
-            if not torch.isfinite(heldout_predicted).all():
-                raise NumericalFailure("held-out evaluation returned a non-finite prediction")
+            resource_accounting.start_phase("tuning_heldout")
+            try:
+                heldout_operator = CountingLinearOperator(
+                    build_operator(heldout_case, device),
+                    max_forward_calls=max_forward_calls,
+                    max_adjoint_calls=max_adjoint_calls,
+                    counters=counted_operator.counters,
+                )
+                heldout_predicted = heldout_operator.forward(reconstruction).detach()
+                if not torch.isfinite(heldout_predicted).all():
+                    raise NumericalFailure("held-out evaluation returned a non-finite prediction")
+            finally:
+                resource_accounting.finish_phase("tuning_heldout")
         final_evaluation_counters = counted_operator.stats()
         runtime_seconds = time.perf_counter() - run_started
         dimension = int(case.metadata.get("dimension", 2))
@@ -1417,6 +1478,7 @@ def run_case(
                     if heldout_case.valid_measurement_mask is not None else None
                 ),
             })
+        resource_accounting.start_phase("endpoint_confirmation")
         endpoint_counters_before = counted_operator.stats()
         endpoint_prediction = counted_operator.forward(reconstruction).detach() if requested_stopping_policy is not None else predicted
         endpoint_report = post_run_validation(
@@ -1452,15 +1514,21 @@ def run_case(
             "finite": bool(torch.isfinite(reconstruction).all()),
             "normalized_data_residual": endpoint_report.final_residual,
         }
+        resource_accounting.finish_phase("endpoint_confirmation")
         if endpoint_report.status == ConvergenceStatus.NUMERICAL_ERROR:
             raise NumericalFailure(endpoint_report.failure_reason or endpoint_report.stopping_reason)
         counters = counted_operator.stats()
-        phase_resources = {
-            "parameter_estimation": _resource_delta(initial_counters, validation_counters),
-            "solver": _resource_delta(validation_counters, solver_counters),
-            "final_evaluation": _resource_delta(solver_counters, final_evaluation_counters),
-            "endpoint_confirmation": _resource_delta(endpoint_counters_before, counters),
-        }
+        phase_wall = sum(
+            float(record.get("wall_seconds", 0.0) or 0.0)
+            for record in resource_accounting.phases.values()
+        )
+        runtime_seconds = max(runtime_seconds, time.perf_counter() - run_started)
+        resource_accounting.add_wall_time(
+            "final_evaluation",
+            max(0.0, runtime_seconds - phase_wall),
+        )
+        accounted_resources = resource_accounting.to_dict()
+        phase_resources = accounted_resources["phases"]
         convergence = solve_result.to_dict()
         convergence["trajectory"] = [record.to_dict() for record in solve_result.trajectory]
         convergence["endpoint_validation"] = endpoint_report.to_dict()
@@ -1538,8 +1606,10 @@ def run_case(
             "final_objective": objective,
             "convergence": convergence,
             "endpoint_confirmation": endpoint_confirmation,
+            "fairness_exceptions": list(solve_result.metadata.get("fairness_exceptions", [])) if isinstance(solve_result.metadata, Mapping) else [],
             "resources": {
                 **dict(solve_result.resources),
+                **accounted_resources,
                 # The aggregate counter snapshot includes endpoint and
                 # held-out evaluation calls; it must override the solver's
                 # earlier snapshot for the top-level resource record.
@@ -1646,17 +1716,7 @@ def run_case(
                 )
             except Exception:
                 validation = None
-        invalid_resources = counted_operator.stats() if counted_operator is not None else None
-        initial_snapshot = locals().get("initial_counters")
-        validation_snapshot = locals().get("validation_counters")
-        if isinstance(invalid_resources, Mapping) and isinstance(initial_snapshot, Mapping) and isinstance(validation_snapshot, Mapping):
-            invalid_resources = {
-                **dict(invalid_resources),
-                "phases": {
-                    "parameter_estimation": _resource_delta(initial_snapshot, validation_snapshot),
-                    "solver": {},
-                },
-            }
+        invalid_resources = _accounted_resources(resource_accounting, counted_operator)
         return _structured_failure(
             destination,
             status="invalid_parameters",
@@ -1678,6 +1738,7 @@ def run_case(
             status="unavailable",
             error=error,
             algorithm=locals().get("name", solver_name),
+            resources=_accounted_resources(resource_accounting, counted_operator),
         )
     except OperatorBudgetExceeded as error:
         return _structured_failure(
@@ -1686,7 +1747,7 @@ def run_case(
             error=error,
             algorithm=locals().get("name", solver_name),
             reason_code="operator_call_budget_exhausted",
-            resources=counted_operator.stats() if counted_operator is not None else None,
+            resources=_accounted_resources(resource_accounting, counted_operator),
         )
     except NumericalFailure as error:
         return _structured_failure(
@@ -1695,7 +1756,7 @@ def run_case(
             error=error,
             algorithm=locals().get("name", solver_name),
             reason_code="invalid_solver_output",
-            resources=counted_operator.stats() if counted_operator is not None else None,
+            resources=_accounted_resources(resource_accounting, counted_operator),
         )
     except Exception as error:
         _failure(destination, "failed", error)

@@ -11,6 +11,7 @@ values and operator counters describe the actual run.
 from __future__ import annotations
 
 import math
+import time
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 import torch
@@ -195,6 +196,36 @@ def _operator_call_delta(before: Mapping[str, Any], after: Mapping[str, Any]) ->
         if before.get(name) is not None and after.get(name) is not None:
             delta[name] = int(after[name]) - int(before[name])
     return delta
+
+
+def _proximal_with_accounting(
+    regularizer: TVRegularizer,
+    value: torch.Tensor,
+    step_size: float,
+    operator: Any,
+) -> torch.Tensor:
+    """Run a prox and report its actual work to a counting operator.
+
+    The regularizer remains usable with the legacy raw-operator API.  Only
+    the optional ``record_prox`` seam is used when a detailed run supplies an
+    instrumented operator.
+    """
+
+    started = time.perf_counter()
+    failed = False
+    try:
+        return regularizer.proximal(value, step_size)
+    except Exception:
+        failed = True
+        raise
+    finally:
+        recorder = getattr(operator, "record_prox", None)
+        if callable(recorder):
+            recorder(
+                iterations=int(getattr(regularizer, "last_prox_iterations", 0) or 0),
+                elapsed_seconds=max(0.0, time.perf_counter() - started),
+                failed=failed,
+            )
 
 
 def _common_parameter_errors(
@@ -554,6 +585,12 @@ def _direct_result(
     }
     if error is not None:
         metadata["failure_reason"] = str(error)
+    if algorithm == "fdk":
+        metadata["fairness_exceptions"] = [{
+            "code": "native_backend_reconstruction",
+            "field": "backend_reconstruction_calls",
+            "basis": "FDK is executed by a native backend and is not expressible as A/A^T calls",
+        }]
     return SolveResult(
         reconstruction=_placeholder_reconstruction(measurement, operator),
         actual_iterations=0,
@@ -760,6 +797,11 @@ def solve_fdk_detailed(
             stopping_reason="invalid_reconstruction_output" if output_error else "parameter_validation_failed",
             parameters=parameters, error=error,
         )
+    except AttributeError as error:
+        return _direct_result(
+            "fdk", measurement, operator, status="unavailable",
+            stopping_reason="backend_unavailable", parameters=parameters, error=error,
+        )
     except Exception as error:
         return _direct_result(
             "fdk", measurement, operator, status="numerical_error",
@@ -785,7 +827,16 @@ def solve_fdk_detailed(
         status="completed_valid",
         stopping_reason="direct_reconstruction_valid",
         resources={"trajectory_available": False, "direct": True},
-        metadata={"direct": True, "parameters": parameters, "completed_valid": True},
+        metadata={
+            "direct": True,
+            "parameters": parameters,
+            "completed_valid": True,
+            "fairness_exceptions": [{
+                "code": "native_backend_reconstruction",
+                "field": "backend_reconstruction_calls",
+                "basis": "FDK is executed by a native backend and is not expressible as A/A^T calls",
+            }],
+        },
     )
 
 
@@ -2951,6 +3002,29 @@ def solve_tikhonov_detailed(
         )
     control = resolve_control(control, default_iterations=int(num_iterations), default_tolerance=float(tolerance), callback=callback)
     limit = min(int(num_iterations), int(control.max_iterations or num_iterations))
+    # Generalized Tikhonov applies an auxiliary linear operator L.  When the
+    # primary operator is instrumented, put L on the same counter seam so its
+    # forward/adjoint work cannot disappear from the budget or diagnostics.
+    if regularization_operator is not None:
+        from ..instrumentation import CountingLinearOperator
+
+        counters = getattr(operator, "counters", None)
+        if counters is not None:
+            if isinstance(regularization_operator, CountingLinearOperator):
+                if regularization_operator.counters is not counters:
+                    regularization_operator = CountingLinearOperator(
+                        regularization_operator.operator,
+                        max_forward_calls=getattr(operator, "max_forward_calls", None),
+                        max_adjoint_calls=getattr(operator, "max_adjoint_calls", None),
+                        counters=counters,
+                    )
+            else:
+                regularization_operator = CountingLinearOperator(
+                    regularization_operator,
+                    max_forward_calls=getattr(operator, "max_forward_calls", None),
+                    max_adjoint_calls=getattr(operator, "max_adjoint_calls", None),
+                    counters=counters,
+                )
     regularizer = TikhonovRegularizer(regularization_operator)
     strength = float(reg_strength)
     parameters = {
@@ -3370,7 +3444,9 @@ def solve_tv_fista_detailed(
             if converged and control.stop_on_convergence:
                 break
             candidate = momentum - step * current_gradient
-            next_x = tv.proximal(candidate, step * float(reg_strength))
+            next_x = _proximal_with_accounting(
+                tv, candidate, step * float(reg_strength), operator
+            )
             next_x = apply_box_constraints(next_x, min_value=min_value, max_value=max_value)
             next_acceleration = 0.5 * (1.0 + math.sqrt(1.0 + 4.0 * acceleration * acceleration))
             momentum_scale = (acceleration - 1.0) / next_acceleration
@@ -3389,9 +3465,11 @@ def solve_tv_fista_detailed(
             next_objective = _objective(next_residual) + float(reg_strength) * float(tv.value(next_x).sum().item())
             change = _relative_change(x, next_x)
             data_relative = _normalized(_global_norm(next_residual), measurement_norm)
-            prox_point = tv.proximal(
+            prox_point = _proximal_with_accounting(
+                tv,
                 next_x - step * next_gradient,
                 step * float(reg_strength),
+                operator,
             )
             mapping = (next_x - prox_point) / step
             mapping_norm = _global_norm(mapping)
@@ -3499,7 +3577,9 @@ def solve_tv_fista_detailed(
                 break
         prediction = _finish_prediction(operator, x)
         residual = prediction - measurement
-        resources = {"prox_iterations": int(actual) * int(tv.num_iterations), "prox_configured_iterations": int(tv.num_iterations)}
+        resources = {"prox_configured_iterations": int(tv.num_iterations)}
+        if not callable(getattr(operator, "record_prox", None)):
+            resources["prox_iterations"] = int(actual) * int(tv.num_iterations)
         status = terminal_status or _finish_status(
             actual=actual,
             limit=limit,
@@ -3556,7 +3636,9 @@ def solve_tv_fista_detailed(
         residual_at_momentum = operator.forward(momentum) - measurement
         gradient = operator.adjoint(residual_at_momentum)
         candidate = momentum - step * gradient
-        next_x = tv.proximal(candidate, step * float(reg_strength))
+        next_x = _proximal_with_accounting(
+            tv, candidate, step * float(reg_strength), operator
+        )
         next_x = apply_box_constraints(next_x, min_value=min_value, max_value=max_value)
         if not (
             _finite_tensor(residual_at_momentum)
@@ -3624,7 +3706,9 @@ def solve_tv_fista_detailed(
             break
     prediction = _finish_prediction(operator, x)
     residual = prediction - measurement
-    resources = {"prox_iterations": int(actual) * int(tv.num_iterations), "prox_configured_iterations": int(tv.num_iterations)}
+    resources = {"prox_configured_iterations": int(tv.num_iterations)}
+    if not callable(getattr(operator, "record_prox", None)):
+        resources["prox_iterations"] = int(actual) * int(tv.num_iterations)
     status = terminal_status or _finish_status(
         actual=actual,
         limit=limit,

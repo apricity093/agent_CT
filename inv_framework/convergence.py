@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from math import isfinite
+import time
 from typing import Any, Iterable, Mapping
 
 import torch
@@ -26,6 +27,26 @@ CORE_CT_ALGORITHMS = frozenset({
     "fbp", "sirt", "landweber", "cgls", "lsqr", "sart", "os_sart",
     "mlem", "osem", "tikhonov", "tv_fista", "fdk",
 })
+
+
+def _proximal_with_accounting(regularizer: Any, value: torch.Tensor, step: float, operator: Any) -> torch.Tensor:
+    """Record endpoint proximal work when an instrumented operator is present."""
+
+    started = time.perf_counter()
+    failed = False
+    try:
+        return regularizer.proximal(value, step)
+    except Exception:
+        failed = True
+        raise
+    finally:
+        recorder = getattr(operator, "record_prox", None)
+        if callable(recorder):
+            recorder(
+                iterations=int(getattr(regularizer, "last_prox_iterations", 0) or 0),
+                elapsed_seconds=max(0.0, time.perf_counter() - started),
+                failed=failed,
+            )
 
 
 class ConvergenceStatus(str, Enum):
@@ -1399,6 +1420,26 @@ def confirm_endpoint(
         if finite_inputs and native_residual is not None:
             try:
                 from .regularizers import TikhonovRegularizer
+                if regularization_operator is not None:
+                    from .instrumentation import CountingLinearOperator
+
+                    counters = getattr(operator, "counters", None)
+                    if counters is not None:
+                        if isinstance(regularization_operator, CountingLinearOperator):
+                            if regularization_operator.counters is not counters:
+                                regularization_operator = CountingLinearOperator(
+                                    regularization_operator.operator,
+                                    max_forward_calls=getattr(operator, "max_forward_calls", None),
+                                    max_adjoint_calls=getattr(operator, "max_adjoint_calls", None),
+                                    counters=counters,
+                                )
+                        else:
+                            regularization_operator = CountingLinearOperator(
+                                regularization_operator,
+                                max_forward_calls=getattr(operator, "max_forward_calls", None),
+                                max_adjoint_calls=getattr(operator, "max_adjoint_calls", None),
+                                counters=counters,
+                            )
 
                 regularizer = TikhonovRegularizer(regularization_operator)
                 regularization_gradient = regularizer.gradient(reconstruction)
@@ -1447,7 +1488,12 @@ def confirm_endpoint(
             objective_change = None
         else:
             gradient = operator.adjoint(native_residual) if native_residual is not None else torch.full_like(reconstruction, float("nan"))
-            prox = tv.proximal(reconstruction - step * gradient, step * float(parameters.get("reg_strength", 0.0)))
+            prox = _proximal_with_accounting(
+                tv,
+                reconstruction - step * gradient,
+                step * float(parameters.get("reg_strength", 0.0)),
+                operator,
+            )
             mapping = (reconstruction - prox) / step
             mapping_denominator = max(float(reconstruction.norm().item()) / step, 1e-12)
             native_value = float(mapping.norm().item()) / mapping_denominator

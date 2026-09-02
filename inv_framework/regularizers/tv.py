@@ -31,6 +31,10 @@ class TVRegularizer(Regularizer, ProximalOperator):
         self.mode = mode
         self.num_iterations = int(num_iterations)
         self.tolerance = float(tolerance)
+        # Diagnostics only: detailed solvers read this value after each prox
+        # call so early stopping inside the proximal map is accounted for
+        # without changing the numerical update.
+        self.last_prox_iterations = 0
 
     @staticmethod
     def _gradient(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -64,6 +68,7 @@ class TVRegularizer(Regularizer, ProximalOperator):
         weight = float(step_size)
         if weight < 0.0:
             raise ValueError("TV proximal step_size must be nonnegative.")
+        self.last_prox_iterations = 0
         if weight == 0.0:
             return x.clone()
 
@@ -78,7 +83,8 @@ class TVRegularizer(Regularizer, ProximalOperator):
         # is a valid dual gradient step after scaling the dual by weight.
         dual_step = 1.0 / (8.0 * weight)
 
-        for _ in range(self.num_iterations):
+        for iteration in range(1, self.num_iterations + 1):
+            self.last_prox_iterations = iteration
             primal = x - weight * self._gradient_adjoint(momentum_v, momentum_h)
             grad_v, grad_h = self._gradient(primal)
             next_v = momentum_v + dual_step * grad_v
