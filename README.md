@@ -115,6 +115,30 @@ FBP/FDK 是 direct solver：有限、形状正确且参数有效的输出状态�
 `numerical_error`。FDK 缺少 CUDA/ASTRA 或不满足其后端能力时为 `unavailable`，不会回退
 到 CPU 假装完成。
 
+### Batch 6 参数验证与理论初始化
+
+所有 12 个 canonical solver 的参数约束由 `inv_framework.solvers.specs` registry
+声明，并在构造 solver 前执行。数值参数必须有限；迭代次数、容差、正则化强度和
+epsilon 遵守各自的非负/正值下界；`min_value <= max_value`；`block_size` 与
+`subset_count` 不得超过公开 view 数，二者同时给出时还必须描述同一个 balanced
+partition。MLEM/OSEM 需要显式的非负 count/intensity observation domain 和 Poisson
+emission model。提供 runtime/context 时，`dimension` 必须是严格正整数；request-only
+校验仍允许省略它。FDK 需要 `cone_3d`、CUDA 与 ASTRA CUDA 能力，且每个提供的
+`domain_shape`/`image_shape` 都必须恰好是三个严格正整数并组成 cubic volume。
+
+Landweber 使用严格的
+`0 < step_size < 2 / ||A||^2`，TV-FISTA 使用
+`0 < step_size <= 1 / ||A||^2`。省略步长时，runtime 在构造公开算子后以固定
+`linspace(0.5, 1.5, prod(domain_shape))` 初始向量执行 deterministic power
+iteration，并使用 `0.9 / ||A||^2`（Landweber）或 `0.99 / ||A||^2`（TV-FISTA）。
+估计阶段的 forward/adjoint 调用单独计入 `parameter_estimation`，不会混入 solver
+迭代调用；没有算子时只返回 request-only warning，不伪造谱估计。
+
+每个验证结果包含归一化参数、参数来源、估计值、`reason_codes` 和
+`warning_codes`。无效参数在进入 solver loop 前返回 `invalid_parameters`，solver
+迭代数为零；ADMM `rho`、primal/dual step 与 free momentum 对当前 registry 显式
+标记为 not applicable，TV-FISTA 的 Nesterov momentum 是内部固定序列。
+
 在 Agent 的 public staging 中，`truth/x` 仅保留外部 loader 所需的零值形状占位符，真实
 truth 及其动态范围元数据不会进入 backend。此时 `metrics.json` 只报告数据一致性与资源
 指标，不生成 RMSE、PSNR、SSIM；图像质量指标由独立 evaluator 从私有源计算。

@@ -224,14 +224,24 @@ def load_algorithm_config(path: str | Path, expected_solver: str | None = None) 
         parameters = _require_mapping(payload.get("parameters", {}), "algorithm parameters")
     except ConfigError as error:
         raise InvalidParametersError(str(error)) from error
-    unknown = sorted(set(parameters) - set(SOLVER_SPECS[name].parameter_names))
+    accepted_names = set(SOLVER_SPECS[name].parameter_names)
+    if name == "landweber":
+        accepted_names.add("learning_rate")
+    unknown = sorted(set(parameters) - accepted_names)
     if unknown:
         raise InvalidParametersError(f"unsupported parameter(s) for {name}: {', '.join(unknown)}")
     try:
         _validate_parameter_types(parameters)
     except ConfigError as error:
         raise InvalidParametersError(str(error)) from error
-    validation = validate_parameter_values(name, parameters)
+    validation = validate_parameter_values(
+        name,
+        parameters,
+        parameter_sources={
+            str(parameter_name): "repository_config@sha256"
+            for parameter_name in parameters
+        },
+    )
     if validation.errors:
         raise InvalidParametersError(f"invalid parameters for {name}: {'; '.join(validation.errors)}")
     return name, validation.parameters, source
@@ -252,6 +262,7 @@ def _validate_parameter_types(parameters: Mapping[str, Any]) -> None:
         "min_value",
         "max_value",
         "step_size",
+        "learning_rate",
         "tol",
         "damping",
         "atol",
@@ -331,26 +342,40 @@ def _explicit_problem_bounds(problem_constraints: Mapping[str, Any] | None) -> t
 def estimate_lipschitz_squared(operator: Any, reference: torch.Tensor, num_iterations: int = 12) -> float:
     """Estimate ``||A||^2`` with a deterministic power iteration."""
 
+    if isinstance(num_iterations, bool) or not isinstance(num_iterations, int) or num_iterations < 1:
+        raise ValueError("power-iteration count must be a positive integer")
     domain_shape = tuple(int(value) for value in operator.domain_shape)
+    if not domain_shape or any(value <= 0 for value in domain_shape):
+        raise ValueError("operator domain_shape must contain positive dimensions")
     sample_size = math.prod(domain_shape)
+    dtype = reference.dtype if reference.is_floating_point() else torch.float32
     seed = torch.linspace(
         0.5,
         1.5,
         steps=sample_size,
-        dtype=reference.dtype,
+        dtype=dtype,
         device=reference.device,
     ).reshape((1, *domain_shape))
     denominator = seed.reshape(seed.shape[0], -1).norm(dim=1)
+    if not bool(torch.isfinite(denominator).all().item()) or bool(torch.any(denominator <= 0).item()):
+        raise ValueError("deterministic power-iteration seed is invalid")
     vector = seed / denominator.reshape((1,) + (1,) * len(domain_shape)).clamp_min(1e-12)
-    for _ in range(max(1, int(num_iterations))):
+    for _ in range(num_iterations):
         next_vector = operator.adjoint(operator.forward(vector))
+        if not bool(torch.isfinite(next_vector).all().item()):
+            raise FloatingPointError("power iteration produced a non-finite vector")
         norm = next_vector.reshape(next_vector.shape[0], -1).norm(dim=1)
         if bool(torch.all(norm <= 1e-12)):
             return 0.0
         vector = next_vector / norm.reshape((next_vector.shape[0],) + (1,) * len(domain_shape)).clamp_min(1e-12)
     image = operator.adjoint(operator.forward(vector))
+    if not bool(torch.isfinite(image).all().item()):
+        raise FloatingPointError("power iteration produced a non-finite estimate")
     value = (vector * image).reshape(vector.shape[0], -1).sum(dim=1).clamp_min(0.0).max()
-    return float(value.item())
+    result = float(value.item())
+    if not math.isfinite(result):
+        raise FloatingPointError("power iteration returned a non-finite estimate")
+    return result
 
 
 def validate_parameters(
@@ -362,8 +387,21 @@ def validate_parameters(
     observation_domain: str | None = None,
     problem_constraints: Mapping[str, Any] | None = None,
     parameter_sources: Mapping[str, str] | None = None,
+    max_iterations: int | None = None,
+    max_forward_calls: int | None = None,
+    max_adjoint_calls: int | None = None,
+    expected_operator_calls: Mapping[str, Any] | None = None,
+    max_memory_mb: int | None = None,
+    estimated_memory_mb: float | None = None,
+    backend_capabilities: Mapping[str, Any] | Sequence[str] | None = None,
 ) -> ParameterValidationResult:
-    """Validate one solver against public case metadata and operator bounds."""
+    """Validate one solver against public case metadata and operator bounds.
+
+    Validation is deliberately staged.  Scalar, cross-parameter, geometry,
+    observation and budget checks run before any power iteration.  Only a
+    parameterization that passes that stage may request the deterministic
+    operator-norm estimate used by Landweber/TV-FISTA.
+    """
 
     geometry: Mapping[str, Any] = getattr(case, "geometry", {}) or {}
     geometry_type = str(geometry.get("type")) if geometry.get("type") else None
@@ -389,41 +427,86 @@ def validate_parameters(
         supplied["max_value"] = upper
         sources["max_value"] = "problem_constraint"
 
-    estimated = None
-    estimates: dict[str, Any] = {}
-    if operator is not None and name in {"landweber", "tv_fista"}:
-        iterations = supplied.get("power_iterations", 12)
-        reference = getattr(case, "measurement", None)
-        if not isinstance(reference, torch.Tensor):
-            reference = torch.ones((1, *tuple(operator.range_shape)), dtype=torch.float32)
+    measurement = getattr(case, "measurement", None) if case is not None else None
+    if isinstance(measurement, torch.Tensor):
         try:
-            estimated = estimate_lipschitz_squared(operator, reference, int(iterations))
-            estimates["operator_norm_estimator"] = "power_iteration"
-        except Exception as error:
-            estimates["operator_norm_error"] = str(error)
+            observation_min = float(measurement.min().item()) if measurement.numel() else None
+            observation_finite = bool(torch.isfinite(measurement).all().item())
+        except (AttributeError, TypeError, ValueError, RuntimeError):
+            observation_min = None
+            observation_finite = None
+    else:
+        observation_min = None
+        observation_finite = None
 
+    case_metadata = (getattr(case, "metadata", {}) or {}) if case is not None else {}
+    explicit_backend_capabilities = (
+        backend_capabilities
+        if backend_capabilities is not None
+        else case_metadata.get("backend_capabilities")
+    )
+    runtime_device = str(getattr(measurement, "device", "")) or None
+    domain_shape = geometry.get("domain_shape")
+    image_shape = geometry.get("image_shape")
+    # Preserve the raw context value.  The registry validator deliberately
+    # rejects floats, bools, strings, zero and negative dimensions instead of
+    # accepting an accidental ``int(...)`` truncation.
+    dimension_value = dimension
+
+    common_kwargs = {
+        "views": views,
+        "geometry_type": geometry_type,
+        "dimension": dimension_value,
+        "observation_domain": domain,
+        "observation_model": observation_model,
+        "observation_min": observation_min,
+        "observation_finite": observation_finite,
+        "parameter_sources": sources,
+        "image_shape": image_shape,
+        "domain_shape": domain_shape,
+        "device": runtime_device,
+        "backend_capabilities": explicit_backend_capabilities,
+        "max_iterations": max_iterations,
+        "max_forward_calls": max_forward_calls,
+        "max_adjoint_calls": max_adjoint_calls,
+        "expected_operator_calls": expected_operator_calls,
+        "max_memory_mb": max_memory_mb,
+        "estimated_memory_mb": estimated_memory_mb,
+    }
+
+    # This first pass is intentionally operator-free.  It prevents malformed
+    # power_iterations and other invalid inputs from reaching ``int(...)`` or
+    # the solver/operator loop.
+    preflight = validate_parameter_values(name, supplied, **common_kwargs)
+    if preflight.errors or operator is None or name not in {"landweber", "tv_fista"}:
+        return preflight
+
+    iterations = preflight.parameters.get("power_iterations", 12)
+    reference = measurement
+    if not isinstance(reference, torch.Tensor):
+        reference = torch.ones((1, *tuple(operator.range_shape)), dtype=torch.float32)
+    estimates: dict[str, Any] = {
+        "operator_norm_estimator": "deterministic_power_iteration",
+        "operator_norm_estimator_iterations": iterations,
+    }
+    try:
+        estimated = estimate_lipschitz_squared(operator, reference, iterations)
+    except Exception as error:
+        estimates["operator_norm_error"] = str(error)
+        return validate_parameter_values(
+            name,
+            supplied,
+            parameter_estimates=estimates,
+            **common_kwargs,
+        )
+
+    estimates["operator_norm_squared"] = estimated
     return validate_parameter_values(
         name,
         supplied,
-        views=views,
-        geometry_type=geometry_type,
-        dimension=int(dimension) if dimension is not None else None,
-        observation_domain=domain,
-        observation_model=observation_model,
-        observation_min=(
-            float(case.measurement.min().item())
-            if case is not None and isinstance(getattr(case, "measurement", None), torch.Tensor)
-            and case.measurement.numel() else None
-        ),
-        observation_finite=(
-            bool(torch.isfinite(case.measurement).all().item())
-            if case is not None and isinstance(getattr(case, "measurement", None), torch.Tensor)
-            and name not in {"fbp", "fdk"}
-            else None
-        ),
-        estimated_lipschitz=estimated,
         parameter_estimates=estimates,
-        parameter_sources=sources,
+        estimated_lipschitz=estimated,
+        **common_kwargs,
     )
 
 
@@ -431,7 +514,13 @@ def validate_solver_case(name: str, case: Any, observation_domain: str | None = 
     if name not in SOLVER_SPECS:
         raise ConfigError(f"unknown solver: {name!r}")
     spec = SOLVER_SPECS[name]
-    dimension = int(case.metadata.get("dimension", len(case.geometry.get("domain_shape", ()))))
+    raw_dimension = case.metadata.get("dimension", len(case.geometry.get("domain_shape", ())))
+    if isinstance(raw_dimension, bool) or not isinstance(raw_dimension, int) or raw_dimension <= 0:
+        raise ConfigError(
+            f"case {case.case_id!r} has invalid dimension={raw_dimension!r}; "
+            "dimension must be a strictly positive integer"
+        )
+    dimension = int(raw_dimension)
     geometry_type = str(case.geometry.get("type", ""))
     if dimension not in spec.dimensions or geometry_type not in spec.geometry_types:
         raise ConfigError(
@@ -467,6 +556,18 @@ def validate_solver_case(name: str, case: Any, observation_domain: str | None = 
     )
     if incompatibilities:
         raise ConfigError("; ".join(incompatibilities))
+    if name == "fdk":
+        shape_validation = validate_parameter_values(
+            name,
+            {},
+            geometry_type=geometry_type,
+            dimension=dimension,
+            observation_domain=domain,
+            domain_shape=case.geometry.get("domain_shape"),
+            image_shape=case.geometry.get("image_shape"),
+        )
+        if shape_validation.errors:
+            raise ConfigError("; ".join(shape_validation.errors))
     return spec
 
 
@@ -980,6 +1081,7 @@ def _structured_failure(
     reason_code: str | None = None,
     parameters: Mapping[str, Any] | None = None,
     resources: Mapping[str, Any] | None = None,
+    validation: ParameterValidationResult | None = None,
 ) -> dict[str, Any]:
     """Write a portable no-loop/error result and keep status layers aligned."""
 
@@ -994,13 +1096,18 @@ def _structured_failure(
         "resource_exhausted": "resource_budget_exhausted",
         "numerical_error": "numerical_error",
     }.get(canonical, canonical))
+    validation_record = validation.to_dict() if validation is not None else None
     report = ConvergenceReport(
         status=canonical,
         stopping_reason=reason,
         algorithm=algorithm,
         failure_reason=str(error),
         terminal_evidence=(
-            {"validation_errors": [str(error)], "parameters": dict(parameters or {})}
+            {
+                "validation_errors": list(validation.errors) if validation is not None else [str(error)],
+                "validation_reason_codes": list(validation.reason_codes) if validation is not None else [],
+                "parameters": dict(parameters or {}),
+            }
             if canonical == "invalid_parameters" else {}
         ),
     )
@@ -1010,7 +1117,13 @@ def _structured_failure(
         error,
         algorithm=algorithm,
         reason_code=reason,
-        details={"parameters": dict(parameters or {})} if parameters else None,
+        details=(
+            {
+                "parameters": dict(parameters or {}),
+                "parameter_validation": validation_record,
+            }
+            if parameters or validation_record is not None else None
+        ),
     )
     diagnostics = {
         "schema_version": SCHEMA_VERSION,
@@ -1024,6 +1137,10 @@ def _structured_failure(
         "iterations_completed": 0,
         "convergence": report.to_dict(),
         "resources": dict(resources or {}),
+        "parameters": dict(parameters or {}),
+        "parameter_validation": validation_record,
+        "parameter_sources": dict(validation.sources) if validation is not None else {},
+        "estimates": dict(validation.estimates) if validation is not None else {},
     }
     _write_json(destination / "diagnostics.json", diagnostics)
     _write_checksums(destination)
@@ -1065,10 +1182,14 @@ def run_case(
     destination = _prepare_output(output_dir, overwrite)
     diagnostics: dict[str, Any] = {}
     counted_operator: CountingLinearOperator | None = None
+    validation: ParameterValidationResult | None = None
     try:
         name, parameters, config_source = load_algorithm_config(config_path, solver_name)
         if parameter_overrides:
-            unknown = sorted(set(parameter_overrides) - set(SOLVER_SPECS[name].parameter_names))
+            accepted_names = set(SOLVER_SPECS[name].parameter_names)
+            if name == "landweber":
+                accepted_names.add("learning_rate")
+            unknown = sorted(set(parameter_overrides) - accepted_names)
             if unknown:
                 raise InvalidParametersError(
                     f"unsupported parameter override(s) for {name}: {', '.join(unknown)}"
@@ -1079,6 +1200,7 @@ def run_case(
             except ConfigError as error:
                 raise InvalidParametersError(str(error)) from error
             override_validation = validate_parameter_values(name, parameters)
+            validation = override_validation
             if override_validation.errors:
                 raise InvalidParametersError(
                     f"invalid parameter overrides for {name}: "
@@ -1087,7 +1209,11 @@ def run_case(
         parameter_source_map = _load_parameter_sources(parameter_sources_path)
         requested_stopping_policy = dict(stopping_policy) if stopping_policy is not None else _load_stopping_policy(stopping_policy_path)
         parameter_source_map.update({str(key): str(value) for key, value in (parameter_sources or {}).items()})
-        for parameter_name in parameters:
+        config_payload, _ = load_yaml(config_path)
+        configured_parameter_names = set(
+            _require_mapping(config_payload.get("parameters", {}), "algorithm parameters")
+        )
+        for parameter_name in configured_parameter_names:
             parameter_source_map.setdefault(parameter_name, "repository_config@sha256")
         full_case = load_ct_case(case_id, data_root=data_root, device=device)
         if (fit_view_indices is None) != (heldout_view_indices is None):
@@ -1123,12 +1249,18 @@ def run_case(
             observation_domain=domain,
             problem_constraints=problem_constraints or case.metadata.get("problem_constraints"),
             parameter_sources=parameter_source_map,
+            max_iterations=max_iterations,
+            max_forward_calls=max_forward_calls,
+            max_adjoint_calls=max_adjoint_calls,
         )
         validation_counters = counted_operator.stats()
         if validation.errors:
             raise InvalidParametersError(f"invalid parameters for {name}: {'; '.join(validation.errors)}")
         requested_iterations = int(validation.parameters.get("num_iterations", 0) or 0)
         if max_iterations is not None and requested_iterations > int(max_iterations):
+            # Kept as a defensive guard for callers that bypass the registry
+            # validator; normal requests receive the structured reason code
+            # from ``validate_parameters`` above.
             raise InvalidParametersError(
                 f"config requests {requested_iterations} iterations; budget allows {int(max_iterations)}"
             )
@@ -1495,12 +1627,50 @@ def run_case(
             "diagnostics": diagnostics,
         }
     except InvalidParametersError as error:
+        if validation is None:
+            # Config loading can reject a scalar before a case/operator is
+            # available.  Re-run the registry validator on the raw mapping so
+            # the persisted failure still carries stable reason codes.
+            try:
+                raw_payload, _ = load_yaml(config_path)
+                raw_parameters = _require_mapping(
+                    raw_payload.get("parameters", {}), "algorithm parameters"
+                )
+                validation = validate_parameter_values(
+                    solver_name,
+                    raw_parameters,
+                    parameter_sources={
+                        str(parameter_name): "repository_config@sha256"
+                        for parameter_name in raw_parameters
+                    },
+                )
+            except Exception:
+                validation = None
+        invalid_resources = counted_operator.stats() if counted_operator is not None else None
+        initial_snapshot = locals().get("initial_counters")
+        validation_snapshot = locals().get("validation_counters")
+        if isinstance(invalid_resources, Mapping) and isinstance(initial_snapshot, Mapping) and isinstance(validation_snapshot, Mapping):
+            invalid_resources = {
+                **dict(invalid_resources),
+                "phases": {
+                    "parameter_estimation": _resource_delta(initial_snapshot, validation_snapshot),
+                    "solver": {},
+                },
+            }
         return _structured_failure(
             destination,
             status="invalid_parameters",
             error=error,
             algorithm=locals().get("name", solver_name),
-            parameters=locals().get("parameters"),
+            reason_code=(
+                validation.reason_codes[0]
+                if validation is not None and validation.reason_codes else None
+            ),
+            parameters=locals().get("parameters") or (
+                validation.parameters if validation is not None else None
+            ),
+            validation=locals().get("validation"),
+            resources=invalid_resources,
         )
     except BackendUnavailable as error:
         return _structured_failure(

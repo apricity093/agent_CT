@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass, field
-from math import isfinite
+from math import ceil, isfinite
 from typing import Any, Mapping
 
 
@@ -65,6 +65,10 @@ COMPATIBILITY_REASON_CODES: dict[str, dict[str, str]] = {
     "dimension_unsupported": {
         "severity": "error",
         "description": "The reconstruction dimension is not supported by the algorithm.",
+    },
+    "dimension_invalid": {
+        "severity": "error",
+        "description": "A supplied reconstruction dimension must be a strictly positive integer.",
     },
     "geometry_unsupported": {
         "severity": "error",
@@ -134,8 +138,131 @@ COMPATIBILITY_REASON_CODES: dict[str, dict[str, str]] = {
         "severity": "info",
         "description": "Momentum is fixed by the solver sequence and is not a free parameter.",
     },
+    "parameter_type_invalid": {
+        "severity": "error",
+        "description": "A parameter has a type incompatible with its registry declaration.",
+    },
+    "parameter_nonfinite": {
+        "severity": "error",
+        "description": "A numeric parameter or observed bound is not finite.",
+    },
+    "parameter_out_of_range": {
+        "severity": "error",
+        "description": "A parameter is outside its declared hard range.",
+    },
+    "parameter_choice_invalid": {
+        "severity": "error",
+        "description": "A categorical parameter is not one of its registered choices.",
+    },
+    "views_invalid": {
+        "severity": "error",
+        "description": "The number of projection views must be a positive integer.",
+    },
+    "block_size_exceeds_views": {
+        "severity": "error",
+        "description": "A row-action block cannot contain more views than the case provides.",
+    },
+    "subset_count_exceeds_views": {
+        "severity": "error",
+        "description": "The requested subset count cannot exceed the number of views.",
+    },
+    "subset_partition_mismatch": {
+        "severity": "error",
+        "description": "block_size and subset_count describe conflicting view partitions.",
+    },
+    "spectral_estimate_invalid": {
+        "severity": "error",
+        "description": "The supplied squared operator-norm estimate is not finite and positive.",
+    },
+    "spectral_estimate_required": {
+        "severity": "error",
+        "description": "A theorem-constrained step size requires a usable operator-norm estimate.",
+    },
+    "spectral_step_invalid": {
+        "severity": "error",
+        "description": "The step size violates the solver's theorem-based spectral bound.",
+    },
+    "backend_device_mismatch": {
+        "severity": "error",
+        "description": "The requested device does not satisfy the algorithm backend contract.",
+    },
+    "geometry_shape_invalid": {
+        "severity": "error",
+        "description": "The problem geometry shape violates the algorithm contract.",
+    },
+    "budget_invalid": {
+        "severity": "error",
+        "description": "A compute budget limit must be a finite nonnegative integer.",
+    },
+    "iteration_budget_exceeded": {
+        "severity": "error",
+        "description": "The configured iteration count exceeds the admitted budget.",
+    },
+    "forward_call_budget_exceeded": {
+        "severity": "error",
+        "description": "The conservative forward-operator call estimate exceeds the budget.",
+    },
+    "adjoint_call_budget_exceeded": {
+        "severity": "error",
+        "description": "The conservative adjoint-operator call estimate exceeds the budget.",
+    },
+    "memory_budget_exceeded": {
+        "severity": "error",
+        "description": "The estimated memory requirement exceeds the budget.",
+    },
+    "parameter_source_unknown": {
+        "severity": "warning",
+        "description": "A parameter provenance label is outside the registered vocabulary.",
+    },
+    "spectral_bound_unavailable": {
+        "severity": "warning",
+        "description": "Request-only validation cannot prove a spectral step-size bound without an operator estimate.",
+    },
+    "operator_call_budget_unchecked": {
+        "severity": "warning",
+        "description": "A call budget was supplied without a conservative call estimate.",
+    },
 }
 CT_COMPATIBILITY_REASON_CODES = COMPATIBILITY_REASON_CODES
+
+PARAMETER_SOURCE_VOCABULARY: tuple[str, ...] = (
+    "registry_default",
+    "repository_config@sha256",
+    "problem_metadata_rule",
+    "problem_constraint",
+    "power_iteration",
+    "validation_search",
+    "user_override",
+    "recovery_attempt",
+)
+
+PARAMETER_VALIDATION_REASON_CODES: tuple[str, ...] = (
+    "parameter_unknown",
+    "parameter_invalid",
+    "parameter_constraint_violation",
+    "parameter_type_invalid",
+    "parameter_nonfinite",
+    "parameter_out_of_range",
+    "parameter_choice_invalid",
+    "dimension_invalid",
+    "views_invalid",
+    "block_size_exceeds_views",
+    "subset_count_exceeds_views",
+    "subset_partition_mismatch",
+    "spectral_estimate_invalid",
+    "spectral_estimate_required",
+    "spectral_step_invalid",
+    "backend_device_mismatch",
+    "geometry_shape_invalid",
+    "budget_invalid",
+    "iteration_budget_exceeded",
+    "forward_call_budget_exceeded",
+    "adjoint_call_budget_exceeded",
+    "memory_budget_exceeded",
+    "parameter_source_unknown",
+    "spectral_bound_unavailable",
+    "operator_call_budget_unchecked",
+)
 
 _ITERATIVE_ALGORITHM_IDS: tuple[str, ...] = tuple(
     name for name in CANONICAL_ALGORITHM_IDS if name not in {"fbp", "fdk"}
@@ -322,6 +449,7 @@ class ParameterSpec:
     cost_effect: str | None = None
     sensitivity: str = "unknown"
     serialization_name: str | None = None
+    validation_only_search_space: tuple[Any, ...] = ()
 
     @property
     def value_type(self) -> str:
@@ -331,8 +459,10 @@ class ParameterSpec:
 
     def normalize(self, value: Any) -> Any:
         if value is None:
-            if self.nullable or not self.required:
+            if self.nullable:
                 return None
+            if not self.required:
+                raise ValueError(f"parameter {self.name} cannot be null")
             raise ValueError(f"parameter {self.name} is required")
 
         if self.type == "int":
@@ -386,17 +516,8 @@ class ParameterSpec:
             "inclusive_maximum": self.inclusive_maximum,
             "choices": list(self.choices),
         }
-        record["validation_only_search_space"] = []
-        record["provenance_vocabulary"] = [
-            "registry_default",
-            "repository_config@sha256",
-            "problem_metadata_rule",
-            "problem_constraint",
-            "power_iteration",
-            "validation_search",
-            "user_override",
-            "recovery_attempt",
-        ]
+        record["validation_only_search_space"] = list(self.validation_only_search_space)
+        record["provenance_vocabulary"] = list(PARAMETER_SOURCE_VOCABULARY)
         return _jsonable(record)
 
 
@@ -534,6 +655,12 @@ class CTAlgorithmSpec:
             parameter_record["applicable_algorithms"] = [self.name]
             parameter_records.append(parameter_record)
         record["parameter_specs"] = parameter_records
+        record["parameter_validation"] = _jsonable(
+            dict(self.metadata.get("parameter_validation", {}) or {})
+        )
+        record["parameter_aliases"] = _jsonable(
+            dict(self.metadata.get("parameter_aliases", {}) or {})
+        )
         record["compatibility_rules"] = [rule.to_dict() for rule in self.compatibility_rules]
         return record
 
@@ -549,6 +676,7 @@ class ParameterValidationResult:
     estimates: dict[str, Any] = field(default_factory=dict)
     sources: dict[str, str] = field(default_factory=dict)
     reason_codes: tuple[str, ...] = ()
+    warning_codes: tuple[str, ...] = ()
 
     @property
     def valid(self) -> bool:
@@ -563,6 +691,7 @@ class ParameterValidationResult:
             "estimates": _jsonable(self.estimates),
             "sources": {str(key): str(value) for key, value in self.sources.items()},
             "reason_codes": list(self.reason_codes),
+            "warning_codes": list(self.warning_codes),
             "valid": self.valid,
         }
 
@@ -693,6 +822,9 @@ def _algorithm(
                 reason_codes.append(code)
     if name == "fdk" and "cubic_volume_required" not in reason_codes:
         reason_codes.append("cubic_volume_required")
+    for code in PARAMETER_VALIDATION_REASON_CODES:
+        if code not in reason_codes:
+            reason_codes.append(code)
     applicability = (
         dict(parameter_applicability)
         if parameter_applicability is not None
@@ -720,6 +852,29 @@ def _algorithm(
             "deterministic_nesterov_sequence"
             if name == "tv_fista" else "not_applicable"
         ),
+        "parameter_validation": {
+            "source_vocabulary": PARAMETER_SOURCE_VOCABULARY,
+            "finite_numeric_values_required": True,
+            "cross_parameter_constraints": (
+                "min_value <= max_value",
+                "block_size <= number_of_views",
+                "subset_count <= number_of_views",
+            ),
+            "spectral_estimator": (
+                "deterministic_power_iteration_on_A_adjoint_A",
+                "operator_calls_are_counted_separately_from_solver_calls",
+            ),
+            "iteration_budget_is_not_convergence": True,
+        },
+        "parameter_aliases": (
+            {"learning_rate": "step_size"}
+            if name == "landweber" else {}
+        ),
+        "theoretical_constraints": {
+            parameter.name: parameter.theoretical_constraint
+            for parameter in parameters
+            if parameter.theoretical_constraint
+        },
     }
     contract_metadata.update(dict(metadata or {}))
     return CTAlgorithmSpec(
@@ -778,7 +933,16 @@ SOLVER_SPECS: dict[str, CTAlgorithmSpec] = {
     ),
     "landweber": _algorithm(
         "landweber", "Landweber", (2,), ("parallel_2d",), "Landweber gradient iteration.",
-        _COMMON + (_p("step_size", default=None, nullable=True, minimum=0.0, inclusive_minimum=False, tunable=True, theoretical_constraint="0 < alpha < 2 / ||A||^2"),),
+        _COMMON + (_p(
+            "step_size", default=None, nullable=True, minimum=0.0,
+            inclusive_minimum=False, tunable=True,
+            theoretical_constraint="0 < alpha < 2 / ||A||^2",
+            theoretical_derivation="For quadratic least squares, Landweber is stable when 0 < alpha < 2/L with L=||A||^2.",
+            default_condition="derived from deterministic power iteration when omitted",
+            units="inverse_operator_norm_squared",
+            cost_effect="one forward and one adjoint call per outer iteration",
+            sensitivity="high",
+        ),),
         sparse_view=True, limited_angle=True,
         failure_modes=("step_size_instability", "slow_convergence"),
         convergence_criteria=("normalized_residual", "relative_iterate_change"),
@@ -805,7 +969,7 @@ SOLVER_SPECS: dict[str, CTAlgorithmSpec] = {
         _COMMON + (
             _p("block_size", "int", default=1, minimum=1, tunable=True),
             _p("order_strategy", "str", default="ordered", choices=("ordered", "random")),
-            _p("seed", "int", default=None, nullable=True),
+            _p("seed", "int", default=None, nullable=True, minimum=0),
             _p("relaxation", minimum=0.0, maximum=1.0, inclusive_minimum=False, default=1.0, tunable=True, theoretical_constraint="0 < relaxation <= 1"),
             _p("eps", minimum=0.0, inclusive_minimum=False, default=1e-8),
         ), sparse_view=True, limited_angle=True,
@@ -818,7 +982,7 @@ SOLVER_SPECS: dict[str, CTAlgorithmSpec] = {
             _p("block_size", "int", default=None, nullable=True, minimum=1, tunable=True),
             _p("subset_count", "int", default=None, nullable=True, minimum=1, tunable=True),
             _p("order_strategy", "str", default="ordered", choices=("ordered", "random")),
-            _p("seed", "int", default=None, nullable=True),
+            _p("seed", "int", default=None, nullable=True, minimum=0),
             _p("relaxation", minimum=0.0, maximum=1.0, inclusive_minimum=False, default=1.0, tunable=True, theoretical_constraint="0 < relaxation <= 1"),
             _p("eps", minimum=0.0, inclusive_minimum=False, default=1e-8),
         ), sparse_view=True, limited_angle=True,
@@ -851,7 +1015,7 @@ SOLVER_SPECS: dict[str, CTAlgorithmSpec] = {
             _p("block_size", "int", default=None, nullable=True, minimum=1, tunable=True),
             _p("subset_count", "int", default=None, nullable=True, minimum=1, tunable=True),
             _p("order_strategy", "str", default="ordered", choices=("ordered", "random")),
-            _p("seed", "int", default=None, nullable=True),
+            _p("seed", "int", default=None, nullable=True, minimum=0),
             _p("initial_value", minimum=0.0, inclusive_minimum=False, default=1e-6),
             _p("eps", minimum=0.0, inclusive_minimum=False, default=1e-8),
         ), family="statistical", objective="poisson_likelihood", likelihood="poisson_emission",
@@ -883,7 +1047,16 @@ SOLVER_SPECS: dict[str, CTAlgorithmSpec] = {
         "tv_fista", "TV-FISTA", (2,), ("parallel_2d",), "TV-regularized FISTA.",
         _common_parameters(50) + (
             _p("reg_strength", minimum=0.0, default=1e-3, tunable=True, scale="log"),
-            _p("step_size", default=None, nullable=True, minimum=0.0, inclusive_minimum=False, tunable=True, theoretical_constraint="0 < step_size <= 1 / ||A||^2"),
+            _p(
+                "step_size", default=None, nullable=True, minimum=0.0,
+                inclusive_minimum=False, tunable=True,
+                theoretical_constraint="0 < step_size <= 1 / ||A||^2",
+                theoretical_derivation="For convex composite FISTA, use a gradient step no larger than 1/L with L=||A||^2.",
+                default_condition="derived from deterministic power iteration when omitted",
+                units="inverse_operator_norm_squared",
+                cost_effect="one forward and one adjoint call per outer iteration",
+                sensitivity="high",
+            ),
             _p("tolerance", minimum=0.0, default=1e-5, tunable=True),
             _p("power_iterations", "int", default=12, minimum=1),
             _p("tv_mode", "str", default="isotropic", choices=("isotropic", "anisotropic")),
@@ -898,7 +1071,7 @@ SOLVER_SPECS: dict[str, CTAlgorithmSpec] = {
     "fdk": _algorithm(
         "fdk", "FDK", (3,), ("cone_3d",), "Cone-beam Feldkamp-Davis-Kress reconstruction.",
         (
-            _p("filter_type", "str", default="ram-lak"),
+            _p("filter_type", "str", default="ram-lak", choices=("ram-lak", "ramp", "ramlak")),
             _p("short_scan", "bool", default=False),
             _p("voxel_supersampling", "int", default=1, minimum=1),
         ), backend="ASTRA CUDA", family="analytical_3d", objective="fdk_filter_backprojection",
@@ -936,6 +1109,24 @@ def validate_registry() -> tuple[str, ...]:
             raise ValueError(f"duplicate parameter name in {name!r}")
         if spec.parameter_names != tuple(parameter.name for parameter in spec.parameters):
             raise ValueError(f"parameter metadata mismatch for {name!r}")
+        for parameter in spec.parameters:
+            if parameter.type not in {"int", "float", "bool", "str"}:
+                raise ValueError(f"unsupported parameter type for {name!r}.{parameter.name}")
+            if parameter.minimum is not None and parameter.maximum is not None:
+                if parameter.minimum > parameter.maximum:
+                    raise ValueError(f"invalid parameter range for {name!r}.{parameter.name}")
+            if parameter.default is not None:
+                try:
+                    parameter.normalize(parameter.default)
+                except ValueError as error:
+                    raise ValueError(
+                        f"invalid default for {name!r}.{parameter.name}: {error}"
+                    ) from error
+            if parameter.default is None and parameter.required and not parameter.nullable:
+                # Required values are intentionally allowed to be supplied by
+                # the problem/runtime; this branch only documents that the
+                # registry does not silently invent a default for them.
+                continue
         if set(spec.parameter_applicability) != set(PARAMETER_APPLICABILITY):
             raise ValueError(f"parameter applicability metadata mismatch for {name!r}")
         if any(
@@ -979,6 +1170,7 @@ def validate_registry() -> tuple[str, ...]:
         # is not accepted by the recursive converter.
         json.dumps(spec.to_dict(), sort_keys=True, allow_nan=False)
     json.dumps(PARAMETER_APPLICABILITY, sort_keys=True, allow_nan=False, default=list)
+    json.dumps(list(PARAMETER_SOURCE_VOCABULARY), sort_keys=True, allow_nan=False)
     return registry_ids
 
 
@@ -994,6 +1186,8 @@ def registry_contract() -> dict[str, Any]:
         "regularizers": regularizer_records(),
         "parameter_applicability": _jsonable(PARAMETER_APPLICABILITY),
         "non_applicable_parameter_categories": list(NON_APPLICABLE_PARAMETER_CATEGORIES),
+        "parameter_source_vocabulary": list(PARAMETER_SOURCE_VOCABULARY),
+        "parameter_validation_reason_codes": list(PARAMETER_VALIDATION_REASON_CODES),
         "compatibility_reason_codes": _jsonable(COMPATIBILITY_REASON_CODES),
         "required_algorithm_fields": [
             "name", "display_name", "dimensions", "geometry_types", "parameter_names",
@@ -1001,6 +1195,7 @@ def registry_contract() -> dict[str, Any]:
             "canonical_id", "aliases", "fixed_regularizer", "regularizer_pairing",
             "regularizer_pairing_policy", "observation_models", "parameter_applicability",
             "compatibility_reason_codes", "required_metadata", "requirements",
+            "parameter_specs", "parameter_validation",
         ],
         "algorithms": records,
     }
@@ -1065,11 +1260,16 @@ def compatibility_diagnostics(
     spec = SOLVER_SPECS[algorithm]
     issues: list[dict[str, Any]] = []
     if dimension is not None:
-        try:
-            dimension_value = int(dimension)
-        except (TypeError, ValueError):
+        if isinstance(dimension, bool) or not isinstance(dimension, int) or dimension <= 0:
+            issues.append(_compatibility_issue(
+                "dimension_invalid",
+                f"dimension must be a strictly positive integer, got {dimension!r}",
+                details={"received": dimension},
+            ))
             dimension_value = None
-        if dimension_value not in spec.dimensions:
+        else:
+            dimension_value = int(dimension)
+        if dimension_value is not None and dimension_value not in spec.dimensions:
             issues.append(_compatibility_issue(
                 "dimension_unsupported",
                 f"solver {algorithm!r} supports dimensions {spec.dimensions}, got {dimension}",
@@ -1211,13 +1411,26 @@ def validate_parameter_values(
     estimated_lipschitz: float | None = None,
     parameter_estimates: Mapping[str, Any] | None = None,
     parameter_sources: Mapping[str, str] | None = None,
+    image_shape: Any | None = None,
+    domain_shape: Any | None = None,
+    device: str | None = None,
+    backend_capabilities: Mapping[str, Any] | Any | None = None,
+    max_iterations: int | None = None,
+    max_forward_calls: int | None = None,
+    max_adjoint_calls: int | None = None,
+    expected_operator_calls: Mapping[str, Any] | None = None,
+    max_memory_mb: int | None = None,
+    estimated_memory_mb: float | None = None,
+    budget: Mapping[str, Any] | None = None,
 ) -> ParameterValidationResult:
     """Normalize and validate parameters using registry metadata.
 
     ``estimated_lipschitz`` is the squared operator norm ``||A||^2``.  The
     runtime supplies it after building a public-data operator; callers doing
     request-only validation can omit it and receive a warning for step-size
-    stability rather than a fabricated estimate.
+    stability rather than a fabricated estimate.  ``expected_operator_calls``
+    and ``estimated_memory_mb`` are conservative admission estimates supplied
+    by a runtime/selector; this function never silently invents a cost model.
     """
 
     if algorithm not in SOLVER_SPECS:
@@ -1232,56 +1445,158 @@ def validate_parameter_values(
     allowed = set(spec.parameter_names)
     errors: list[str] = []
     reason_codes: list[str] = []
+    warnings: list[str] = []
+    warning_codes: list[str] = []
+
+    def add_reason(code: str, *, warning: bool = False) -> None:
+        target = warning_codes if warning else reason_codes
+        if code not in target:
+            target.append(code)
 
     def add_error(message: str, code: str = "parameter_invalid") -> None:
         errors.append(message)
-        reason_codes.append(code)
+        add_reason(code)
 
-    for name in sorted(set(incoming) - allowed):
-        add_error(f"unknown parameter {name!r} for {algorithm}", "parameter_unknown")
+    def add_warning(message: str, code: str = "parameter_invalid") -> None:
+        warnings.append(message)
+        add_reason(code, warning=True)
+
+    # ``learning_rate`` is a declared semantic alias, not a second free
+    # parameter.  Normalize it before unknown-parameter handling so the
+    # solver and provenance records always expose the canonical name.
+    canonical_incoming = dict(incoming)
+    alias_sources = dict(parameter_sources or {})
+    if "learning_rate" in canonical_incoming and algorithm == "landweber":
+        if "step_size" in canonical_incoming:
+            add_error(
+                "learning_rate and step_size cannot both be supplied",
+                "parameter_constraint_violation",
+            )
+        else:
+            canonical_incoming["step_size"] = canonical_incoming.pop("learning_rate")
+            if "learning_rate" in alias_sources and "step_size" not in alias_sources:
+                alias_sources["step_size"] = alias_sources["learning_rate"]
+
+    non_applicable_names: dict[str, str] = {}
+    for category, descriptor in PARAMETER_APPLICABILITY.items():
+        status = str(descriptor.get("status", ""))
+        if status in {"not_applicable", "policy_controlled"}:
+            reason = str(descriptor.get("reason_code", "parameter_not_applicable"))
+            for name in descriptor.get("parameter_names", ()):
+                non_applicable_names[str(name)] = reason
+            # The categories themselves are also useful diagnostics when an
+            # Agent sends metadata vocabulary as if it were a solver field.
+            non_applicable_names.setdefault(category, reason)
+
+    for name in sorted(set(canonical_incoming) - allowed):
+        code = non_applicable_names.get(name, "parameter_unknown")
+        if code == "parameter_not_applicable":
+            message = f"parameter {name!r} is not applicable to {algorithm}"
+        elif code == "free_momentum_not_applicable":
+            message = f"parameter {name!r} is not a free momentum parameter for {algorithm}"
+        else:
+            message = f"unknown parameter {name!r} for {algorithm}"
+        add_error(message, code)
+
     normalized: dict[str, Any] = {}
-    warnings: list[str] = []
     estimates: dict[str, Any] = dict(parameter_estimates or {})
-    sources: dict[str, str] = {str(key): str(value) for key, value in (parameter_sources or {}).items()}
+    sources: dict[str, str] = {}
+
+    def source_for(name: str, supplied: bool) -> str:
+        value = alias_sources.get(name)
+        source = str(value) if value is not None else (
+            "user_override" if supplied else "registry_default"
+        )
+        if source not in PARAMETER_SOURCE_VOCABULARY:
+            add_warning(
+                f"parameter {name} uses unregistered provenance source {source!r}",
+                "parameter_source_unknown",
+            )
+        return source
+
+    def parameter_error_code(error: ValueError) -> str:
+        message = str(error).lower()
+        if "finite" in message:
+            return "parameter_nonfinite"
+        if "one of" in message:
+            return "parameter_choice_invalid"
+        if "null" in message or "required" in message:
+            return "parameter_type_invalid"
+        if any(token in message for token in ("integer", "numeric", "bool", "string")):
+            return "parameter_type_invalid"
+        return "parameter_out_of_range"
 
     for parameter in spec.parameters:
-        if parameter.name in incoming:
-            value = incoming[parameter.name]
+        supplied = parameter.name in canonical_incoming
+        if supplied:
+            value = canonical_incoming[parameter.name]
         elif parameter.default is not None or parameter.nullable:
             value = parameter.default
         elif parameter.required:
-            add_error(f"parameter {parameter.name} is required")
+            add_error(f"parameter {parameter.name} is required", "parameter_invalid")
             continue
         else:
             continue
         try:
             normalized[parameter.name] = parameter.normalize(value)
-            sources.setdefault(parameter.name, "user" if parameter.name in incoming else "registry_default")
+            sources[parameter.name] = source_for(parameter.name, supplied)
         except ValueError as error:
-            add_error(str(error))
+            add_error(str(error), parameter_error_code(error))
 
     minimum = normalized.get("min_value")
     maximum = normalized.get("max_value")
     if minimum is not None and maximum is not None and minimum > maximum:
         add_error("min_value must be less than or equal to max_value", "parameter_constraint_violation")
 
+    view_count: int | None = None
     if views is not None:
-        views = int(views)
-        if views <= 0:
-            add_error("number of views must be positive", "parameter_constraint_violation")
+        if isinstance(views, bool) or not isinstance(views, int):
+            add_error("number of views must be a positive integer", "views_invalid")
+        else:
+            view_count = int(views)
+            if view_count <= 0:
+                add_error("number of views must be positive", "views_invalid")
         for name in ("block_size",):
             value = normalized.get(name)
-            if value is not None and views > 0 and value > views:
+            if value is not None and view_count is not None and view_count > 0 and value > view_count:
                 add_error(
-                    f"{name} must be no greater than the number of views ({views})",
-                    "parameter_constraint_violation",
+                    f"{name} must be no greater than the number of views ({view_count})",
+                    "block_size_exceeds_views",
                 )
         subset_count = normalized.get("subset_count")
-        if subset_count is not None and views > 0 and subset_count > views:
+        if subset_count is not None and view_count is not None and view_count > 0 and subset_count > view_count:
             add_error(
-                f"subset_count must be between 1 and the number of views ({views})",
-                "parameter_constraint_violation",
+                f"subset_count must be between 1 and the number of views ({view_count})",
+                "subset_count_exceeds_views",
             )
+        block_size = normalized.get("block_size")
+        if (
+            algorithm in {"os_sart", "osem"}
+            and view_count is not None
+            and view_count > 0
+            and block_size is not None
+            and subset_count is not None
+            and ceil(view_count / block_size) != subset_count
+        ):
+            add_error(
+                "block_size and subset_count must describe the same balanced view partition",
+                "subset_partition_mismatch",
+            )
+
+    # Validate observed bounds before passing them to the compatibility gate;
+    # NaN must never be treated as a harmless lower bound.
+    normalized_observation_min: float | None = None
+    if observation_min is not None:
+        try:
+            if isinstance(observation_min, bool):
+                raise ValueError
+            normalized_observation_min = float(observation_min)
+        except (TypeError, ValueError):
+            add_error("observation_min must be finite numeric data", "parameter_nonfinite")
+        else:
+            if not isfinite(normalized_observation_min):
+                add_error("observation_min must be finite", "parameter_nonfinite")
+                observation_finite = False
 
     compatibility = compatibility_diagnostics(
         algorithm,
@@ -1289,61 +1604,258 @@ def validate_parameter_values(
         dimension=dimension,
         observation_domain=observation_domain,
         observation_model=observation_model,
-        observation_min=observation_min,
+        observation_min=normalized_observation_min,
         observation_finite=observation_finite,
     )
     for issue in compatibility:
         add_error(str(issue["message"]), str(issue["code"]))
 
-    if algorithm in {"landweber", "tv_fista"}:
-        step = normalized.get("step_size")
-        if estimated_lipschitz is None:
-            if step is None:
-                warnings.append(
-                    f"{algorithm} step_size will be derived after operator construction; "
-                    "request-only validation cannot prove the spectral bound"
+    # Geometry and backend checks are conditional on context.  Request-only
+    # config validation stays usable without a case, while a runtime that has
+    # supplied the facts gets a hard preflight rejection.
+    if algorithm == "fdk":
+        if device is not None and not str(device).lower().startswith("cuda"):
+            add_error("fdk requires a CUDA device", "backend_device_mismatch")
+        for shape_name, shape in (
+            ("domain_shape", domain_shape),
+            ("image_shape", image_shape),
+        ):
+            if shape is None:
+                continue
+            try:
+                shape_tuple = tuple(shape)
+            except (TypeError, ValueError):
+                shape_tuple = ()
+            shape_is_positive_integer = (
+                len(shape_tuple) == 3
+                and all(
+                    isinstance(value, int)
+                    and not isinstance(value, bool)
+                    and value > 0
+                    for value in shape_tuple
+                )
+            )
+            if not shape_is_positive_integer:
+                add_error(
+                    f"fdk {shape_name} must contain exactly three strictly positive integers",
+                    "geometry_shape_invalid",
+                )
+            elif len(set(shape_tuple)) != 1:
+                add_error(f"fdk {shape_name} must be cubic", "cubic_volume_required")
+        if backend_capabilities:
+            capability_names: set[str] = set()
+            missing_cuda = False
+            missing_astra = False
+            if isinstance(backend_capabilities, Mapping):
+                for key, value in backend_capabilities.items():
+                    normalized_key = str(key).lower().replace("-", "_").replace(" ", "_")
+                    if not bool(value):
+                        if normalized_key in {"cuda", "cuda_device", "cuda_available"}:
+                            missing_cuda = True
+                        if normalized_key in {"astra", "astra_cuda", "astra_cuda_available"}:
+                            missing_astra = True
+                    elif bool(value):
+                        capability_names.add(normalized_key)
+            elif isinstance(backend_capabilities, str):
+                capability_names = {
+                    backend_capabilities.lower().replace("-", "_").replace(" ", "_")
+                }
+            else:
+                capability_names = {
+                    str(value).lower().replace("-", "_").replace(" ", "_")
+                    for value in backend_capabilities
+                }
+            has_cuda = any(name in capability_names for name in {"cuda", "cuda_device", "cuda_available", "astra_cuda"})
+            has_astra = any(name in capability_names for name in {"astra", "astra_cuda", "astra_cuda_available"})
+            if missing_cuda or not has_cuda:
+                add_error("fdk requires CUDA backend capability", "cuda_device_required")
+            if missing_astra or not has_astra:
+                add_error("fdk requires ASTRA CUDA backend capability", "astra_cuda_required")
+
+    # A caller may pass either explicit limits or a ComputeBudget-like
+    # mapping.  Keep the scalar API convenient for the runtime while making
+    # all budget type/range failures deterministic and pre-loop.
+    budget_values = dict(budget or {})
+
+    def budget_limit(explicit: Any, key: str) -> Any:
+        return explicit if explicit is not None else budget_values.get(key)
+
+    validated_limits: dict[str, int | None] = {}
+    for key, explicit in (
+        ("max_iterations", max_iterations),
+        ("max_forward_calls", max_forward_calls),
+        ("max_adjoint_calls", max_adjoint_calls),
+        ("max_memory_mb", max_memory_mb),
+    ):
+        value = budget_limit(explicit, key)
+        if value is None:
+            validated_limits[key] = None
+            continue
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            add_error(f"{key} must be a finite nonnegative integer", "budget_invalid")
+            validated_limits[key] = None
+        else:
+            validated_limits[key] = int(value)
+
+    requested_iterations = normalized.get("num_iterations")
+    iteration_limit = validated_limits["max_iterations"]
+    if (
+        iteration_limit is not None
+        and algorithm not in {"fbp", "fdk"}
+        and isinstance(requested_iterations, int)
+        and requested_iterations > iteration_limit
+    ):
+        add_error(
+            f"config requests {requested_iterations} iterations; budget allows {iteration_limit}",
+            "iteration_budget_exceeded",
+        )
+
+    expected = dict(expected_operator_calls or {})
+    for key, reason in (
+        ("forward", "forward_call_budget_exceeded"),
+        ("adjoint", "adjoint_call_budget_exceeded"),
+    ):
+        limit = validated_limits[f"max_{key}_calls"]
+        if limit is None:
+            continue
+        value = expected.get(key)
+        if value is None:
+            if limit == 0 and algorithm != "fdk":
+                add_error(
+                    f"{algorithm} requires at least one {key} operator call",
+                    reason,
                 )
             else:
-                warnings.append(
+                add_warning(
+                    f"{key} call budget cannot be checked without a conservative estimate",
+                    "operator_call_budget_unchecked",
+                )
+            continue
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            add_error(f"expected {key} operator calls must be a nonnegative integer", "budget_invalid")
+        elif value > limit:
+            add_error(
+                f"expected {key} operator calls ({value}) exceed budget ({limit})",
+                reason,
+            )
+
+    memory_limit = validated_limits["max_memory_mb"]
+    if memory_limit is not None and estimated_memory_mb is not None:
+        try:
+            memory_estimate = float(estimated_memory_mb)
+        except (TypeError, ValueError):
+            memory_estimate = float("nan")
+        if not isfinite(memory_estimate) or memory_estimate < 0.0:
+            add_error("estimated memory must be finite and nonnegative", "budget_invalid")
+        elif memory_estimate > memory_limit:
+            add_error(
+                f"estimated memory ({memory_estimate:.6g} MB) exceeds budget ({memory_limit} MB)",
+                "memory_budget_exceeded",
+            )
+
+    if algorithm in {"landweber", "tv_fista"}:
+        step = normalized.get("step_size")
+        if estimated_lipschitz is None and estimates.get("operator_norm_squared") is not None:
+            estimated_lipschitz = estimates.get("operator_norm_squared")
+        if estimated_lipschitz is None:
+            if estimates.get("operator_norm_error"):
+                add_error(
+                    "operator-norm estimation failed; theorem-constrained step_size cannot be validated",
+                    "spectral_estimate_required",
+                )
+            elif step is None:
+                add_warning(
+                    f"{algorithm} step_size will be derived after operator construction; "
+                    "request-only validation cannot prove the spectral bound",
+                    "spectral_bound_unavailable",
+                )
+            else:
+                add_warning(
                     f"{algorithm} step_size stability requires ||A||^2; "
-                    "no operator estimate was supplied"
+                    "no operator estimate was supplied",
+                    "spectral_bound_unavailable",
                 )
         else:
-            lipschitz = float(estimated_lipschitz)
-            if lipschitz <= 0:
-                add_error("estimated ||A||^2 must be positive", "parameter_constraint_violation")
+            try:
+                if isinstance(estimated_lipschitz, bool):
+                    raise ValueError
+                lipschitz = float(estimated_lipschitz)
+            except (TypeError, ValueError):
+                lipschitz = float("nan")
+            if not isfinite(lipschitz) or lipschitz <= 0:
+                add_error("estimated ||A||^2 must be finite and positive", "spectral_estimate_invalid")
             elif step is None:
                 # Use the conservative policy shared with the Agent-side
                 # selector: alpha=0.9/L for Landweber (well inside the
                 # theoretical 0<alpha<2/L interval), and 0.99/L for FISTA.
-                normalized["step_size"] = (
-                    0.9 / lipschitz if algorithm == "landweber" else 0.99 / lipschitz
-                )
+                safety_factor = 0.9 if algorithm == "landweber" else 0.99
+                normalized["step_size"] = safety_factor / lipschitz
                 sources["step_size"] = "power_iteration"
-                estimates.update({"operator_norm_squared": lipschitz, "step_size_source": "power_iteration"})
+                estimates.update({
+                    "operator_norm_squared": lipschitz,
+                    "step_size_source": "power_iteration",
+                    "step_size_safety_factor": safety_factor,
+                })
             else:
                 upper = (2.0 / lipschitz) if algorithm == "landweber" else (1.0 / lipschitz)
                 if algorithm == "landweber" and not (0.0 < step < upper):
                     add_error(
                         f"step_size must satisfy 0 < step_size < 2 / ||A||^2 ({upper:.6g})",
-                        "parameter_constraint_violation",
+                        "spectral_step_invalid",
                     )
                 if algorithm == "tv_fista" and not (0.0 < step <= upper):
                     add_error(
                         f"step_size must satisfy 0 < step_size <= 1 / ||A||^2 ({upper:.6g})",
-                        "parameter_constraint_violation",
+                        "spectral_step_invalid",
                     )
-                estimates.update({"operator_norm_squared": lipschitz, "step_size_source": "user"})
+                estimates.update({
+                    "operator_norm_squared": lipschitz,
+                    "step_size_source": sources.get("step_size", "user_override"),
+                })
+            estimator_iterations = estimates.get("operator_norm_estimator_iterations")
+            if estimator_iterations is not None:
+                if (
+                    isinstance(estimator_iterations, bool)
+                    or not isinstance(estimator_iterations, int)
+                    or estimator_iterations < 1
+                ):
+                    add_error(
+                        "operator-norm estimator iterations must be a positive integer",
+                        "parameter_invalid",
+                    )
+                    estimator_iterations = None
+            if estimator_iterations is not None:
+                estimates["spectral_estimator_contract"] = {
+                    "method": "deterministic_power_iteration",
+                    "iterations": int(estimator_iterations),
+                    "initial_vector": "linspace(0.5, 1.5, prod(domain_shape))",
+                    "operator": "A_adjoint_A",
+                    "forward_calls": int(estimator_iterations) + 1,
+                    "adjoint_calls": int(estimator_iterations) + 1,
+                    "counted_separately": True,
+                }
 
     if algorithm in {"sart", "os_sart"}:
         relaxation = normalized.get("relaxation")
         if relaxation is not None and not (0.0 < relaxation <= 1.0):
             add_error("relaxation must satisfy 0 < relaxation <= 1", "parameter_constraint_violation")
         if algorithm == "os_sart" and normalized.get("subset_count") is None and normalized.get("block_size") is None:
-            warnings.append("os_sart will use a backend-derived block_size because neither subset_count nor block_size was supplied")
+            add_warning(
+                "os_sart will use a backend-derived block_size because neither subset_count nor block_size was supplied",
+                "parameter_constraint_violation",
+            )
+
+    if algorithm == "osem" and normalized.get("subset_count") is None and normalized.get("block_size") is None:
+        add_warning(
+            "osem will use a backend-derived block_size because neither subset_count nor block_size was supplied",
+            "parameter_constraint_violation",
+        )
 
     if algorithm == "tikhonov" and normalized.get("reg_strength") == 0.0:
-        warnings.append("reg_strength=0 leaves only the positive-semidefinite normal equation; CG may break down")
+        add_warning(
+            "reg_strength=0 leaves only the positive-semidefinite normal equation; CG may break down",
+            "parameter_constraint_violation",
+        )
 
     return ParameterValidationResult(
         algorithm=algorithm,
@@ -1353,6 +1865,7 @@ def validate_parameter_values(
         estimates=estimates,
         sources=sources,
         reason_codes=tuple(dict.fromkeys(reason_codes)),
+        warning_codes=tuple(dict.fromkeys(warning_codes)),
     )
 
 
