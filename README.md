@@ -544,6 +544,31 @@ context digest 不一致、预算超限或缺少依据的 exception 会标记为
 结果以质量、数据一致性、优化行为、计算效率和鲁棒性五个独立 axis 输出，不生成
 隐含加权总分。旧的未版本化协议名仍可读取，但新 manifest 应写入 `/v1` 名称和 digest。
 
+### 预算化 32x32 基准（Batch 13）
+
+冻结配置位于 `configs/benchmarks/batch13_budgeted_32.yaml`。它只覆盖普通 CT：
+27 个 transmission fixed-default runs、2 个显式 Poisson emission/count runs、
+FDK capability gate、7 个可调算法的共享 3-fold/4-candidate history，以及
+2 seeds × 2 noise/count levels × 2 view counts × 2 angle coverages 的鲁棒性矩阵。
+同一 tuning history 被四个公平协议视图复用，避免重复计算和重复计费；正常选择
+仅使用 held-out projection residual，oracle PSNR 是单独标记的离线参考，不能进入
+Agent 或正常排名。
+
+原始 reconstruction、trajectory 和失败诊断保存在被 Git 忽略的
+`.batch13-runtime/`，每个 job 使用 `pending -> temporary -> finalized` 状态并可按
+digest 恢复。仅紧凑证据位于 `artifacts/ct_agent_trustworthy_v1/`。运行和验证：
+
+```bash
+python test/batch13_budgeted_benchmark.py --estimate-only
+python test/batch13_budgeted_benchmark.py
+python test/batch13_budgeted_benchmark.py --validate-only
+python -m pytest -q test/test_batch13_budgeted_benchmark.py
+```
+
+硬上限保持为 4 小时、8 GiB RAM、1 GiB runtime results；每算法最多 6 个唯一
+tuning trials、180 秒 tuning time、360 forward 和 360 adjoint calls。结果继续按
+质量、数据一致性、优化行为、计算效率和鲁棒性五轴报告，不生成总分。
+
 新增测试统一放入 `test/`。运行完整测试：
 
 ```bash

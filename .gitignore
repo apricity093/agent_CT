@@ -15,6 +15,9 @@ trained_*.pt
 examples/*_out.png
 examples/*.png
 
+# Batch 13 resumable runtime outputs (only compact summaries are versioned)
+.batch13-runtime/
+
 # Editor / OS
 .vscode/
 .idea/
@@ -29,3 +32,4 @@ venv/
 plan.md
 AGENTS.md
 report.md
+!artifacts/ct_agent_trustworthy_v1/REPORT.md

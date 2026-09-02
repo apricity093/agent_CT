@@ -1,0 +1,101 @@
+schema_version: ct.batch13_budgeted_protocol.v1
+name: batch13_budgeted_32
+ordinary_ct_only: true
+resolution: 32
+device: cpu
+dtype: float32
+seeds: [17, 29]
+global_budget:
+  wall_seconds: 14400
+  peak_memory_bytes: 8589934592
+  result_bytes: 1073741824
+  tuning_trials_per_algorithm: 6
+  tuning_runtime_seconds_per_algorithm: 180
+  tuning_forward_calls_per_algorithm: 360
+  tuning_adjoint_calls_per_algorithm: 360
+fixed_defaults:
+  protocol: fixed_defaults/v1
+  transmission_algorithms:
+    - fbp
+    - sirt
+    - landweber
+    - cgls
+    - lsqr
+    - sart
+    - os_sart
+    - tikhonov
+    - tv_fista
+  transmission_cases:
+    - parallel_2d/shepp_logan_dense_clean_32
+    - parallel_2d/shepp_logan_sparse_gaussian_32
+    - parallel_2d/shepp_logan_limited_angle_32
+  count_algorithms: [mlem, osem]
+  count_case: batch13_count/fixed_poisson_emission_32
+fdk:
+  algorithm: fdk
+  geometry: cone_3d
+  required_capabilities: [torch_cuda, astra, astra_cuda]
+protocol_study:
+  case: parallel_2d/shepp_logan_sparse_gaussian_32
+  algorithms:
+    landweber:
+      parameter: step_size
+      values: [0.0001, 0.0002920560747663551, 0.0005257009345794393, 0.0005782710280373832]
+    cgls:
+      parameter: tol
+      values: [0.0, 1.0e-7, 1.0e-6, 1.0e-5]
+    lsqr:
+      parameter: atol_btol
+      values: [0.0, 1.0e-7, 1.0e-6, 1.0e-5]
+    sart:
+      parameter: relaxation
+      values: [0.1, 0.25, 0.5, 0.75]
+    os_sart:
+      parameter: relaxation
+      values: [0.1, 0.25, 0.5, 0.75]
+    tikhonov:
+      parameter: reg_strength
+      values: [1.0e-6, 1.0e-4, 1.0e-2, 0.1]
+    tv_fista:
+      parameter: reg_strength
+      values: [1.0e-6, 1.0e-4, 1.0e-2, 0.1]
+  protocols:
+    equal_trials/v1:
+      folds: 1
+      max_trials: 4
+    equal_tuning_time/v1:
+      folds: 1
+      max_trials: 4
+      max_seconds: 30
+    equal_operator_calls/v1:
+      folds: 1
+      max_trials: 4
+      max_forward_calls: 60
+      max_adjoint_calls: 60
+    common_validation/v1:
+      folds: 3
+      max_trials: 4
+  max_iterations_per_trial: 4
+parameter_study:
+  modes: [fixed_defaults, metadata_recommendation, bounded_tuning, oracle_upper_bound]
+  oracle_protocol: oracle_upper_bound/v1
+  oracle_agent_available: false
+  oracle_include_in_normal_ranking: false
+robustness:
+  transmission_algorithms:
+    - fbp
+    - sirt
+    - landweber
+    - cgls
+    - lsqr
+    - sart
+    - os_sart
+    - tikhonov
+    - tv_fista
+  count_algorithms: [mlem, osem]
+  noise_levels: [0.0, 0.02]
+  count_levels: [20.0, 100.0]
+  view_counts: [16, 32]
+  angle_coverages_deg: [120.0, 180.0]
+runtime_output: .batch13-runtime/jobs
+compact_output: artifacts/ct_agent_trustworthy_v1
