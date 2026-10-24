@@ -309,7 +309,7 @@ def test_tv_policy_records_returned_state_and_endpoint_objective() -> None:
     )
 
     assert result.status == "max_iterations"
-    assert operator.stats()["forward_calls"] == 2 * 3 + 1
+    assert operator.stats()["forward_calls"] == 2 * 3
     assert operator.stats()["adjoint_calls"] == 2 * 3
     assert result.trajectory
     assert all(

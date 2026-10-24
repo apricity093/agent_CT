@@ -33,3 +33,12 @@ plan.md
 AGENTS.md
 report.md
 !artifacts/ct_agent_trustworthy_v1/REPORT.md
+docs\ct_agent_batch_status.md
+docs\ct_agent_experiment_plan.md
+docs\ct_integration_report.md
+
+
+# Generated experiments, builds and test caches
+artifacts/
+build/
+.pytest_cache/

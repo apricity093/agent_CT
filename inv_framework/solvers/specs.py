@@ -32,6 +32,11 @@ CANONICAL_ALGORITHM_IDS: tuple[str, ...] = (
     "osem",
     "tikhonov",
     "tv_fista",
+    "fista",
+    "admm",
+    "pdhg",
+    "constrained_pdhg",
+    "asd_pocs_tv",
     "fdk",
 )
 CANONICAL_CT_ALGORITHM_IDS = CANONICAL_ALGORITHM_IDS
@@ -48,6 +53,7 @@ TRANSMISSION_OBSERVATION_MODELS: tuple[str, ...] = (
     "line_integral",
     "log_projection",
     "poisson_log",
+    "transmission_poisson", "transmission_poisson_gaussian", "gaussian",
 )
 EMISSION_OBSERVATION_MODELS: tuple[str, ...] = (
     "emission",
@@ -274,8 +280,8 @@ _ITERATIVE_ALGORITHM_IDS: tuple[str, ...] = tuple(
 PARAMETER_APPLICABILITY: dict[str, dict[str, Any]] = {
     "regularization_strength": {
         "status": "applicable",
-        "parameter_names": ("reg_strength",),
-        "algorithms": ("tikhonov", "tv_fista"),
+        "parameter_names": ("reg_strength", "strength"),
+        "algorithms": ("tikhonov", "tv_fista", "fista"),
         "description": "Registered regularization strength for the fixed prior pairing.",
     },
     "learning_rate": {
@@ -288,7 +294,7 @@ PARAMETER_APPLICABILITY: dict[str, dict[str, Any]] = {
     "step_size": {
         "status": "applicable",
         "parameter_names": ("step_size",),
-        "algorithms": ("landweber", "tv_fista"),
+        "algorithms": ("landweber", "tv_fista", "fista"),
         "description": "Theory-constrained gradient/proximal step size.",
     },
     "iteration_number": {
@@ -312,25 +318,16 @@ PARAMETER_APPLICABILITY: dict[str, dict[str, Any]] = {
         "description": "Provided by the versioned stopping policy, not a free solver parameter.",
     },
     "admm_rho": {
-        "status": "not_applicable",
-        "parameter_names": (),
-        "algorithms": (),
-        "reason_code": "parameter_not_applicable",
-        "description": "No current canonical CT algorithm is an ADMM solver.",
+        "status": "applicable", "parameter_names": ("rho",), "algorithms": ("admm",),
+        "description": "ADMM rho; validated by solver.",
     },
     "primal_step": {
-        "status": "not_applicable",
-        "parameter_names": (),
-        "algorithms": (),
-        "reason_code": "parameter_not_applicable",
-        "description": "No current canonical CT algorithm exposes a primal-dual step.",
+        "status": "applicable", "parameter_names": ("tau",), "algorithms": ("pdhg",),
+        "description": "PDHG tau; validated by solver.",
     },
     "dual_step": {
-        "status": "not_applicable",
-        "parameter_names": (),
-        "algorithms": (),
-        "reason_code": "parameter_not_applicable",
-        "description": "No current canonical CT algorithm exposes a dual step.",
+        "status": "applicable", "parameter_names": ("sigma",), "algorithms": ("pdhg",),
+        "description": "PDHG sigma; validated by solver.",
     },
     "primal_step_size": {
         "status": "not_applicable",
@@ -350,7 +347,7 @@ PARAMETER_APPLICABILITY: dict[str, dict[str, Any]] = {
         "status": "not_applicable",
         "parameter_names": (),
         "algorithms": (),
-        "internal_sequence_algorithms": ("tv_fista",),
+        "internal_sequence_algorithms": ("tv_fista", "fista"),
         "reason_code": "free_momentum_not_applicable",
         "description": "TV-FISTA uses its deterministic Nesterov sequence; free momentum is not tunable.",
     },
@@ -358,15 +355,12 @@ PARAMETER_APPLICABILITY: dict[str, dict[str, Any]] = {
         "status": "not_applicable",
         "parameter_names": (),
         "algorithms": (),
-        "internal_sequence_algorithms": ("tv_fista",),
+        "internal_sequence_algorithms": ("tv_fista", "fista"),
         "reason_code": "free_momentum_not_applicable",
         "description": "The current registry has no free momentum parameter.",
     },
 }
 NON_APPLICABLE_PARAMETER_CATEGORIES: tuple[str, ...] = (
-    "admm_rho",
-    "primal_step",
-    "dual_step",
     "primal_step_size",
     "dual_step_size",
     "momentum",
@@ -535,6 +529,12 @@ class RegularizerSpec:
     parameter_names: tuple[str, ...] = ()
     parameter_sensitivity: str = "unknown"
     description: str = ""
+    full_proximal: str = "unavailable"
+    supported_solvers: tuple[str, ...] = ()
+    constraints: tuple[str, ...] = ()
+    shape_requirements: tuple[str, ...] = ()
+    transform: str = "identity"
+    coefficient_proximal: str = "unavailable"
 
     def to_dict(self) -> dict[str, Any]:
         return _jsonable(asdict(self))
@@ -716,13 +716,15 @@ REGULARIZER_SPECS: dict[str, RegularizerSpec] = {
         name="tikhonov",
         display_name="Quadratic Tikhonov",
         prior_type="quadratic_l2",
-        has_proximal=False,
+        has_proximal=True,
         has_gradient=True,
         convex=True,
         differentiable=True,
         parameter_names=("reg_strength",),
         parameter_sensitivity="low_to_medium",
-        description="Half the squared norm of the image or a supplied linear transform.",
+        description="Half squared norm; full proximal only for identity L.",
+        full_proximal="identity_L_only_closed_form", supported_solvers=("tikhonov", "fista", "admm", "pdhg"),
+        constraints=("fista: optional box via closed form", "admm/pdhg: unconstrained or nonnegative"), coefficient_proximal="quadratic_closed_form",
     ),
     "tv": RegularizerSpec(
         name="tv",
@@ -734,8 +736,21 @@ REGULARIZER_SPECS: dict[str, RegularizerSpec] = {
         differentiable=False,
         parameter_names=("reg_strength", "tv_mode", "tv_num_iterations", "tv_tolerance"),
         parameter_sensitivity="medium_to_high",
-        description="Convex two-dimensional TV with a FGP proximal operator.",
+        description="Convex 2D TV; finite FGP approximate proximal, no gap certificate.",
+        full_proximal="finite_FGP_no_gap_certificate", supported_solvers=("tv_fista", "fista", "admm", "pdhg", "constrained_pdhg", "asd_pocs_tv"),
+        constraints=("fista: unconstrained", "tv_fista: legacy post-prox box projection", "admm/pdhg: unconstrained or nonnegative"), transform="D", coefficient_proximal="isotropic_vector_shrink_or_anisotropic_soft_threshold",
     ),
+    "h1": RegularizerSpec("h1", "Gradient quadratic H1", "quadratic_gradient",
+        False, True, True, True, ("strength",), description="0.5||Dx||^2; unit-grid forward differences, zero terminal entries.",
+        supported_solvers=("tikhonov", "admm", "pdhg"), constraints=("unconstrained", "admm/pdhg: nonnegative"), transform="D", coefficient_proximal="quadratic_closed_form"),
+    "huber": RegularizerSpec("huber", "Componentwise gradient Huber", "gradient_huber",
+        False, True, True, True, ("strength", "delta"), description="Componentwise h_delta(Dx); delta in unit-grid difference units; no full proximal.",
+        supported_solvers=("admm", "pdhg"), constraints=("unconstrained", "nonnegative"), transform="D", coefficient_proximal="componentwise_huber_closed_form"),
+    "haar_l1": RegularizerSpec("haar_l1", "Haar detail L1", "wavelet_l1",
+        True, False, True, False, ("strength", "level"),
+        description="Periodic even-origin orthonormal Haar; LL unpenalized, unit detail weights.",
+        full_proximal="orthogonal_analysis_soft_threshold_synthesis", supported_solvers=("fista", "admm", "pdhg"),
+        constraints=("fista: unconstrained", "admm/pdhg: unconstrained or nonnegative"), transform="full_orthogonal_Haar", coefficient_proximal="weighted_soft_threshold_LL_zero", shape_requirements=("level positive integer", "H,W divisible by 2**level")),
 }
 
 
@@ -778,7 +793,7 @@ def _algorithm(
     parameter_names = tuple(parameter.name for parameter in parameters)
     if regularizer_pairing is None and name in {"tikhonov", "tv_fista"} and len(regularizers) == 1:
         regularizer_pairing = regularizers[0]
-    pairing_policy = "fixed" if regularizer_pairing is not None else "none"
+    pairing_policy = "fixed" if regularizer_pairing is not None else "selectable" if regularizers else "none"
     if not observation_models:
         observation_models = (
             EMISSION_OBSERVATION_MODELS
@@ -825,12 +840,23 @@ def _algorithm(
     for code in PARAMETER_VALIDATION_REASON_CODES:
         if code not in reason_codes:
             reason_codes.append(code)
+    fidelity_requirements={}
+    if name in {'tikhonov','fista','admm','pdhg'}:
+        fidelity_requirements={
+            'l2':{'required_fields':('y_observed',),'approximation':False},
+            'gaussian_nll':{'required_fields':('y_observed','sigma'),'approximation':False},
+            'wls':{'required_fields':('y_observed','weights'),'approximation':'weight_source_dependent'}}
+        if name=='pdhg':fidelity_requirements['transmission_poisson_nll']={
+            'required_fields':('counts','I0'),'noise_models':('poisson',),'background':0,
+            'constraints':('nonnegative',),'assumptions':('finite_minimizer_exists',),
+            'failure_modes':('zero_counts_noncoercive_prior_may_have_no_finite_minimizer',)}
     applicability = (
         dict(parameter_applicability)
         if parameter_applicability is not None
         else _parameter_applicability(name, parameter_names, direct=direct)
     )
     contract_metadata = {
+        "fidelity_requirements":fidelity_requirements,
         "canonical_id": name,
         "aliases": tuple(aliases),
         "fixed_regularizer": regularizer_pairing,
@@ -850,7 +876,7 @@ def _algorithm(
         "parameter_categories_are_metadata_only": True,
         "momentum_semantics": (
             "deterministic_nesterov_sequence"
-            if name == "tv_fista" else "not_applicable"
+            if name in {"tv_fista", "fista"} else "not_applicable"
         ),
         "parameter_validation": {
             "source_vocabulary": PARAMETER_SOURCE_VOCABULARY,
@@ -868,7 +894,7 @@ def _algorithm(
         },
         "parameter_aliases": (
             {"learning_rate": "step_size"}
-            if name == "landweber" else {}
+            if name == "landweber" else {"reg_strength": "strength"} if name in {"fista", "admm", "pdhg"} else {"strength": "reg_strength"} if name == "tikhonov" else {}
         ),
         "theoretical_constraints": {
             parameter.name: parameter.theoretical_constraint
@@ -916,6 +942,43 @@ def _algorithm(
     )
 
 
+
+def _constrained_spec(name):
+    common = (
+        _p('epsilon', required=True, minimum=0., units='line_integral_l2'),
+        _p('epsilon_source', 'str', required=True),
+        _p('num_iterations', 'int', default=200, minimum=1),
+        _p('tolerance', default=1e-5, minimum=0., inclusive_minimum=False),
+        _p('feasibility_tolerance', default=1e-5, minimum=0., inclusive_minimum=False),
+        _p('tv_mode', 'str', default='isotropic', choices=('isotropic','anisotropic')),
+        _p('min_value', default=0., choices=(0.,)),
+        _p('max_value', default=None, nullable=True),
+    )
+    if name == 'asd_pocs_tv':
+        common += (
+            _p('relaxation', default=1., minimum=0., inclusive_minimum=False, maximum=1.),
+            _p('relaxation_decay', default=.99, minimum=0., maximum=1., inclusive_minimum=False, inclusive_maximum=False),
+            _p('tv_step', default=.2, minimum=0., inclusive_minimum=False),
+            _p('tv_step_decay', default=.95, minimum=0., maximum=1., inclusive_minimum=False, inclusive_maximum=False),
+            _p('tv_updates', 'int', default=20, minimum=1),
+            _p('update_ratio', default=.95, minimum=0., inclusive_minimum=False),
+            _p('block_size', 'int', default=1, minimum=1),
+        )
+    return _algorithm(name, name, (2,), ('parallel_2d',),
+        'Nonnegative unwhitened residual-ball constrained TV.', common,
+        family='constrained_variational', objective='residual_ball_constrained_tv',
+        regularizers=('tv',), regularizer_pairing='tv', observation_domains=('line_integral',),
+        noise_models=('none','gaussian_relative','poisson_log','gaussian','poisson','poisson_gaussian'),
+        sparse_view=True, limited_angle=True, differentiable=False, requires_proximal=True,
+        convergence_criteria=('feasible_and_primal_dual_fixed_point' if name=='constrained_pdhg' else 'feasible_iterate_stagnation_stalled',),
+        failure_modes=('iteration_limit','operator_budget','numerical_failure','constraint_violation'),
+        metadata={'constraints':('nonnegative',), 'epsilon_source':'required_explicit_nonempty',
+                  'residual':'unwhitened_masked_l2', 'tv_grid':'unit_forward_neumann',
+                  'batch_channels':(1,1), 'automatic_epsilon':False,
+                  'variant_id':'residual_ball_pdhg_v1' if name=='constrained_pdhg' else 'sart2d_feasibility_backtracking_v1',
+                  'global_optimality_claim': name=='constrained_pdhg',
+                  'step_policy':'0.99/sqrt(norm_A_bound_squared+8)' if name=='constrained_pdhg' else 'normalized_SART_TV_backtracking'})
+
 SOLVER_SPECS: dict[str, CTAlgorithmSpec] = {
     "fbp": _algorithm(
         "fbp", "FBP", (2,), ("parallel_2d",), "Filtered backprojection.",
@@ -940,7 +1003,7 @@ SOLVER_SPECS: dict[str, CTAlgorithmSpec] = {
             theoretical_derivation="For quadratic least squares, Landweber is stable when 0 < alpha < 2/L with L=||A||^2.",
             default_condition="derived from deterministic power iteration when omitted",
             units="inverse_operator_norm_squared",
-            cost_effect="one forward and one adjoint call per outer iteration",
+            cost_effect="counted gradient, trial forwards and returned-point mapping",
             sensitivity="high",
         ),),
         sparse_view=True, limited_angle=True,
@@ -1036,12 +1099,17 @@ SOLVER_SPECS: dict[str, CTAlgorithmSpec] = {
     "tikhonov": _algorithm(
         "tikhonov", "Tikhonov", (2,), ("parallel_2d",), "Quadratic Tikhonov reconstruction.",
         _COMMON + (
+            _p("data_fidelity", "str", default="l2", choices=("l2", "gaussian_nll", "wls")),
+            _p("weight_source", "str", default=None, nullable=True, choices=("known_variance", "provided", "post_log_poisson", "post_log_poisson_gaussian")),
             _p("reg_strength", minimum=0.0, default=1e-2, tunable=True, scale="log"),
             _p("tolerance", minimum=0.0, default=1e-6, tunable=True),
-        ), family="variational", objective="quadratic_regularized_least_squares",
-        regularizers=("tikhonov",), sparse_view=True, limited_angle=True,
+            _p("regularizer", "str", default="tikhonov", choices=("tikhonov", "h1")),
+            _p("strength", default=None, nullable=True, minimum=0.0),
+        ), noise_models=("none","gaussian_relative","poisson_log","gaussian","poisson","poisson_gaussian"), family="variational", objective="quadratic_regularized_least_squares",
+        regularizers=("tikhonov", "h1"), sparse_view=True, limited_angle=True,
         failure_modes=("normal_equation_breakdown", "over_smoothing"),
         convergence_criteria=("normalized_regularized_normal_residual", "data_residual", "relative_iterate_change"),
+        metadata={"data_fidelity":("l2","gaussian_nll","wls"),"fidelity_constraints":{"gaussian_nll":("unconstrained",),"wls":("unconstrained",)}},
     ),
     "tv_fista": _algorithm(
         "tv_fista", "TV-FISTA", (2,), ("parallel_2d",), "TV-regularized FISTA.",
@@ -1050,11 +1118,11 @@ SOLVER_SPECS: dict[str, CTAlgorithmSpec] = {
             _p(
                 "step_size", default=None, nullable=True, minimum=0.0,
                 inclusive_minimum=False, tunable=True,
-                theoretical_constraint="0 < step_size <= 1 / ||A||^2",
-                theoretical_derivation="For convex composite FISTA, use a gradient step no larger than 1/L with L=||A||^2.",
-                default_condition="derived from deterministic power iteration when omitted",
+                theoretical_constraint="Trial step checked by smooth quadratic majorization with halving backtracking",
+                theoretical_derivation="Finite power iteration estimates L; backtracking checks the actual smooth majorizer.",
+                default_condition="0.99 / finite power estimate when omitted; checked by backtracking",
                 units="inverse_operator_norm_squared",
-                cost_effect="one forward and one adjoint call per outer iteration",
+                cost_effect="counted gradient, trial forwards and returned-point mapping",
                 sensitivity="high",
             ),
             _p("tolerance", minimum=0.0, default=1e-5, tunable=True),
@@ -1068,6 +1136,73 @@ SOLVER_SPECS: dict[str, CTAlgorithmSpec] = {
         failure_modes=("step_size_instability", "proximal_budget", "over_smoothing"),
         convergence_criteria=("composite_objective", "prox_gradient_mapping", "relative_iterate_change"),
     ),
+    "fista": _algorithm(
+        "fista", "FISTA", (2,), ("parallel_2d",), "Composite L2 FISTA with checked smooth majorization.",
+        _common_parameters(50) + (
+            _p("data_fidelity", "str", default="l2", choices=("l2", "gaussian_nll", "wls", "transmission_poisson_nll")),
+            _p("weight_source", "str", default=None, nullable=True, choices=("known_variance", "provided", "post_log_poisson", "post_log_poisson_gaussian")),
+            _p("nll_tolerance", default=None, nullable=True, minimum=0., inclusive_minimum=False),
+            _p("nll_max_iterations", "int", default=200, minimum=1),
+            _p("regularizer", "str", default="tikhonov", choices=("tikhonov", "tv", "haar_l1")),
+            _p("strength", default=1e-2, minimum=0.0, tunable=True),
+            _p("reg_strength", default=None, nullable=True, minimum=0.0),
+            _p("step_size", default=None, nullable=True, minimum=0.0, inclusive_minimum=False,
+               theoretical_constraint="Initial trial step; L2 quadratic majorizer checked with halving backtracking"),
+            _p("tolerance", default=1e-5, minimum=0.0),
+            _p("power_iterations", "int", default=12, minimum=1),
+            _p("level", "int", default=2, minimum=1),
+            _p("tv_mode", "str", default="isotropic", choices=("isotropic", "anisotropic")),
+            _p("tv_num_iterations", "int", default=50, minimum=1),
+            _p("tv_tolerance", default=1e-5, minimum=0.0),
+        ), noise_models=("none","gaussian_relative","poisson_log","gaussian","poisson","poisson_gaussian"), family="variational", objective="composite_regularized_least_squares",
+        regularizers=("tikhonov", "tv", "haar_l1"), requires_proximal=True,
+        sparse_view=True, limited_angle=True,
+        convergence_criteria=("prox_gradient_mapping", "relative_composite_objective_change"),
+        failure_modes=("proximal_inexactness", "backtracking_limit", "over_smoothing"),
+        metadata={"data_fidelity": ("l2","gaussian_nll","wls"), "norm_estimate_is_upper_bound": False,
+                  "backtracking": "checked_smooth_quadratic_majorizer",
+                  "proximal_accuracy": {"tv": "finite_FGP_no_gap_certificate", "tikhonov": "closed_form", "haar_l1": "closed_form"}}),
+    "admm": _algorithm("admm", "ADMM", (2,), ("parallel_2d",), "L2 composite ADMM.",
+        _common_parameters(200) + (
+            _p("data_fidelity", "str", default="l2", choices=("l2", "gaussian_nll", "wls", "transmission_poisson_nll")),
+            _p("weight_source", "str", default=None, nullable=True, choices=("known_variance", "provided", "post_log_poisson", "post_log_poisson_gaussian")),
+            _p("nll_tolerance", default=None, nullable=True, minimum=0., inclusive_minimum=False),
+            _p("nll_max_iterations", "int", default=200, minimum=1),
+            _p("regularizer", "str", default="tikhonov", choices=("tikhonov", "tv", "h1", "huber", "haar_l1")),
+            _p("strength", default=0.01, minimum=0.),
+            _p("reg_strength", default=None, nullable=True, minimum=0.),
+            _p("tolerance", default=1e-5, minimum=0.),
+            _p("level", "int", default=2, minimum=1),
+            _p("delta", default=0.01, minimum=0., inclusive_minimum=False),
+            _p("tv_mode", "str", default="isotropic", choices=("isotropic", "anisotropic")),
+            _p("rho", default=1., minimum=0., inclusive_minimum=False),
+            _p("cg_max_iterations", "int", default=100, minimum=1),
+            _p("cg_tolerance", default=1e-6, minimum=0., inclusive_minimum=False),
+        ), noise_models=("none","gaussian_relative","poisson_log","gaussian","poisson","poisson_gaussian"), family="variational", objective="composite_regularized_least_squares",
+        regularizers=("tikhonov", "tv", "h1", "huber", "haar_l1"), sparse_view=True, limited_angle=True,
+        convergence_criteria=("split_residual",), failure_modes=("inner_solve_limit", "numerical_failure", "iteration_limit"),
+        metadata={"data_fidelity": ("l2","gaussian_nll","wls"), "constraints":("unconstrained","nonnegative"), "theta":1}),
+    "pdhg": _algorithm("pdhg", "PDHG", (2,), ("parallel_2d",), "L2 composite PDHG.",
+        _common_parameters(200) + (
+            _p("data_fidelity", "str", default="l2", choices=("l2", "gaussian_nll", "wls", "transmission_poisson_nll")),
+            _p("weight_source", "str", default=None, nullable=True, choices=("known_variance", "provided", "post_log_poisson", "post_log_poisson_gaussian")),
+            _p("nll_tolerance", default=None, nullable=True, minimum=0., inclusive_minimum=False),
+            _p("nll_max_iterations", "int", default=200, minimum=1),
+            _p("regularizer", "str", default="tikhonov", choices=("tikhonov", "tv", "h1", "huber", "haar_l1")),
+            _p("strength", default=0.01, minimum=0.),
+            _p("reg_strength", default=None, nullable=True, minimum=0.),
+            _p("tolerance", default=1e-5, minimum=0.),
+            _p("level", "int", default=2, minimum=1),
+            _p("delta", default=0.01, minimum=0., inclusive_minimum=False),
+            _p("tv_mode", "str", default="isotropic", choices=("isotropic", "anisotropic")),
+            _p("tau", default=None, nullable=True, minimum=0., inclusive_minimum=False),
+            _p("sigma", default=None, nullable=True, minimum=0., inclusive_minimum=False),
+        ), noise_models=("none","gaussian_relative","poisson_log","gaussian","poisson","poisson_gaussian"), family="variational", objective="composite_regularized_least_squares",
+        regularizers=("tikhonov", "tv", "h1", "huber", "haar_l1"), sparse_view=True, limited_angle=True,
+        convergence_criteria=("split_residual",), failure_modes=("inner_solve_limit", "numerical_failure", "iteration_limit"),
+        metadata={"data_fidelity_constraints":{"transmission_poisson_nll":("nonnegative",)}, "data_fidelity": ("l2","gaussian_nll","wls","transmission_poisson_nll"), "constraints":("unconstrained","nonnegative"), "theta":1}),
+    "constrained_pdhg": _constrained_spec("constrained_pdhg"),
+    "asd_pocs_tv": _constrained_spec("asd_pocs_tv"),
     "fdk": _algorithm(
         "fdk", "FDK", (3,), ("cone_3d",), "Cone-beam Feldkamp-Davis-Kress reconstruction.",
         (
@@ -1144,12 +1279,14 @@ def validate_registry() -> tuple[str, ...]:
                 raise ValueError(f"fixed regularizer pairing is not registered for {name!r}")
             if len(spec.regularizers) != 1 or spec.regularizer_pairing_policy != "fixed":
                 raise ValueError(f"fixed regularizer pairing must be singular for {name!r}")
-        expected_pairing = {"tikhonov": "tikhonov", "tv_fista": "tv"}.get(name)
+        expected_pairing = {"tv_fista": "tv"}.get(name)
         if expected_pairing is not None and (
             spec.regularizer_pairing != expected_pairing
             or spec.regularizer_pairing_policy != "fixed"
         ):
             raise ValueError(f"{name!r} must preserve its fixed regularizer pairing")
+        if name in {"tikhonov", "fista"} and (spec.regularizer_pairing_policy != "selectable" or not set(spec.regularizers) <= set(REGULARIZER_SPECS)):
+            raise ValueError(f"invalid selectable regularizers for {name}")
         if not spec.required_metadata:
             raise ValueError(f"required metadata is missing for {name!r}")
         unknown_codes = set(spec.compatibility_reason_codes) - set(COMPATIBILITY_REASON_CODES)
@@ -1477,10 +1614,22 @@ def validate_parameter_values(
             if "learning_rate" in alias_sources and "step_size" not in alias_sources:
                 alias_sources["step_size"] = alias_sources["learning_rate"]
 
+    if algorithm in {"fista", "tikhonov", "admm", "pdhg"}:
+        if incoming.get("strength") is not None and incoming.get("reg_strength") is not None and incoming["strength"] != incoming["reg_strength"]:
+            add_error("strength and reg_strength conflict", "parameter_constraint_violation")
+        if algorithm in {"fista", "admm", "pdhg"} and incoming.get("reg_strength") is not None:
+            canonical_incoming["strength"] = incoming["reg_strength"]
+            alias_sources["strength"] = alias_sources.get("reg_strength", "user_override")
+            canonical_incoming.pop("reg_strength", None)
+        if algorithm == "tikhonov" and incoming.get("strength") is not None:
+            canonical_incoming["reg_strength"] = incoming["strength"]
+            alias_sources["reg_strength"] = alias_sources.get("strength", "user_override")
+            canonical_incoming.pop("strength", None)
+
     non_applicable_names: dict[str, str] = {}
     for category, descriptor in PARAMETER_APPLICABILITY.items():
         status = str(descriptor.get("status", ""))
-        if status in {"not_applicable", "policy_controlled"}:
+        if status in {"not_applicable", "policy_controlled"} or algorithm not in descriptor.get("algorithms", ()):
             reason = str(descriptor.get("reason_code", "parameter_not_applicable"))
             for name in descriptor.get("parameter_names", ()):
                 non_applicable_names[str(name)] = reason
@@ -1582,6 +1731,40 @@ def validate_parameter_values(
                 "block_size and subset_count must describe the same balanced view partition",
                 "subset_partition_mismatch",
             )
+
+    if algorithm in {'constrained_pdhg', 'asd_pocs_tv'}:
+        if not str(normalized.get('epsilon_source', '')).strip():
+            add_error('epsilon_source must be explicit', 'parameter_constraint_violation')
+        if normalized.get('min_value') != 0 or normalized.get('max_value') is not None:
+            add_error('constrained TV requires x >= 0 without upper bound', 'parameter_constraint_violation')
+        for shape in (image_shape, domain_shape):
+            if shape is not None and (len(shape) != 3 or shape[0] != 1):
+                add_error('constrained TV requires one 2D channel', 'geometry_shape_invalid')
+
+    if algorithm in {"admm", "pdhg"}:
+        if normalized.get("min_value") not in (None, 0) or normalized.get("max_value") is not None:
+            add_error("only unconstrained and nonnegative constraints supported", "parameter_constraint_violation")
+    if algorithm=='tikhonov' and normalized.get('data_fidelity','l2')!='l2' and (normalized.get('min_value') is not None or normalized.get('max_value') is not None):
+        add_error('weighted Tikhonov CG supports unconstrained reconstruction only','parameter_constraint_violation')
+    if algorithm=='pdhg' and normalized.get('data_fidelity')=='transmission_poisson_nll' and normalized.get('min_value')!=0:
+        add_error('P3 transmission_poisson_nll requires min_value=0', 'parameter_constraint_violation')
+    if algorithm in {"fista", "admm"} and normalized.get("data_fidelity") == "transmission_poisson_nll":
+        add_error("transmission_poisson_nll requires PDHG", "parameter_constraint_violation")
+    if algorithm in {"fista", "admm", "pdhg"} and normalized.get("data_fidelity") == "wls" and normalized.get("weight_source") is None:
+        add_error("wls requires explicit weight_source", "parameter_constraint_violation")
+    if algorithm in {"fista", "tikhonov"}:
+        prior = normalized.get("regularizer", "tikhonov")
+        bounded = normalized.get("min_value") is not None or normalized.get("max_value") is not None
+        if bounded and ((algorithm == "fista" and prior in {"tv", "haar_l1"}) or prior == "h1"):
+            add_error(f"{algorithm}+{prior} requires unconstrained reconstruction", "parameter_constraint_violation")
+        if prior == "haar_l1" and "level" in normalized:
+            for shape in (image_shape, domain_shape):
+                if shape is not None:
+                    from ..operators.wavelet import validate_haar
+                    try:
+                        validate_haar(shape, normalized["level"])
+                    except ValueError as error:
+                        add_error(str(error), "geometry_shape_invalid")
 
     # Validate observed bounds before passing them to the compatibility gate;
     # NaN must never be treated as a harmless lower bound.
@@ -1753,7 +1936,7 @@ def validate_parameter_values(
                 "memory_budget_exceeded",
             )
 
-    if algorithm in {"landweber", "tv_fista"}:
+    if algorithm == "landweber":
         step = normalized.get("step_size")
         if estimated_lipschitz is None and estimates.get("operator_norm_squared") is not None:
             estimated_lipschitz = estimates.get("operator_norm_squared")

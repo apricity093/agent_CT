@@ -140,3 +140,12 @@ __all__ += [
     "solve_tikhonov_detailed",
     "solve_tv_fista_detailed",
 ]
+
+from .fista import FISTASolver, fista
+__all__ += ["FISTASolver", "fista"]
+
+from .splitting import ADMMSolver, PDHGSolver, admm, pdhg
+__all__ += ['ADMMSolver', 'PDHGSolver', 'admm', 'pdhg']
+
+from .constrained_tv import ConstrainedTVSolver, constrained_pdhg, asd_pocs_tv
+__all__ += ['ConstrainedTVSolver', 'constrained_pdhg', 'asd_pocs_tv']

@@ -1,0 +1,8 @@
+schema_version: 1
+name: pdhg
+parameters:
+  data_fidelity: transmission_poisson_nll
+  regularizer: tikhonov
+  strength: 0.01
+  num_iterations: 200
+  min_value: 0

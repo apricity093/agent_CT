@@ -69,6 +69,11 @@ def test_help_and_registry_are_stable(capsys):
         "osem",
         "tikhonov",
         "tv_fista",
+        "fista",
+        "admm",
+        "pdhg",
+        "constrained_pdhg",
+        "asd_pocs_tv",
         "fdk",
     ]
     assert tuple(SOLVER_SPECS) == tuple(record["name"] for record in payload)

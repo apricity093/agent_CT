@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import pytest
 import torch
 from pathlib import Path
@@ -10,6 +11,7 @@ from inv_framework.instrumentation import (
     OperatorCounters,
     ResourceAccounting,
     start_memory_tracing,
+    _windows_working_set_mb,
 )
 from inv_framework.operators.base import LinearOperator
 from inv_framework.regularizers import TVRegularizer
@@ -138,8 +140,8 @@ def test_tv_prox_work_reports_actual_calls_and_iterations():
         control=SolveControl(max_iterations=1, tolerance=0.0),
     )
     assert result.status == "max_iterations"
-    assert operator.stats()["prox_calls"] == 1
-    assert operator.stats()["prox_iterations"] == 2
+    assert operator.stats()["prox_calls"] == 2
+    assert operator.stats()["prox_iterations"] == 4
     assert operator.stats()["prox_seconds"] >= 0.0
 
 
@@ -158,6 +160,12 @@ def test_cpu_resource_record_has_memory_and_null_gpu_fields():
     assert record["gpu_runtime_seconds"] is None
     assert record["phases"]["preparation"]["peak_memory_mb"] is not None
     assert record["phases"]["preparation"]["peak_gpu_memory_mb"] is None
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows process handle API")
+def test_windows_peak_working_set_uses_pointer_sized_handle():
+    peak = _windows_working_set_mb()
+    assert peak is not None and peak > 0
 
 
 def test_runtime_budget_failure_keeps_phase_and_status_evidence(tmp_path: Path):

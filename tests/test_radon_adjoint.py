@@ -1,14 +1,6 @@
-"""Sanity tests for the parallel-beam Radon operator.
+"""Autograd wiring and dense-view FBP regression.
 
-The "formal" adjoint identity <Ax, y> = <x, A^T y> holds only for ideal
-continuous Radon; discrete CT operators (ASTRA included) use bilinear-
-interpolated forward and discrete back-projection, which are *geometric*
-duals but not bit-exact numerical transposes. What we DO require:
-
-  1. autograd backward of forward equals explicit adjoint (by construction).
-  2. FBP recovers a Shepp-Logan-like phantom on a moderately dense sampling.
-
-This file tests both.
+Independent discrete-transpose checks live in test_p0_operators.py.
 """
 
 import math

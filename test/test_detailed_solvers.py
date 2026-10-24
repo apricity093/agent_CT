@@ -146,7 +146,7 @@ def test_cached_tikhonov_accounting_matches_equal_call_formula():
     assert operator.stats()["adjoint_calls"] == 3 + 2
 
 
-def test_tv_fista_accounting_counts_one_gradient_forward_per_iteration():
+def test_tv_fista_accounting_counts_gradient_majorizer_and_endpoint():
     operator = CountingLinearOperator(IdentityOperator())
     measurement = torch.ones(1, *operator.range_shape)
     result = TVFISTASolver(
@@ -161,5 +161,5 @@ def test_tv_fista_accounting_counts_one_gradient_forward_per_iteration():
     )
 
     assert result.status == "max_iterations"
-    assert operator.stats()["forward_calls"] == 3 + 1
-    assert operator.stats()["adjoint_calls"] == 3
+    assert operator.stats()["forward_calls"] == 2 * 3
+    assert operator.stats()["adjoint_calls"] == 3 + 1

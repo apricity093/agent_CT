@@ -76,16 +76,16 @@ def test_every_canonical_builder_constructs_from_registry_defaults():
         geometry={"type": "parallel_2d"},
     )
     constructed = {
-        name: type(build_solver(name, validate_parameter_values(name, {}).parameters, case)).__name__
+        name: type(build_solver(name, validate_parameter_values(name, {"epsilon": .2, "epsilon_source": "explicit builder fixture"} if name in {"constrained_pdhg", "asd_pocs_tv"} else {}).parameters, case)).__name__
         for name in CANONICAL_ALGORITHM_IDS
     }
     assert set(constructed) == set(CANONICAL_ALGORITHM_IDS)
 
 
 def test_registry_exposes_fixed_pairings_and_non_applicable_categories():
-    assert SOLVER_SPECS["tikhonov"].regularizer_pairing == "tikhonov"
+    assert SOLVER_SPECS["tikhonov"].regularizers == ("tikhonov", "h1")
     assert SOLVER_SPECS["tv_fista"].regularizer_pairing == "tv"
-    assert SOLVER_SPECS["tikhonov"].regularizer_pairing_policy == "fixed"
+    assert SOLVER_SPECS["tikhonov"].regularizer_pairing_policy == "selectable"
     assert SOLVER_SPECS["tv_fista"].regularizer_pairing_policy == "fixed"
     for spec in SOLVER_SPECS.values():
         for category in NON_APPLICABLE_PARAMETER_CATEGORIES:

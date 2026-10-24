@@ -1,0 +1,7 @@
+schema_version: 1
+name: fista
+parameters:
+  data_fidelity: l2
+  regularizer: tikhonov
+  strength: 0.01
+  num_iterations: 50

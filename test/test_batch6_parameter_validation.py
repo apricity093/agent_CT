@@ -103,9 +103,9 @@ def test_all_checked_in_algorithm_configs_validate(solver: str) -> None:
         (
             "tv_fista",
             {"reg_strength": 0.0, "step_size": 0.25, "power_iterations": 1, "tv_num_iterations": 1, "tv_tolerance": 0.0},
-            {"step_size": 0.250001},
+            {"step_size": -0.25},
             {"estimated_lipschitz": 4.0},
-            "spectral_step_invalid",
+            "parameter_out_of_range",
         ),
         (
             "fdk",
@@ -167,7 +167,8 @@ def test_theory_boundaries_and_request_only_warnings() -> None:
 
     request_only = validate_parameter_values("tv_fista", {})
     assert request_only.valid
-    assert "spectral_bound_unavailable" in request_only.warning_codes
+    # P1 validates the smooth majorizer during actual TV-FISTA updates.
+    assert not request_only.errors
     assert "operator_norm_squared" not in request_only.estimates
 
 

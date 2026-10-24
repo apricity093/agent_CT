@@ -1,0 +1,8 @@
+schema_version: 1
+name: admm
+parameters:
+  data_fidelity: gaussian_nll
+  regularizer: tikhonov
+  strength: 0.01
+  num_iterations: 200
+  cg_max_iterations: 500

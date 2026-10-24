@@ -25,7 +25,7 @@ CONVERGENCE_SCHEMA_VERSION = "ct.convergence.v1"
 # local avoids making the low-level diagnostics module depend on solver specs.
 CORE_CT_ALGORITHMS = frozenset({
     "fbp", "sirt", "landweber", "cgls", "lsqr", "sart", "os_sart",
-    "mlem", "osem", "tikhonov", "tv_fista", "fdk",
+    "mlem", "osem", "tikhonov", "tv_fista", "fista", "fdk",
 })
 
 
@@ -1075,6 +1075,9 @@ def confirm_endpoint(
     operator_norm_estimate: float | None = None,
     operator_norm_squared: float | None = None,
     regularization_operator: Any | None = None,
+    split_state: Any | None = None,
+    fidelity: Any | None = None,
+    previous_reconstruction: torch.Tensor | None = None,
 ) -> dict[str, Any]:
     """Independently recompute final evidence and audit the patience window."""
 
@@ -1362,9 +1365,16 @@ def confirm_endpoint(
         and isfinite(float(native_trajectory_value))
         and isfinite(float(native_value))
     ):
-        native_endpoint_consistent = abs(float(native_trajectory_value) - float(native_value)) <= (
+        # The last update and a prospective fixed-point update are different
+        # quantities. Recompute the recorded update from its two actual points;
+        # the prospective update independently checks stationarity at x_final.
+        recorded_update = (_endpoint_relative_change(previous_reconstruction, reconstruction)
+            if previous_reconstruction is not None else float(native_value))
+        result["endpoint_relative_iterate_change"] = recorded_update
+        result["endpoint_fixed_point_change"] = native_value
+        native_endpoint_consistent = abs(float(native_trajectory_value) - recorded_update) <= (
             absolute_tolerance
-            + relative_tolerance * max(abs(float(native_trajectory_value)), abs(float(native_value)))
+            + relative_tolerance * max(abs(float(native_trajectory_value)), abs(recorded_update))
         )
     if algorithm in {"cgls", "lsqr"}:
         native_name = "normalized_normal_residual"
@@ -1420,31 +1430,11 @@ def confirm_endpoint(
         if finite_inputs and native_residual is not None:
             try:
                 from .regularizers import TikhonovRegularizer
-                if regularization_operator is not None:
-                    from .instrumentation import CountingLinearOperator
-
-                    counters = getattr(operator, "counters", None)
-                    if counters is not None:
-                        if isinstance(regularization_operator, CountingLinearOperator):
-                            if regularization_operator.counters is not counters:
-                                regularization_operator = CountingLinearOperator(
-                                    regularization_operator.operator,
-                                    max_forward_calls=getattr(operator, "max_forward_calls", None),
-                                    max_adjoint_calls=getattr(operator, "max_adjoint_calls", None),
-                                    counters=counters,
-                                )
-                        else:
-                            regularization_operator = CountingLinearOperator(
-                                regularization_operator,
-                                max_forward_calls=getattr(operator, "max_forward_calls", None),
-                                max_adjoint_calls=getattr(operator, "max_adjoint_calls", None),
-                                counters=counters,
-                            )
-
+                auxiliary_before=regularization_operator.stats() if callable(getattr(regularization_operator,'stats',None)) else {}
                 regularizer = TikhonovRegularizer(regularization_operator)
                 regularization_gradient = regularizer.gradient(reconstruction)
-                gradient = operator.adjoint(native_residual) + strength * regularization_gradient
-                rhs = operator.adjoint(native_measurement)
+                gradient = operator.adjoint(fidelity.gradient(prediction) if fidelity is not None else native_residual) + strength * regularization_gradient
+                rhs = operator.adjoint(fidelity.linear_rhs() if fidelity is not None else native_measurement)
                 denominator = float(rhs.norm().item()) + strength * float(regularization_gradient.norm().item())
                 native_value = float(gradient.norm().item()) / max(denominator, 1e-12)
                 result["regularized_normal_residual_denominator"] = denominator
@@ -1452,10 +1442,14 @@ def confirm_endpoint(
                     "||A^T(Ax-b) + lambda L^T Lx||_2 / "
                     "max(||A^T b||_2 + lambda ||L^T Lx||_2, eps)"
                 )
+                if fidelity is not None:
+                    result['regularized_normal_residual_formula']='||A* gradient f(Ax)+lambda gradient R(x)|| / max(||A* linear_rhs(f)||+lambda ||gradient R(x)||,eps)'
                 result["composite_objective"] = float(
-                    0.5 * native_residual.square().sum().item()
+                    (float(fidelity.value(prediction)) if fidelity is not None else 0.5 * native_residual.square().sum().item())
                     + strength * regularizer.value(reconstruction).sum().item()
                 )
+                if auxiliary_before:
+                    result['regularizer_work']={k:v-auxiliary_before[k] for k,v in regularization_operator.stats().items()}
             except OperatorBudgetExceeded:
                 raise
             except Exception as error:
@@ -1471,13 +1465,17 @@ def confirm_endpoint(
             and change is not None
             and float(change) <= iterate_tol
         )
-    elif algorithm == "tv_fista":
+    elif algorithm in {"tv_fista", "fista"}:
         from .regularizers import TVRegularizer
         tv = TVRegularizer(
             mode=str(parameters.get("tv_mode", "isotropic")),
             num_iterations=int(parameters.get("tv_num_iterations", 50)),
             tolerance=float(parameters.get("tv_tolerance", 1e-5)),
         )
+        if algorithm == "fista":
+            from .ct_runtime import _build_fista
+            tv = _build_fista(**{k:v for k,v in parameters.items() if k not in {"data_fidelity","weight_source","nll_tolerance","nll_max_iterations"}}).parameters["regularizer"]
+        strength = float(parameters.get("strength") if parameters.get("strength") is not None else parameters.get("reg_strength", 0.0))
         raw_step = (rows[-1].get("step_size") if rows else None)
         if raw_step is None:
             raw_step = parameters.get("step_size")
@@ -1487,13 +1485,15 @@ def confirm_endpoint(
             native_value = float("nan")
             objective_change = None
         else:
-            gradient = operator.adjoint(native_residual) if native_residual is not None else torch.full_like(reconstruction, float("nan"))
+            gradient = operator.adjoint(fidelity.gradient(prediction) if fidelity is not None else native_residual) if native_residual is not None else torch.full_like(reconstruction, float("nan"))
             prox = _proximal_with_accounting(
                 tv,
                 reconstruction - step * gradient,
-                step * float(parameters.get("reg_strength", 0.0)),
+                step * strength,
                 operator,
             )
+            from .solvers._utils import apply_box_constraints
+            prox = apply_box_constraints(prox, min_value=parameters.get("min_value"), max_value=parameters.get("max_value"))
             mapping = (reconstruction - prox) / step
             mapping_denominator = max(float(reconstruction.norm().item()) / step, 1e-12)
             native_value = float(mapping.norm().item()) / mapping_denominator
@@ -1502,9 +1502,11 @@ def confirm_endpoint(
                 "G_t(x) = (x - prox_(t*lambda*TV)(x - t*A^T(Ax-b))) / t"
             )
             composite_objective = (
-                float(0.5 * residual.square().sum().item() + float(parameters.get("reg_strength", 0.0)) * tv.value(reconstruction).sum().item())
+                float((fidelity.value(prediction) if fidelity is not None else 0.5 * residual.square().sum()).item() + strength * tv.value(reconstruction).sum().item())
                 if residual is not None else None
             )
+            if algorithm=='fista':
+                result['prox_gradient_mapping_formula']='G_t(x)=(x-prox_(t*lambda*R)(x-t*A*gradient f(Ax)))/t'
             result["composite_objective"] = composite_objective
             objective_values = [
                 float(row["objective"])
@@ -1528,6 +1530,13 @@ def confirm_endpoint(
                 objective_change = None
             result["returned_state_trajectory"] = returned_state
 
+        result["regularizer_work"] = {
+            "gradient_calls": getattr(tv, "gradient_calls", 0),
+            "gradient_adjoint_calls": getattr(tv, "gradient_adjoint_calls", 0),
+            "haar_analysis_calls": getattr(tv, "analysis_calls", 0),
+            "haar_synthesis_calls": getattr(tv, "synthesis_calls", 0),
+            "haar_transform_seconds": getattr(tv, "transform_seconds", 0.0),
+        }
         native_name = "normalized_prox_gradient_mapping"
         native_ok = (
             native_value is not None
@@ -1539,6 +1548,33 @@ def confirm_endpoint(
             and bool(result.get("returned_state_trajectory", False))
         )
         result["relative_composite_objective_change"] = objective_change
+    if algorithm in {"admm", "pdhg"}:
+        native_name = "returned_point_primal_dual_fixed_point"
+        if split_state:
+            state = split_state
+            penalty = state["penalty"]
+            before = dict(penalty.calls)
+            fidelity_before = {k:getattr(state["fidelity"],k,0) for k in ("prox_calls","inner_iterations","inner_failures","prox_seconds","weight_multiplications","mask_calls")}
+            p, d = state["p"], state["d"]
+            tau, sigma, weight = state["tau"], state["sigma"], state["weight"]
+            project = lambda z: z.clamp_min(0) if state["nonnegative"] else z
+            tx = penalty.apply(reconstruction)
+            g = operator.adjoint(p) + penalty.apply(d, True)
+            rx = (reconstruction-project(reconstruction-tau*g))/tau
+            rp = (p-state["fidelity"].dual_prox(p+sigma*prediction,sigma))/sigma
+            rd = (d-penalty.dual_prox(d+sigma*tx,sigma,weight))/sigma
+            native_value = float((rx.square().sum()+rp.square().sum()+rd.square().sum()).sqrt())/max(1.,float(reconstruction.norm()),float(p.norm()),float(d.norm()))
+            native_ok = isfinite(native_value) and native_value <= float(parameters.get("tolerance", 1e-5))
+            composite_objective = float(state["fidelity"].value(prediction))+weight*float(penalty.value(tx))
+            objective_endpoint_consistent = bool(rows) and abs(float(rows[-1]["objective"])-composite_objective) <= absolute_tolerance+relative_tolerance*abs(composite_objective)
+            result["regularizer_work"] = {k: penalty.calls[k]-v for k,v in before.items()}
+            result["fidelity_work"] = {k:getattr(state["fidelity"],k,0)-v for k,v in fidelity_before.items()}
+            result["composite_objective"] = composite_objective
+        else:
+            native_value = None
+            native_ok = False
+            native_recomputation_error = "complete split endpoint unavailable"
+            result["reasons"].append("complete_split_endpoint_unavailable")
     if native_value is not None and not isfinite(float(native_value)):
         finite = False
         result["reasons"].append("non_finite_native_criterion")
@@ -1547,7 +1583,7 @@ def confirm_endpoint(
     if native_details:
         result["native_recomputation"] = native_details
     if (
-        algorithm in {"cgls", "lsqr", "tikhonov", "tv_fista"}
+        algorithm in {"cgls", "lsqr", "tikhonov", "tv_fista", "fista"}
         and native_trajectory_value is not None
         and native_value is not None
         and isfinite(float(native_trajectory_value))
@@ -1653,7 +1689,7 @@ def confirm_endpoint(
             result["reasons"].append("trajectory_endpoint_native_metric_mismatch")
         if algorithm in {"mlem", "osem"} and objective_endpoint_consistent is not True:
             result["reasons"].append("trajectory_endpoint_poisson_deviance_mismatch")
-        if algorithm == "tv_fista" and objective_endpoint_consistent is not True:
+        if algorithm in {"tv_fista", "fista"} and objective_endpoint_consistent is not True:
             result["reasons"].append("trajectory_endpoint_objective_mismatch")
         if endpoint_cfg.get("require_trajectory_consistency", True) and not trajectory_endpoint_consistent:
             result["reasons"].append("trajectory_endpoint_metric_mismatch")
@@ -1668,6 +1704,9 @@ def confirm_endpoint(
         "osem": "poisson_deviance_and_relative_epoch_change_patience",
         "tikhonov": "discrepancy_regularized_normal_and_iterate_patience",
         "tv_fista": "discrepancy_prox_gradient_and_objective_patience",
+        "fista": "discrepancy_prox_gradient_and_objective_patience",
+        "admm": "split_residual_patience",
+        "pdhg": "split_residual_patience",
     }
     if solver_status_value == "converged" and solver_stopping_reason != allowed.get(algorithm):
         result["reasons"].append("stopping_reason_not_allowed")
@@ -1675,6 +1714,7 @@ def confirm_endpoint(
     result["operator_calls"] = _endpoint_call_delta(
         endpoint_counter_before, _endpoint_operator_stats(operator)
     )
-    result["passed"] = finite and (solver_status_value != "converged" or not result["reasons"])
+    result["endpoint_diagnostics_complete"] = native_recomputation_error is None
+    result["passed"] = finite and native_recomputation_error is None and (solver_status_value != "converged" or not result["reasons"])
     result["status"] = "passed" if result["passed"] else "failed"
     return result

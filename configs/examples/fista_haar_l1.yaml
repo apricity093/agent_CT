@@ -1,0 +1,8 @@
+schema_version: 1
+name: fista
+parameters:
+  regularizer: haar_l1
+  strength: 0.01
+  level: 2
+  num_iterations: 100
+  tolerance: 1.0e-5

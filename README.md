@@ -4,7 +4,7 @@
 前向/伴随算子、经典重建算法、版本化测试数据、参数验证、收敛诊断和公平比较协议
 组织为统一接口，并提供 `invct` 命令行工具。
 
-当前版本提供 12 个 ordinary-CT solver、纯 PyTorch 2D parallel-beam Radon、ASTRA
+当前源码提供 17 个 ordinary-CT solver、纯 PyTorch 2D parallel-beam Radon、ASTRA
 3D/FDK 后端，以及可供上层 inverse-problem Agent 程序化读取的算法 metadata。
 CT 与 USCT 是独立问题域；本仓库不包含或替代 USCT 算法。
 
@@ -44,6 +44,11 @@ min_x  0.5 * ||A x - y||_2^2 + lambda * R(x)
 | `osem` | OSEM | 2D parallel | `subset_count`、`initial_value` | PyTorch CPU/CUDA |
 | `tikhonov` | Tikhonov CG | 2D parallel | `reg_strength`、`tolerance` | PyTorch CPU/CUDA |
 | `tv_fista` | TV-FISTA | 2D parallel | `reg_strength`、TV proximal 参数 | PyTorch CPU/CUDA |
+| `fista` | 通用 FISTA | 2D parallel | `regularizer`、`strength`、回溯 | PyTorch CPU/CUDA |
+| `admm` | ADMM | 2D parallel | `regularizer`、`strength`、`rho`、CG | PyTorch CPU/CUDA |
+| `pdhg` | 惩罚 PDHG | 2D parallel | `regularizer`、`strength` | PyTorch CPU/CUDA |
+| `constrained_pdhg` | 残差球约束 TV PDHG | 2D parallel | `epsilon`、`epsilon_source`、TV | PyTorch CPU/CUDA |
+| `asd_pocs_tv` | SART2D 约束 TV 启发式 | 2D parallel | `epsilon`、TV、relaxation | PyTorch CPU/CUDA |
 | `fdk` | Feldkamp-Davis-Kress | 3D circular cone | filter、short scan、supersampling | ASTRA CUDA |
 
 查询 registry、默认参数和能力约束：
@@ -58,10 +63,10 @@ canonical solver ID 固定为：
 
 ```text
 fbp, sirt, landweber, cgls, lsqr, sart, os_sart, mlem, osem,
-tikhonov, tv_fista, fdk
+tikhonov, tv_fista, fista, admm, pdhg, constrained_pdhg, asd_pocs_tv, fdk
 ```
 
-`tikhonov` 固定搭配 Tikhonov 正则，`tv_fista` 固定搭配 TV 正则。MLEM/OSEM 只接受
+`tikhonov` 可选恒等 Tikhonov 或 H1，`tv_fista` 固定搭配 TV 正则。MLEM/OSEM 只接受
 显式的非负 emission/count observation model；不能把 X-ray `line_integral` 或
 `log_projection` 当成计数数据。FDK 要求 `cone_3d`、cubic volume、PyTorch CUDA 和
 ASTRA CUDA。
@@ -81,7 +86,20 @@ python -m pip install -e ".[dev]"
 ```bash
 invct --help
 python -m inv_framework --help
+invct run --help
+invct data --help
 ```
+
+Windows Conda 环境在调用下列命令前应激活环境，并设置其 DLL 路径和线程数：
+
+```powershell
+$env:PATH = "$env:CONDA_PREFIX/Library/bin;$env:CONDA_PREFIX;" + $env:PATH
+$env:OMP_NUM_THREADS = '1'
+$env:MKL_NUM_THREADS = '1'
+$env:OPENBLAS_NUM_THREADS = '1'
+```
+
+本文多行 Bash 示例使用 `\` 续行；PowerShell 请合并为单行或使用反引号续行。
 
 FDK 还需要安装带 CUDA 支持的
 [ASTRA Toolbox](https://github.com/astra-toolbox/astra-toolbox)。二维算法可在 CPU 或
@@ -106,6 +124,13 @@ invct data validate parallel_2d/tissue_breast_dense_clean_128
 ```
 
 外部 catalog 可通过 `--root PATH`（数据子命令）或 `--data-root PATH`（`run`）传入。
+路径指向包含 `catalog.json` 的目录，例如：
+
+```bash
+invct data list --root /path/to/ct-data --json
+invct data show parallel_2d/disk_analytic_32 --root /path/to/ct-data
+```
+
 每个 case 的 HDF5 使用以下统一键：
 
 | 路径 | 含义 |
@@ -158,6 +183,41 @@ MLEM/OSEM 必须使用明确声明 `nonnegative_counts` 或 `intensity` 的 emis
 输出目录非空时命令默认拒绝运行，防止新旧 manifest 混合。只有确认替换该次 run
 产物时才显式添加 `--overwrite`。
 
+### 选择 solver 与正则项
+
+`invct run` 的位置参数选择 solver，YAML 的 `parameters.regularizer` 选择受支持的
+正则项；当前 CLI 没有 `--regularizer` 或 `--operator` 参数。已有组合示例：
+
+```bash
+invct run fista --case parallel_2d/disk_analytic_32 --config configs/examples/fista_haar_l1.yaml --out artifacts/fista_haar_cpu --device cpu
+invct run tikhonov --case parallel_2d/disk_analytic_32 --config configs/examples/tikhonov_h1.yaml --out artifacts/tikhonov_h1_cpu --device cpu
+```
+
+直接重建不要求迭代 solver，无正则算法不要求 regularizer。CLI/runtime 的 CT operator
+由实际 case geometry 构建；其他 Python operator 类的存在不代表它们已经接入 CLI。
+几何、投影数和观测噪声的变化需要相应输入数据，不能只修改算法参数或描述字段。
+
+### 运行预算与停止策略
+
+```bash
+invct run fista --case parallel_2d/disk_analytic_32 --config configs/algorithms/fista.yaml --out artifacts/fista_budget_cpu --device cpu --max-iterations 50 --max-forward-calls 1500 --max-adjoint-calls 1500 --max-wall-seconds 60
+```
+
+| 选项 | 含义 |
+| --- | --- |
+| `--max-iterations N` | 外层迭代预算；算法迭代数仍由配置指定并受预算限制 |
+| `--max-forward-calls N` / `--max-adjoint-calls N` | A/A* 调用上限，包含初始化、参数估计和终点工作 |
+| `--max-wall-seconds S` | 协作式 runtime 时间预算；单次算子调用不能被抢占 |
+| `--stopping-policy PATH` | schema `1.0`、mode `solver_native_and_endpoint` 的 JSON 停止策略 |
+| `--parameter-sources PATH` | 参数名到来源标签的 JSON mapping |
+| `--observation-domain DOMAIN` | 选择 case 中已提供的观测域，不生成新的观测数据 |
+| `--fixed-compute` | 关闭 solver 提前停止，用于声明了固定计算预算的实验 |
+
+`--fixed-compute` 不取消预算或数值异常检查。`--max-wall-seconds` 不等于进程硬超时；
+硬超时由上层 Agent 的 `budget.timeout_s` 控制。达到迭代上限或预算耗尽不表示收敛。
+CLI 返回码为：成功执行 `0`，无效参数/配置 `2`，运行失败或资源中断等 `1`；
+优化收敛状态需要继续读取 diagnostics。
+
 ## 离线评估
 
 `eval` 从已保存的 tensor bundle 重算指标，不重新运行 solver，也不依赖原机器上的
@@ -200,6 +260,10 @@ invct protocol-check \
 在 Agent 项目根目录执行：
 
 ```bash
+inverse-agent backend-info \
+  --modality ct \
+  --ct-repo external/ct-benchlab
+
 inverse-agent list-cases \
   --modality ct \
   --ct-repo external/ct-benchlab
@@ -208,7 +272,23 @@ inverse-agent list-algorithms \
   --modality ct \
   --ct-repo external/ct-benchlab
 
+inverse-agent list-ct-components \
+  --ct-repo external/ct-benchlab
+
+inverse-agent enumerate-ct-compositions \
+  --request request.json \
+  --ct-repo external/ct-benchlab
+
+inverse-agent compose-ct-request \
+  --request request.json \
+  --composition algorithm.json \
+  --ct-repo external/ct-benchlab
+
 inverse-agent select-ct-candidates \
+  --request request.json \
+  --ct-repo external/ct-benchlab
+
+inverse-agent check-capability \
   --request request.json \
   --ct-repo external/ct-benchlab
 
@@ -220,6 +300,27 @@ inverse-agent run-experiment \
   --request request.json \
   --ct-repo external/ct-benchlab
 ```
+
+组件命令由包含组合接口的主项目版本提供，安装本 CT 包不会安装 `inverse-agent`。
+`enumerate-ct-compositions` 返回组合、参数建议、准入结果和候选请求；
+`compose-ct-request` 输出完整 RunRequest JSON，以上两者均不执行重建。
+保存组装结果后，后续检查和运行必须使用该结果文件。
+
+`algorithm.json` 示例：
+
+```json
+{
+  "algorithm_id": "fista",
+  "components": {"regularizer": "tv"},
+  "parameters": {"strength": 0.002, "num_iterations": 100}
+}
+```
+
+省略组件字段继承实现；显式 `solver: null` 用于直接方法，
+`regularizer: null` 要求无正则实现，省略或 null operator 使用 case operator。
+三者无需同时指定。显式 operator 必须与实际 case 一致；每个选中请求应使用
+独立 run_id 和空 output_dir。Python 接口、支持范围及版本要求见
+[Agent 用法](docs/agent_usage.md)。
 
 完整执行路径为：
 
@@ -263,7 +364,7 @@ completed_valid
 max_iterations
 stalled
 diverged
-operator_budget_exhausted
+resource_exhausted
 numerical_error
 invalid_parameters
 unavailable
@@ -273,72 +374,70 @@ unavailable
 `converged`。诊断同时记录 stopping reason、objective/residual、最终残差、
 forward/adjoint calls、运行时间和资源信息。
 
-Landweber 必须满足 `0 < step_size < 2 / ||A||^2`，TV-FISTA 必须满足
-`0 < step_size <= 1 / ||A||^2`。省略步长时，runtime 使用确定性 power iteration 估计
-`||A||^2`，并把估计阶段的 operator calls 与 solver 迭代分开记账。
+预算中断统一为 `resource_exhausted`；算子次数与 runtime wall 的区别通过
+`operator_call_budget_exhausted` / `wall_time_budget_exhausted` 停止原因表达。
 
-## 最终版 Agent 端到端结果
+L2 数据项下，Landweber 的固定步长条件为 `0 < step_size < 2 / ||A||^2`，
+FISTA 的标准固定步长条件为 `0 < step_size <= 1 / ||A||^2`。省略步长时使用
+确定性有限 power iteration 估计；该估计不是谱范数上界。当前 FISTA/TV-FISTA
+对试探步长检查实际光滑项 majorization，失败时减半回溯。参数估计、回溯与
+solver 迭代的 operator calls 分别记账；有限 TV proximal 的限制见组合算法文档。
 
-以下结果于 2026-09-02 使用最终版程序重新生成，不是直接运行 CT benchmark：
+## 可组合算法与 Agent
 
-- Agent commit：`010e3a2fd0f330b292301bf227dc525d48382cb1`；
-- CT commit：`28d658418c919239fd618ceb0de522207011e405`；
-- 正式路径：`inverse-agent -> CTAdapter -> invct -> solver -> Agent evaluator`；
-- 参数策略：固定仓库 YAML 默认值，无调参、无自动重试；
-- truth policy：只允许独立 evaluator 使用，backend public staging 不含 truth；
-- 2D case：`parallel_2d/tissue_breast_sparse_poisson_128`，CPU/float32；
-- FDK case：`cone_3d/modified_shepp_logan_64_clean`，64³ volume、
-  128×128 detector、180 views，`fno` 环境、GTX 1650、ASTRA CUDA；
-- 完整紧凑证据：[artifacts/agent_final_20260902](artifacts/agent_final_20260902)。
+FISTA/H1/Haar 的参数和兼容性见 [用法](docs/composable_reconstruction.md)，
+ADMM/PDHG/Huber 见 [分裂算法](docs/splitting_solvers.md)，
+Gaussian NLL、WLS 与透射 Poisson NLL 见 [保真项](docs/data_fidelity.md)。
+约束 TV 的显式半径、来源、非负性及停止语义见 [库用法](docs/constrained_tv.md)，
+ASD 变体及参考许可见 [来源](docs/constrained_tv_sources.md)。
 
-### 2D transmission 重建
+主项目提供 17 项精确能力检查和真实 Agent 路径；安装、请求参数、runtime wall
+与硬超时语义见 [Agent 用法](docs/agent_usage.md)。主项目通过 `pyproject.toml`
+固定本库提交；固定来源安装检查与数值精度验收分别记录。P7/P8 未启动。
 
-Agent 在该 case 上接纳 8 个算法。OS-SART 因默认 `subset_count=10` 与 48 views 无法形成
-合法 balanced partition 而被兼容性过滤；MLEM/OSEM 属于 emission/count stratum；FDK
-属于独立 3D geometry。它们没有被强行混入二维 transmission 比较。
+有限预算结果不构成最佳质量排名。独立 pilot 与冻结配置示例见
+[质量示例](docs/quality_example.md)。
 
-![最终版 Agent 的二维 CT 重建结果](artifacts/agent_final_20260902/reconstruction_montage_2d.png)
+## 已知精度与成本限制
 
-| Solver | 状态 | 迭代/epoch | PSNR | SSIM | Runtime | Forward/Adjoint |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| FBP | `completed_valid` | 0 | 18.31 dB | 0.304 | 0.530 s | 1 / 1 |
-| SIRT | `max_iterations` | 25 | 19.48 dB | 0.525 | 1.772 s | 27 / 26 |
-| Landweber | `max_iterations` | 50 | 20.15 dB | 0.500 | 3.812 s | 64 / 63 |
-| CGLS | `max_iterations` | 25 | 18.38 dB | 0.405 | 2.440 s | 52 / 26 |
-| LSQR | `max_iterations` | 25 | 18.38 dB | 0.405 | 2.647 s | 52 / 26 |
-| SART | `max_iterations` | 5 epochs | 20.12 dB | 0.558 | 3.599 s | 485 / 480 |
-| Tikhonov | `max_iterations` | 100 | 17.85 dB | 0.320 | 6.083 s | 102 / 102 |
-| TV-FISTA | `max_iterations` | 50 | 18.25 dB | 0.386 | 3.636 s | 60 / 59 |
+约束 PDHG 依赖凸 TV 与 A/D 谱上界，必须同时满足可行性和原生 fixed-point
+条件才报告 converged。ASD 为 SART2D feasibility-backtracking 变体，无全局最优保证。
+TV 整项 proximal 为有限 FGP，不提供精确近端 gap 证书。
 
-这些迭代算法都完成了有限重建，但均达到固定 YAML 上限，不能写成已收敛。单个合成 case
-上的 PSNR/SSIM 不能外推为普遍算法排名。
+已有高精度尝试未通过：稀疏 CPU PDHG 在 20000 轮时 epsilon=.2、残差
+.2000011504、fixed-point 6.46e-5、相对 TV gap 1.88e-4，未达到 1e-5 门槛；
+稀疏 CPU ASD 在 320 sweeps 可行但 stalled，TV gap 约 8.16%。稀疏 CUDA 独立
+SLSQP 的 LSQ 子问题失败；有限角 CPU 参考成功但生产运行中断，其余长程与
+CUDA 成本验证不完整。严格参考成功、converged 和 TV gap<1e-5 的测试保留，
+这些限制没有被正常接口接入消除。
 
-### FDK CUDA 重建
+独立质量示例的固定默认值、单 phantom/seed、CPU 32² 预算端点不代表普遍性能。
+混合 WLS 是近似；早期 SART 失败尝试在结构化成本输出前中断，其精确成本无法恢复，
+接受端点汇总不包含该缺口。
 
-FDK 使用 `D:\anaconda3\envs\fno\python.exe`，PyTorch 2.5.1、ASTRA 2.2.0，
-`astra.use_cuda() == True`。这是一次严格冻结的单次运行：modified Shepp–Logan 64³
-体数据、128×128 detector、180 个等角度 views、SOD/ODD 各 320、无噪声 line-integral；
-参数固定为 Ram-Lak、`short_scan=false`、`voxel_supersampling=1`，无调参、无自动重试。
-backend 执行期间 truth 被隔离；下图由独立 evaluator 在运行结束后使用本次 truth 与本次
-reconstruction 的中间轴向切片生成。
+## 最新 Agent 端到端结果
 
-![最终版 Agent 的 FDK CUDA 重建结果](artifacts/agent_final_20260902/comparison_fdk.png)
+当前本地主项目的正式入口为
+[2026-10-24 组织 phantom 结果](../../artifacts/ct-agent-tissue-showcase-20261024/README.md)。
+17 项真实 Agent 调用中，15 项执行成功、2 项预算中断；优化状态分别为
+2 项 converged、2 项 completed_valid、11 项 max_iterations 和 2 项 resource_exhausted。
+分组图像、完整指标和读取说明集中在该入口，不在多个 README 维护重复表格。
 
-| Solver | 状态 | PSNR | SSIM | RMSE | Runtime | Forward/Adjoint |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| FDK | `completed_valid` | 28.13 dB | 0.825 | 0.000784 | 1.364 s | 1 / 0 |
+- [experiment.json](../../artifacts/ct-agent-tissue-showcase-20261024/experiment.json)：协议、环境、注册表、公平性门控与限制。
+- [summary.json](../../artifacts/ct-agent-tissue-showcase-20261024/summary.json)：各算法的状态、指标与 Agent 资源汇总。
+- `algorithms/<solver>/diagnostics.json`：独立原生参数、轨迹、终点与 CT runtime 资源。
+- `algorithms/<solver>/details.json`：请求、选择、实际导入与评价证据；重复内容用本地 JSON 引用保存。
+- `data/` 与 `algorithms/<solver>/reconstruction.pt`：可复现输入和完整或预算中断返回点。
 
-表中 runtime 是 CT backend 原生指标；完整 Agent wall time 为 16.422 s，其中包含 case
-隔离 staging、子进程启动、endpoint validation、一次 forward data-consistency 检查和独立
-三维评估。FDK CUDA backend reconstruction 本身为 0.167 s。
+这些链接依赖主项目的本地结果目录，单独克隆 CT 仓库不携带该批结果。
+CT wall、完整 Agent wall 和 FDK backend reconstruction 时间分别解释；
+预算中断的未确认终点不填成收敛或有效独立评价。不同观测域/目标分组，
+门控拒绝的组不排名，单案例图像指标不代表普遍质量。
 
-原始结构化记录位于
-[`comparison.json`](artifacts/agent_final_20260902/comparison.json)，冻结协议位于
-[`protocol.json`](artifacts/agent_final_20260902/protocol.json)，文件摘要位于
-[`checksums.sha256`](artifacts/agent_final_20260902/checksums.sha256)。FDK 的精简 Agent
-结果与正式请求分别见
-[`fdk_agent64_result.json`](artifacts/agent_final_20260902/fdk_agent64_result.json) 和
-[`request_fdk.json`](artifacts/agent_final_20260902/request_fdk.json)。
+**FDK 数据一致性异常待核查：**源观测范数约 94.3765，运行 metrics 中约
+0.0223051，原生归一化残差约 4314.76。独立图像质量与此异常并存，
+completed_valid 不表示数据一致性通过。该批来自 dirty checkout，不代表 P6
+远程固定来源安装验收。既有严格精度限制见上节。
 
 ## Python API
 
@@ -380,7 +479,7 @@ agent_CT/
 │   ├── benchmarks/            # 版本化 case API
 │   ├── operators/             # forward / adjoint / CT operators
 │   ├── solvers/               # 经典、子集、统计与正则化算法
-│   ├── regularizers/          # Tikhonov、TV
+│   ├── regularizers/          # Tikhonov、TV、Haar、Huber
 │   └── utils/                 # PSNR、SSIM
 ├── configs/
 │   ├── algorithms/            # solver YAML
@@ -391,13 +490,23 @@ agent_CT/
 ├── tests/                     # 算子和既有回归测试
 ├── examples/
 ├── tools/
-├── artifacts/                 # 版本化示例和紧凑证据
 └── pyproject.toml
 ```
 
 ## 开发与测试
 
-运行全部测试：
+Windows CUDA 环境需先导入 torch 再启动 pytest，并使用环境的 Library/bin PATH
+和单线程设置。例如快速 registry 检查：
+
+```powershell
+python -c "import torch; import pytest; raise SystemExit(pytest.main(['test/test_invct_cli.py::test_help_and_registry_are_stable', 'test/test_registry_diagnostics.py::test_registry_build_config_bijection_is_json_stable', 'test/test_batch10_fair_protocols.py', '-q']))"
+```
+
+这组命令只检查命令发现、registry/config 对应及公平协议，不执行真实重建。
+下列完整测试和快速数值测试则包含真实 solver 调用。
+
+全部测试包含高成本独立参考与长程高精度 CT 专项，后者有已知未通过项，
+不作为日常快速检查或本地安装通过的默认标准。只有明确需要完整范围时运行：
 
 ```bash
 python -m pytest -q test tests
@@ -427,6 +536,22 @@ python -m pytest -q \
 ```text
 <A x, y> approximately equals <x, A* y>
 ```
+
+### 构建可安装包
+
+已有 setuptools（至少 68）和 wheel 的环境可直接构建本地 wheel，不解析或安装
+运行时依赖：
+
+```bash
+python -m pip wheel . --no-deps --no-build-isolation --wheel-dir artifacts/wheels
+```
+
+wheel 携带 Python 数值模块与 17 个 `configs/algorithms/*.yaml`。
+README 中的 `configs/examples`、benchmark/protocol 文件、`test/data` 和 docs
+按源码 checkout 使用，不随 wheel 提供；安装包运行时需要显式提供数据目录和配置。
+主项目的组件发现、组合和请求组装代码还需在主项目中单独提交。
+固定版本安装必须使用已推送且可获取的 commit，再同步主项目依赖引用，不能用
+本地 dirty checkout 的结果代替固定来源安装验收。
 
 ## 能力边界与数据许可
 

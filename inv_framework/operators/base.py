@@ -47,6 +47,8 @@ class ForwardOperator(ABC):
 class LinearOperator(ForwardOperator):
     """Linear forward operator with an explicit adjoint.
 
+    The adjoint is the transpose of the implemented discrete forward map.
+    Agreement with a custom backward alone does not establish this identity.
     Implementations must wire `forward` so that its autograd backward equals
     `adjoint` — this lets gradient-based solvers and explicit-adjoint solvers
     agree on what A^T is. For CT operators we achieve this with a custom
@@ -56,6 +58,28 @@ class LinearOperator(ForwardOperator):
     @abstractmethod
     def adjoint(self, y: torch.Tensor) -> torch.Tensor:
         """Apply A^T to y. Must support batched input."""
+
+    nonnegative_matrix = False
+
+    def squared_norm_upper_bound(self, x):
+        """Schur squared-norm bound, using nonnegative coefficients or small columns."""
+        import math
+        if self.nonnegative_matrix:
+            rows = self.forward(torch.ones_like(x))
+            cols = self.adjoint(torch.ones_like(rows))
+        else:
+            # Exact absolute sums, deliberately restricted to small generic test operators.
+            n = math.prod(self.domain_shape)
+            if n > 4096:
+                raise ValueError('generic operator bound requires at most 4096 domain elements')
+            rows = None
+            cols = torch.zeros_like(x)
+            for j in range(n):
+                e = torch.zeros_like(x); e.flatten(1)[:,j] = 1
+                column = self.forward(e).abs()
+                rows = column if rows is None else rows+column
+                cols.flatten(1)[:,j] = column.flatten(1).sum(1)
+        return float(rows.abs().max())*float(cols.abs().max())
 
     def pseudo_inverse(self, y: torch.Tensor, **kwargs) -> torch.Tensor:
         """Default pseudo-inverse via Landweber iteration.

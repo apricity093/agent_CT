@@ -9,4 +9,9 @@ __all__ = [
     "ProximalOperator",
     "TikhonovRegularizer",
     "TVRegularizer",
+    "HaarL1Regularizer",
 ]
+from .wavelet import HaarL1Regularizer
+
+from .huber import GradientHuberRegularizer
+__all__ += ['GradientHuberRegularizer']

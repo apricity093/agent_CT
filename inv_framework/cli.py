@@ -58,6 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--max-iterations", type=int)
     run.add_argument("--max-forward-calls", type=int)
     run.add_argument("--max-adjoint-calls", type=int)
+    run.add_argument("--max-wall-seconds", type=float, help="Cooperative runtime budget including initialization and endpoint work.")
     run.add_argument("--parameter-sources", help="JSON mapping of parameter names to provenance labels.")
     run.add_argument("--stopping-policy", help="JSON stopping-policy document (schema 1.0).")
     run.add_argument("--fixed-compute", action="store_true", help="Disable solver early stopping for a fixed operator-call protocol.")
@@ -147,6 +148,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 max_iterations=args.max_iterations,
                 max_forward_calls=args.max_forward_calls,
                 max_adjoint_calls=args.max_adjoint_calls,
+                max_wall_seconds=args.max_wall_seconds,
                 parameter_sources_path=args.parameter_sources,
                 stopping_policy_path=args.stopping_policy,
                 fixed_compute=args.fixed_compute,

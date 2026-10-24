@@ -25,7 +25,10 @@ diffusion = ["diffusers>=0.30"]
 invct = "inv_framework.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["inv_framework*"]
+include = ["inv_framework*", "configs*"]
+
+[tool.setuptools.package-data]
+configs = ["algorithms/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["test", "tests"]

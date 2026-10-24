@@ -76,6 +76,7 @@ class CTTestCase:
     roi_mask: torch.Tensor | None = None
     valid_measurement_mask: torch.Tensor | None = None
     source_path: Path | None = None
+    public_measurement: Mapping[str, torch.Tensor] | None = None
 
     def __post_init__(self) -> None:
         if not self.case_id or self.case_id.strip() != self.case_id:
@@ -108,6 +109,33 @@ class CTTestCase:
                 f"geometry range_shape {range_shape} does not match measurement "
                 f"shape {tuple(self.measurement.shape[1:])}."
             )
+        model = (self.metadata.get('measurement', {}) or {}).get('noise_model')
+        public = self.public_measurement or {}
+        if model in ('poisson','poisson_gaussian'):
+            import math
+            from ..measurement import measurement_setting
+            for name in ('scale','floor'):
+                setting=measurement_setting(self.metadata.get('measurement',{}),name)
+                if setting is not None and (isinstance(setting,bool) or not isinstance(setting,(int,float)) or not math.isfinite(setting) or setting<=0):
+                    raise ValueError(name+' must be positive finite')
+        if model == 'poisson_gaussian' and 'counts' in public:
+            raise ValueError('mixed observations cannot expose latent counts')
+        if 'counts' in public and 'c_obs' in public:
+            raise ValueError('counts and c_obs are mutually exclusive')
+        for name in ('I0','sigma'):
+            if name in public and bool((public[name] <= 0).any()):
+                raise ValueError(name+' must be positive')
+        for name in ('counts','weights','sigma_e'):
+            if name in public and bool((public[name] < 0).any()):
+                raise ValueError(name+' must be nonnegative')
+        if 'counts' in public and bool((public['counts'] != public['counts'].round()).any()):
+            raise ValueError('counts must be integer valued')
+        from ..measurement import PUBLIC_FIELDS
+        for key, tensor in (self.public_measurement or {}).items():
+            if key not in PUBLIC_FIELDS:
+                raise ValueError('unsupported public measurement field: '+key)
+            if tensor.shape != self.measurement.shape or not bool(torch.isfinite(tensor).all()):
+                raise ValueError('public measurement arrays must be finite and match projections')
         if self.roi_mask is not None and tuple(self.roi_mask.shape) not in {
             tuple(self.truth.shape),
             tuple(self.truth.shape[1:]),
@@ -140,6 +168,7 @@ class CTTestCase:
 
         return replace(
             self,
+            public_measurement={k: migrate(v) for k,v in (self.public_measurement or {}).items()},
             truth=migrate(self.truth),
             measurement_clean=migrate(self.measurement_clean),
             measurement=migrate(self.measurement),
@@ -183,6 +212,13 @@ def restrict_ct_case(
     metadata = _json_copy(case.metadata)
     metadata["source_case_id"] = case.case_id
     metadata["view_indices"] = list(indices)
+    measurement_meta = metadata.get("measurement", {})
+    raw = (case.public_measurement or {}).get("counts", (case.public_measurement or {}).get("c_obs"))
+    from ..measurement import measurement_setting
+    floor=measurement_setting(measurement_meta,'floor')
+    if raw is not None and floor is not None:
+        measurement_meta["clipped_fraction"] = float((select_views(raw) < floor).double().mean())
+
     if partition is not None:
         metadata["projection_partition"] = partition
     return replace(
@@ -190,6 +226,7 @@ def restrict_ct_case(
         case_id=case_id or case.case_id,
         measurement_clean=select_views(case.measurement_clean),
         measurement=select_views(case.measurement),
+        public_measurement={k: select_views(v) for k,v in (case.public_measurement or {}).items()},
         valid_measurement_mask=select_views(case.valid_measurement_mask),
         geometry=geometry,
         metadata=metadata,
@@ -322,6 +359,9 @@ def load_ct_case(
 
     h5py = _require_h5py()
     with h5py.File(arrays_path, "r") as handle:
+        from ..measurement import PUBLIC_FIELDS
+        public = {key: torch.from_numpy(np.asarray(handle['measurement/'+key]))
+                  for key in PUBLIC_FIELDS if 'measurement/'+key in handle}
         truth = torch.from_numpy(np.asarray(handle["truth/x"], dtype=np.float32))
         observed = torch.from_numpy(
             np.asarray(handle["measurement/y_observed"], dtype=np.float32)
@@ -353,6 +393,7 @@ def load_ct_case(
         roi_mask=roi,
         valid_measurement_mask=valid,
         source_path=case_dir,
+        public_measurement=public,
     )
     return case.to(device=device, dtype=dtype)
 
@@ -386,6 +427,8 @@ def write_ct_case(
             data=case.measurement.detach().cpu().numpy(),
             compression="gzip",
         )
+        for key, value in (case.public_measurement or {}).items():
+            handle.create_dataset('measurement/'+key, data=value.detach().cpu().numpy())
         if case.roi_mask is not None:
             handle.create_dataset(
                 "masks/roi", data=case.roi_mask.detach().cpu().numpy()
@@ -413,6 +456,8 @@ def write_ct_case(
         "path": destination.name,
         "dimension": manifest.get("dimension"),
         "geometry_type": case.geometry.get("type"),
+        "observation_domain": manifest.get("measurement", {}).get("observation_domain",manifest.get("observation_domain","line_integral")),
+        "observation_model": manifest.get("measurement", {}).get("observation_model"),
         "measurement_kind": manifest.get("measurement", {}).get("kind"),
         "noise_model": manifest.get("measurement", {}).get("noise_model"),
         "reference_kind": manifest.get("provenance", {}).get("reference_kind"),

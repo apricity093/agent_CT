@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 import traceback
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -56,7 +57,8 @@ from inv_framework.instrumentation import (
     start_memory_tracing,
 )
 from inv_framework.operators.ct import ParallelBeamRadon2D
-from inv_framework.regularizers import TVRegularizer
+from inv_framework.regularizers import TVRegularizer, TikhonovRegularizer, HaarL1Regularizer
+from inv_framework.operators.gradient import GradientOperator
 from inv_framework.solvers import (
     CGLSSolver,
     FDKSolver,
@@ -69,6 +71,7 @@ from inv_framework.solvers import (
     SARTSolver,
     SIRTSolver,
     TVFISTASolver,
+    FISTASolver,
     TikhonovSolver,
     SolveControl,
 )
@@ -302,7 +305,7 @@ def _case_observation_domain(case: Any) -> str:
     """Infer the public observation domain when a caller did not provide one."""
 
     metadata = getattr(case, "metadata", {}) or {}
-    explicit = metadata.get("observation_domain")
+    explicit = (metadata.get("measurement", {}) or {}).get("observation_domain", metadata.get("observation_domain"))
     if explicit:
         return str(explicit)
     measurement = metadata.get("measurement", {}) or {}
@@ -487,7 +490,7 @@ def validate_parameters(
     # power_iterations and other invalid inputs from reaching ``int(...)`` or
     # the solver/operator loop.
     preflight = validate_parameter_values(name, supplied, **common_kwargs)
-    if preflight.errors or operator is None or name not in {"landweber", "tv_fista"}:
+    if preflight.errors or operator is None or name != "landweber":
         return preflight
 
     iterations = preflight.parameters.get("power_iterations", 12)
@@ -636,6 +639,68 @@ def _build_tv_fista(**parameters: Any):
     return TVFISTASolver(regularizer=tv, **params)
 
 
+def _build_fista(**parameters):
+    params = dict(parameters)
+    prior = params.pop("regularizer", "tikhonov")
+    level = params.pop("level", 2)
+    tv_mode = params.pop("tv_mode", "isotropic")
+    tv_iterations = params.pop("tv_num_iterations", 50)
+    tv_tolerance = params.pop("tv_tolerance", 1e-5)
+    if prior == "tikhonov":
+        reg = TikhonovRegularizer()
+    elif prior == "haar_l1":
+        reg = HaarL1Regularizer(level)
+    elif prior == "tv":
+        reg = TVRegularizer(mode=tv_mode, num_iterations=tv_iterations, tolerance=tv_tolerance)
+    else:
+        raise ValueError(f"unsupported FISTA regularizer: {prior}")
+    return FISTASolver(regularizer=reg, **params)
+
+
+CONSTRAINED_TV_IDS = {'constrained_pdhg', 'asd_pocs_tv'}
+
+
+def _build_constrained(name, **parameters):
+    from .solvers import ConstrainedTVSolver
+    params = dict(parameters)
+    params.pop('min_value', None)
+    params.pop('max_value', None)
+    return ConstrainedTVSolver(algorithm='pdhg' if name=='constrained_pdhg' else name, **params)
+
+
+def _confirm_constrained_endpoint(solver, result, reconstruction, prediction, measurement, mask):
+    from .residual_ball import ResidualBall
+    cfg = solver.parameters
+    constraint = ResidualBall(measurement, cfg['epsilon'], source=cfg['epsilon_source'], mask=mask).diagnostics(prediction)
+    tv = float(solver.regularizer.value(reconstruction))
+    feasible = constraint['constraint_violation'] <= cfg['feasibility_tolerance']
+    complete = result.metadata['endpoint_diagnostics_complete']
+    consistent = complete and abs(tv-result.final_objective) <= 1e-5*max(1., abs(tv)) and abs(constraint['raw_residual_norm']-result.final_residual) <= 1e-5*max(1.,result.final_residual)
+    passed = bool(consistent and torch.isfinite(reconstruction).all() and (reconstruction>=0).all())
+    if result.status == 'converged':
+        passed = passed and feasible and result.metadata['optimization_residual'] <= result.metadata['parameters']['tolerance']
+    return {'schema_version':'ct.endpoint_confirmation.v1', 'status':'confirmed' if passed else 'unconfirmed',
+            'passed':passed, 'finite':bool(torch.isfinite(reconstruction).all() and math.isfinite(tv) and math.isfinite(constraint['raw_residual_norm'])), 'endpoint_diagnostics_complete':complete, 'tv':tv,
+            'constraint_diagnostics':constraint, 'feasibility_status':'feasible' if feasible else 'violated',
+            'solver_status':result.status, 'optimization_residual':result.metadata['optimization_residual'],
+            'regularizer_work':{'endpoint_tv_value_calls':1, 'transform_forward_calls':1},
+            'reasons':[] if passed else ['constrained_endpoint_inconsistent']}
+
+
+def _build_split(name, **parameters):
+    from .solvers.splitting import ADMMSolver, PDHGSolver
+    from .regularizers import GradientHuberRegularizer
+    params = dict(parameters)
+    prior = params.pop("regularizer", "tikhonov")
+    level = params.pop("level", 2)
+    delta = params.pop("delta", .01)
+    mode = params.pop("tv_mode", "isotropic")
+    reg = {"tikhonov": lambda: TikhonovRegularizer(), "h1": lambda: "h1",
+           "tv": lambda: TVRegularizer(mode=mode), "huber": lambda: GradientHuberRegularizer(delta),
+           "haar_l1": lambda: HaarL1Regularizer(level)}[prior]()
+    return (ADMMSolver if name == "admm" else PDHGSolver)(regularizer=reg, **params)
+
+
 # Keep this map at module scope so reachability is inspectable and testable.
 # The values are constructors, not additional algorithm registrations.
 SOLVER_BUILDERS: dict[str, Callable[..., Any]] = {
@@ -650,6 +715,11 @@ SOLVER_BUILDERS: dict[str, Callable[..., Any]] = {
     "osem": OSEMSolver,
     "tikhonov": TikhonovSolver,
     "tv_fista": _build_tv_fista,
+    "fista": _build_fista,
+    "admm": lambda **p: _build_split("admm", **p),
+    "pdhg": lambda **p: _build_split("pdhg", **p),
+    "constrained_pdhg": lambda **p: _build_constrained("constrained_pdhg", **p),
+    "asd_pocs_tv": lambda **p: _build_constrained("asd_pocs_tv", **p),
     "fdk": FDKSolver,
 }
 BUILD_SOLVER_MAP = SOLVER_BUILDERS
@@ -658,6 +728,8 @@ BUILD_ALGORITHM_IDS = tuple(SOLVER_BUILDERS)
 
 def build_solver(name: str, parameters: Mapping[str, Any], case: Any):
     params = dict(parameters)
+    fidelity_options = {key: params.pop(key, None) for key in
+        ('data_fidelity','weight_source','nll_tolerance','nll_max_iterations')}
     if name not in SOLVER_SPECS:
         raise ConfigError(f"unknown solver: {name!r}")
     if name not in SOLVER_BUILDERS:
@@ -685,9 +757,32 @@ def build_solver(name: str, parameters: Mapping[str, Any], case: Any):
         # partitioning to the solver when neither subset_count nor block_size
         # was supplied.
         params.pop("subset_count", None)
+    if name == "tikhonov":
+        prior = params.pop("regularizer", "tikhonov")
+        strength = params.pop("strength", None)
+        if strength is not None:
+            if "reg_strength" in params and params["reg_strength"] != strength:
+                raise ConfigError("strength and reg_strength conflict")
+            params["reg_strength"] = strength
+        if prior == "h1":
+            params["regularization_operator"] = GradientOperator(case.geometry["domain_shape"])
     builder = SOLVER_BUILDERS[name]
     try:
-        return builder(**params)
+        solver = builder(**params)
+        if name in {'fista','admm','pdhg','tikhonov'}:
+            from .fidelity import build_fidelity
+            model = fidelity_options['data_fidelity'] or 'l2'
+            if model=='transmission_poisson_nll' and params.get('min_value')!=0:
+                raise ValueError('P3 transmission_poisson_nll requires min_value=0')
+            if model == 'transmission_poisson_nll' and name != 'pdhg':
+                raise ValueError('transmission_poisson_nll requires PDHG')
+            solver.fidelity = build_fidelity(model,case.measurement,getattr(case,'public_measurement',None),
+                (getattr(case,'metadata',{}) or {}).get('measurement',{}), mask=getattr(case,'valid_measurement_mask',None),
+                weight_source=fidelity_options['weight_source'], tolerance=fidelity_options['nll_tolerance'],
+                max_iterations=fidelity_options['nll_max_iterations'] or 200) if model != 'l2' or (getattr(case,'valid_measurement_mask',None) is not None and not bool(getattr(case,'valid_measurement_mask',None).all())) else None
+            if name=='tikhonov' and solver.fidelity is not None and (params.get('min_value') is not None or params.get('max_value') is not None):
+                raise ValueError('weighted Tikhonov CG supports unconstrained reconstruction only')
+        return solver
     except (TypeError, ValueError) as error:
         raise ConfigError(f"invalid parameters for {name}: {error}") from error
 
@@ -884,11 +979,11 @@ def _git_provenance(root: str | Path | None = None) -> dict[str, Any]:
             capture_output=True, text=True, check=False,
         )
         status_result = subprocess.run(
-            ["git", "status", "--porcelain=v1", "--untracked-files=all"], cwd=directory,
+            ["git", "status", "--porcelain=v1", "--untracked-files=all", "--", ".", ":(exclude)artifacts/**"], cwd=directory,
             capture_output=True, text=True, check=False,
         )
         diff_result = subprocess.run(
-            ["git", "diff", "--binary", "HEAD"], cwd=directory,
+            ["git", "diff", "--binary", "HEAD", "--", ".", ":(exclude)artifacts/**"], cwd=directory,
             capture_output=True, check=False,
         )
     except OSError:
@@ -919,6 +1014,7 @@ def _git_provenance(root: str | Path | None = None) -> dict[str, Any]:
         "dirty": bool(changed),
         "patch_sha256": patch_hash,
         "changed_files": changed,
+        "scope": "checkout_sources_excluding_generated_artifacts",
     }
 
 
@@ -1119,6 +1215,7 @@ def _structured_failure(
     parameters: Mapping[str, Any] | None = None,
     resources: Mapping[str, Any] | None = None,
     validation: ParameterValidationResult | None = None,
+    solve_result=None,
 ) -> dict[str, Any]:
     """Write a portable no-loop/error result and keep status layers aligned."""
 
@@ -1182,8 +1279,19 @@ def _structured_failure(
             "code": "native_backend_reconstruction",
             "field": "backend_reconstruction_calls",
             "basis": "FDK is executed by a native backend and is not expressible as A/A^T calls",
+            "reason": "Native FDK includes implicit projection work",
+            "affected_fields": ["forward_calls", "adjoint_calls", "backend_reconstruction_calls"],
+            "fairness_impact": "Compare FDK only within its backend stratum using native runtime and reconstruction calls",
         }] if algorithm == "fdk" else []),
     }
+    if solve_result is not None:
+        diagnostics["iterations_completed"] = solve_result.actual_iterations
+        diagnostics["solver_metadata"] = dict(solve_result.metadata)
+        diagnostics["convergence"]["iterations"] = solve_result.actual_iterations
+        diagnostics["convergence"]["trajectory"] = [row.to_dict() for row in solve_result.trajectory]
+        diagnostics["resources"] = {**dict(solve_result.resources), **dict(resources or {})}
+        diagnostics["partial_reconstruction"] = "partial_reconstruction.pt"
+        torch.save(solve_result.reconstruction.detach().cpu(), destination / "partial_reconstruction.pt")
     _write_json(destination / "diagnostics.json", diagnostics)
     _write_checksums(destination)
     return {
@@ -1212,6 +1320,7 @@ def run_case(
     max_forward_calls: int | None = None,
     max_adjoint_calls: int | None = None,
     parameter_sources_path: str | Path | None = None,
+    max_wall_seconds: float | None = None,
     stopping_policy_path: str | Path | None = None,
     stopping_policy: Mapping[str, Any] | None = None,
     parameter_overrides: Mapping[str, Any] | None = None,
@@ -1223,6 +1332,8 @@ def run_case(
 ) -> dict[str, Any]:
     destination = _prepare_output(output_dir, overwrite)
     run_started = time.perf_counter()
+    if max_wall_seconds is not None and (not math.isfinite(max_wall_seconds) or max_wall_seconds < 0):
+        raise ConfigError('max_wall_seconds must be finite and nonnegative')
     diagnostics: dict[str, Any] = {}
     counted_operator: CountingLinearOperator | None = None
     resource_accounting = ResourceAccounting(
@@ -1231,6 +1342,9 @@ def run_case(
         max_adjoint_calls=max_adjoint_calls,
     )
     validation: ParameterValidationResult | None = None
+    if max_wall_seconds is not None:
+        resource_accounting.counters.max_wall_seconds = max_wall_seconds
+        resource_accounting.counters.wall_deadline = run_started + max_wall_seconds
     start_memory_tracing()
     resource_accounting.start_phase("preparation")
     try:
@@ -1246,7 +1360,7 @@ def run_case(
                 )
             parameters = {**parameters, **dict(parameter_overrides)}
             try:
-                _validate_parameter_types(parameters)
+                _validate_parameter_types(parameter_overrides)
             except ConfigError as error:
                 raise InvalidParametersError(str(error)) from error
             override_validation = validate_parameter_values(name, parameters)
@@ -1282,6 +1396,17 @@ def run_case(
             spec = validate_solver_case(name, case, domain)
         except ConfigError as error:
             raise InvalidParametersError(str(error)) from error
+        prebuilt_solver=None
+        if name in {'fista','admm','pdhg','tikhonov'} | CONSTRAINED_TV_IDS:
+            preflight=validate_parameters(name,parameters,case=case,observation_domain=domain,
+                problem_constraints=problem_constraints or case.metadata.get('problem_constraints'),
+                parameter_sources=parameter_source_map,max_iterations=max_iterations,
+                max_forward_calls=max_forward_calls,max_adjoint_calls=max_adjoint_calls)
+            if preflight.errors:raise InvalidParametersError('; '.join(preflight.errors))
+            try:prebuilt_solver=build_solver(name,preflight.parameters,case)
+            except ConfigError as error:raise InvalidParametersError(str(error)) from error
+        if name in CONSTRAINED_TV_IDS and requested_stopping_policy is not None and (requested_stopping_policy.get('discrepancy', {}) or {}).get('enabled', True):
+            raise InvalidParametersError('constrained TV uses epsilon; set discrepancy.enabled=false')
         operator = build_operator(case, device)
         counted_operator = CountingLinearOperator(
             operator,
@@ -1317,7 +1442,7 @@ def run_case(
             )
         resource_accounting.finish_phase("parameter_estimation")
         try:
-            solver = build_solver(name, validation.parameters, case)
+            solver = prebuilt_solver if prebuilt_solver is not None else build_solver(name, validation.parameters, case)
         except ConfigError as error:
             raise InvalidParametersError(str(error)) from error
         operator_norm_squared = validation.estimates.get("operator_norm_squared")
@@ -1338,6 +1463,8 @@ def run_case(
             detail_tolerance = 0.0
         elif name not in {"fbp", "fdk", "cgls", "lsqr"}:
             detail_tolerance = float(validation.parameters.get("tolerance", 1e-5))
+        if validation.parameters.get('data_fidelity','l2') != 'l2' and requested_stopping_policy is not None and (requested_stopping_policy.get('discrepancy',{}) or {}).get('enabled',True):
+            raise InvalidParametersError('non-L2 fidelity requires discrepancy.enabled=false')
         effective_stopping_policy = dict(requested_stopping_policy) if requested_stopping_policy is not None else None
         control_kwargs: dict[str, Any] = {}
         if effective_stopping_policy is not None and name not in {"fbp", "fdk"}:
@@ -1380,14 +1507,19 @@ def run_case(
                 "operator_norm_estimate": operator_norm_for_diagnostics,
             },
             max_trajectory_points=max(200, requested_iterations) if requested_stopping_policy is not None else 200,
-            **control_kwargs,
+            **({**control_kwargs, "stop_on_convergence": False} if fixed_compute else control_kwargs),
         )
         resource_accounting.start_phase("solver")
         try:
-            solve_result = solver.solve_detailed(case.measurement, counted_operator, control=control)
+            solve_result = solver.solve_detailed(case.measurement, counted_operator, control=control, **({"mask": case.valid_measurement_mask} if name in CONSTRAINED_TV_IDS else {}), **({"fidelity": solver.fidelity} if getattr(solver,"fidelity",None) is not None else {}))
         finally:
             resource_accounting.finish_phase("solver")
         solver_counters = counted_operator.stats()
+        if solve_result.status == "resource_exhausted":
+            return _structured_failure(destination, status="resource_exhausted",
+                error=RuntimeError(solve_result.stopping_reason), algorithm=name,
+                reason_code=solve_result.stopping_reason, solve_result=solve_result,
+                resources=_accounted_resources(resource_accounting, counted_operator))
         # Detailed solvers expose canonical termination failures without
         # throwing from the numerical loop.  Convert those states back to the
         # runtime's structured failure path before attempting output/evaluation
@@ -1446,6 +1578,8 @@ def run_case(
             split_info.setdefault("heldout_view_indices", [int(value) for value in heldout_view_indices])
         effective_constraints = problem_constraints or case.metadata.get("problem_constraints")
         explicit_lower, explicit_upper = _explicit_problem_bounds(effective_constraints)
+        if name in CONSTRAINED_TV_IDS:
+            explicit_lower = 0.0
         explicit_range = None
         if effective_constraints:
             raw_range = effective_constraints.get("data_range")
@@ -1485,7 +1619,10 @@ def run_case(
                     if heldout_case.valid_measurement_mask is not None else None
                 ),
             })
+        endpoint_fidelity=getattr(solver,'fidelity',None)
+        endpoint_fidelity_before={k:getattr(endpoint_fidelity,k,0) for k in ('prox_calls','inner_iterations','inner_failures','prox_seconds','weight_multiplications','mask_calls')}
         resource_accounting.start_phase("endpoint_confirmation")
+        counted_operator.check_wall_budget()
         endpoint_counters_before = counted_operator.stats()
         endpoint_prediction = counted_operator.forward(reconstruction).detach() if requested_stopping_policy is not None else predicted
         endpoint_report = post_run_validation(
@@ -1496,35 +1633,73 @@ def run_case(
             operator=counted_operator,
             trajectory=[record.to_dict() for record in solve_result.trajectory],
             iterations=solve_result.actual_iterations,
-            max_iterations=int(max_iterations) if max_iterations is not None else (requested_iterations or None),
+            max_iterations=requested_iterations or None,
             tolerance=float(validation.parameters.get("tolerance", 1e-5) or 1e-5),
             non_iterative=spec.direct,
             algorithm=name,
         )
-        endpoint_confirmation = confirm_endpoint(
-            algorithm=name,
-            reconstruction=reconstruction,
-            measurement=case.measurement,
-            operator=counted_operator,
-            valid_measurement_mask=case.valid_measurement_mask,
-            policy=effective_stopping_policy,
-            trajectory=[record.to_dict() for record in solve_result.trajectory],
-            solver_status=solve_result.status,
-            solver_stopping_reason=solve_result.stopping_reason,
-            iterations=solve_result.actual_iterations,
-            max_iterations=int(max_iterations) if max_iterations is not None else (requested_iterations or None),
-            parameters=validation.parameters,
-            operator_norm_estimate=operator_norm_for_diagnostics,
-            regularization_operator=getattr(solver, "regularization_operator", None),
-        ) if requested_stopping_policy is not None else {
-            "schema_version": "ct.endpoint_confirmation.v1", "status": "not_requested", "passed": True,
-            "finite": bool(torch.isfinite(reconstruction).all()),
-            "normalized_data_residual": endpoint_report.final_residual,
-        }
+        try:
+            endpoint_confirmation = _confirm_constrained_endpoint(
+                solver, solve_result, reconstruction, endpoint_prediction, case.measurement, case.valid_measurement_mask
+            ) if name in CONSTRAINED_TV_IDS else confirm_endpoint(
+                algorithm=name,
+                reconstruction=reconstruction,
+                measurement=case.measurement,
+                operator=counted_operator,
+                valid_measurement_mask=case.valid_measurement_mask,
+                policy=effective_stopping_policy,
+                trajectory=[record.to_dict() for record in solve_result.trajectory],
+                solver_status=solve_result.status,
+                solver_stopping_reason=solve_result.stopping_reason,
+                iterations=solve_result.actual_iterations,
+                max_iterations=requested_iterations or None,
+                parameters=validation.parameters,
+                operator_norm_estimate=operator_norm_for_diagnostics,
+                regularization_operator=getattr(solver, "regularization_operator", None),
+                split_state=getattr(solver, "endpoint_state", None),
+                fidelity=getattr(solver,"fidelity",None),
+                previous_reconstruction=solve_result.previous_reconstruction,
+            ) if requested_stopping_policy is not None or name in CONSTRAINED_TV_IDS else {
+                "schema_version": "ct.endpoint_confirmation.v1", "status": "not_requested", "passed": True,
+                "finite": bool(torch.isfinite(reconstruction).all()),
+                "normalized_data_residual": endpoint_report.final_residual,
+            }
+        except RuntimeError as error:
+            if str(error) != 'poisson_prox_inner_max_iterations': raise
+            endpoint_confirmation = {
+                'schema_version':'ct.endpoint_confirmation.v1', 'passed':False,
+                'status':'inner_unconverged','native_criterion_value':None,
+                'reasons':['poisson_prox_inner_max_iterations'],
+                'endpoint_diagnostics_complete':False}
+        if name in CONSTRAINED_TV_IDS and not endpoint_confirmation['passed']:
+            raise NumericalFailure('constrained_endpoint_inconsistent')
+        bundle['line_integral_prediction']=endpoint_prediction.detach().cpu()
+        if endpoint_fidelity is not None:
+            bundle['fidelity_outputs']={k:v.detach().cpu() for k,v in endpoint_fidelity.measurement_diagnostics(endpoint_prediction).items()}
+            endpoint_confirmation['fidelity_work']={k:getattr(endpoint_fidelity,k,0)-v for k,v in endpoint_fidelity_before.items()}
+            if callable(getattr(endpoint_fidelity,'precision_report',None)):endpoint_confirmation['fidelity_precision']=endpoint_fidelity.precision_report()
         resource_accounting.finish_phase("endpoint_confirmation")
+        counted_operator.check_wall_budget()
+        # Native criteria (normal residual, iterate change, split residuals)
+        # differ from the legacy raw-residual trajectory heuristic. An early
+        # native stop is valid only after independent endpoint confirmation.
+        if (endpoint_report.stopping_reason == "trajectory_ended_before_convergence"
+                and solve_result.status in {"converged", "stalled"}
+                and (requested_stopping_policy is not None or name in CONSTRAINED_TV_IDS)
+                and endpoint_confirmation.get("passed", False)):
+            endpoint_report = replace(endpoint_report,
+                status=ConvergenceStatus(solve_result.status),
+                stopping_reason="native_endpoint_confirmed", failure_reason=None,
+                reason_code="native_endpoint_confirmed",
+                reason_class=status_reason_class(solve_result.status))
         if endpoint_report.status == ConvergenceStatus.NUMERICAL_ERROR:
             raise NumericalFailure(endpoint_report.failure_reason or endpoint_report.stopping_reason)
         counters = counted_operator.stats()
+        auxiliary = getattr(solver, "regularization_operator", None)
+        if isinstance(auxiliary, GradientOperator):
+            counters.update(auxiliary.stats())
+            counters["ct_forward_calls"] = counters["forward_calls"]
+            counters["ct_adjoint_calls"] = counters["adjoint_calls"]
         phase_wall = sum(
             float(record.get("wall_seconds", 0.0) or 0.0)
             for record in resource_accounting.phases.values()
@@ -1534,6 +1709,12 @@ def run_case(
             "final_evaluation",
             max(0.0, runtime_seconds - phase_wall),
         )
+        for key, value in endpoint_confirmation.get("regularizer_work", {}).items():
+            counters[key] = solve_result.resources.get(key, 0) + value
+        for key, value in endpoint_confirmation.get("fidelity_work", {}).items():
+            counters['fidelity_'+key] = solve_result.resources.get('fidelity_'+key,0)+value
+        if endpoint_fidelity is not None:
+            counters['fidelity_mask_compilation_calls']=getattr(endpoint_fidelity,'mask_compilation_calls',0)
         accounted_resources = resource_accounting.to_dict()
         phase_resources = accounted_resources["phases"]
         convergence = solve_result.to_dict()
@@ -1560,7 +1741,7 @@ def run_case(
             convergence["status"],
             algorithm=name,
             iterations=solve_result.actual_iterations,
-            max_iterations=int(max_iterations) if max_iterations is not None else (requested_iterations or None),
+            max_iterations=requested_iterations or None,
             direct=name in {"fbp", "fdk"},
         ).value
         convergence["status"] = convergence_status
@@ -1579,7 +1760,7 @@ def run_case(
         bundle["convergence_status"] = convergence_status
         bundle["stopping_reason"] = convergence_reason
         objective = solve_result.final_objective
-        if objective is None:
+        if objective is None and getattr(solver,"fidelity",None) is None and name not in {"fista","admm","pdhg"} | CONSTRAINED_TV_IDS:
             objective = float(0.5 * (predicted - case.measurement).square().sum().item())
         diagnostics = {
             "schema_version": SCHEMA_VERSION,
@@ -1587,10 +1768,13 @@ def run_case(
             "algorithm": name,
             "status": convergence_status,
             "convergence_status": convergence_status,
-            "regularizer": spec.regularizers[0] if spec.regularizers else None,
+            "regularizer": validation.parameters.get("regularizer", spec.regularizers[0] if spec.regularizers else None),
             "initialization": spec.initialization,
             "dtype": str(case.measurement.dtype),
             "device": str(case.measurement.device),
+            "reconstruction_device": str(solve_result.reconstruction.device),
+            "runtime_module": str(Path(__file__).resolve()),
+            "python_executable": sys.executable,
             "convergence_criteria": list(spec.convergence_criteria),
             "trajectory_available": solve_result.trajectory_available,
             "parameters": validation.parameters,
@@ -1622,6 +1806,11 @@ def run_case(
                 # earlier snapshot for the top-level resource record.
                 **counters,
                 "runtime_seconds": runtime_seconds,
+                "cuda_memory": ({
+                    "peak_allocated_bytes": torch.cuda.max_memory_allocated(case.measurement.device),
+                    "peak_reserved_bytes": torch.cuda.max_memory_reserved(case.measurement.device),
+                    "scope": "process allocator since start_memory_tracing before case loading; includes live baseline allocations",
+                } if case.measurement.is_cuda else None),
                 "phases": phase_resources,
             },
             "projection_split": split_info or None,
@@ -1753,7 +1942,8 @@ def run_case(
             status="resource_exhausted",
             error=error,
             algorithm=locals().get("name", solver_name),
-            reason_code="operator_call_budget_exhausted",
+            reason_code="wall_time_budget_exhausted" if error.kind == 'wall' else "operator_call_budget_exhausted",
+            solve_result=locals().get("solve_result"),
             resources=_accounted_resources(resource_accounting, counted_operator),
         )
     except NumericalFailure as error:

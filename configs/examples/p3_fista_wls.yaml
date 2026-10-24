@@ -1,0 +1,8 @@
+schema_version: 1
+name: fista
+parameters:
+  data_fidelity: wls
+  regularizer: tikhonov
+  strength: 0.01
+  num_iterations: 200
+  weight_source: post_log_poisson

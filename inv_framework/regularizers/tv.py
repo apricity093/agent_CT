@@ -5,6 +5,7 @@ from typing import Literal, Tuple
 import torch
 
 from .base import ProximalOperator, Regularizer
+from ..operators.gradient import gradient, gradient_adjoint
 
 
 class TVRegularizer(Regularizer, ProximalOperator):
@@ -15,6 +16,9 @@ class TVRegularizer(Regularizer, ProximalOperator):
     independent; the implementation therefore works for ``(B, C, H, W)`` CT
     images and tensors with additional leading dimensions.
     """
+
+    has_full_proximal = True
+    proximal_accuracy = 'finite_FGP_no_gap_certificate'
 
     def __init__(
         self,
@@ -35,28 +39,40 @@ class TVRegularizer(Regularizer, ProximalOperator):
         # call so early stopping inside the proximal map is accounted for
         # without changing the numerical update.
         self.last_prox_iterations = 0
+        self.gradient_calls = self.gradient_adjoint_calls = 0
 
-    @staticmethod
-    def _gradient(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        vertical = torch.zeros_like(x)
-        horizontal = torch.zeros_like(x)
-        vertical[..., :-1, :] = x[..., 1:, :] - x[..., :-1, :]
-        horizontal[..., :, :-1] = x[..., :, 1:] - x[..., :, :-1]
-        return vertical, horizontal
+    def split_transform(self, shape):
+        from ..operators.gradient import GradientOperator
+        return GradientOperator(shape), 8.
 
-    @staticmethod
-    def _gradient_adjoint(
-        vertical: torch.Tensor,
-        horizontal: torch.Tensor,
-    ) -> torch.Tensor:
-        out = -vertical - horizontal
-        out[..., 1:, :] = out[..., 1:, :] + vertical[..., :-1, :]
-        out[..., :, 1:] = out[..., :, 1:] + horizontal[..., :, :-1]
-        return out
+    def coefficient_value(self, z):
+        return z.square().sum(1).sqrt() if self.mode == 'isotropic' else z.abs()
+
+    def coefficient_subgradient(self, z):
+        """Minimum-norm coefficient subgradient, including zero differences."""
+        if self.mode == 'anisotropic':
+            return z.sign()
+        return z / z.square().sum(1, keepdim=True).sqrt().clamp_min(torch.finfo(z.dtype).tiny)
+
+    def coefficient_proximal(self, z, t):
+        if self.mode == 'isotropic':
+            return z*(1-t/z.square().sum(1,keepdim=True).sqrt().clamp_min(torch.finfo(z.dtype).tiny)).clamp_min(0)
+        return z.sign()*(z.abs()-t).clamp_min(0)
+
+    _gradient = staticmethod(gradient)
+    _gradient_adjoint = staticmethod(gradient_adjoint)
+
+    def _apply_gradient(self, x):
+        self.gradient_calls += 1
+        return self._gradient(x)
+
+    def _apply_gradient_adjoint(self, vertical, horizontal):
+        self.gradient_adjoint_calls += 1
+        return self._gradient_adjoint(vertical, horizontal)
 
     def value(self, x: torch.Tensor) -> torch.Tensor:
         self._validate_input(x)
-        vertical, horizontal = self._gradient(x)
+        vertical, horizontal = self._apply_gradient(x)
         if self.mode == "isotropic":
             density = torch.sqrt(vertical.square() + horizontal.square())
         else:
@@ -85,8 +101,8 @@ class TVRegularizer(Regularizer, ProximalOperator):
 
         for iteration in range(1, self.num_iterations + 1):
             self.last_prox_iterations = iteration
-            primal = x - weight * self._gradient_adjoint(momentum_v, momentum_h)
-            grad_v, grad_h = self._gradient(primal)
+            primal = x - weight * self._apply_gradient_adjoint(momentum_v, momentum_h)
+            grad_v, grad_h = self._apply_gradient(primal)
             next_v = momentum_v + dual_step * grad_v
             next_h = momentum_h + dual_step * grad_h
             next_v, next_h = self._project_dual(next_v, next_h)
@@ -98,7 +114,7 @@ class TVRegularizer(Regularizer, ProximalOperator):
             dual_v, dual_h = next_v, next_h
             acceleration = next_acceleration
 
-            current = x - weight * self._gradient_adjoint(dual_v, dual_h)
+            current = x - weight * self._apply_gradient_adjoint(dual_v, dual_h)
             if self.tolerance > 0.0:
                 delta = (current - previous).reshape(current.shape[0], -1).norm(dim=1)
                 scale = previous.reshape(previous.shape[0], -1).norm(dim=1).clamp_min(1.0)
@@ -106,7 +122,7 @@ class TVRegularizer(Regularizer, ProximalOperator):
                     return current
             previous = current
 
-        return x - weight * self._gradient_adjoint(dual_v, dual_h)
+        return x - weight * self._apply_gradient_adjoint(dual_v, dual_h)
 
     def _project_dual(
         self,

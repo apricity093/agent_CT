@@ -1,8 +1,8 @@
 """Pure-torch 2D parallel-beam Radon transform.
 
-Uses `grid_sample` to rotate the image, then sums along one axis. Wrapped in
-a custom autograd Function so that the backward pass equals the explicit
-back-projection (exact adjoint), regardless of grid_sample's internal grad.
+Uses `grid_sample` to rotate the image, then sums along one axis. The adjoint
+scatters with the same bilinear weights and zero padding as the forward.
+Custom autograd functions pair these discrete transposes in both directions.
 """
 
 import math
@@ -25,7 +25,7 @@ def _rotation_grid(theta: torch.Tensor, shape):
         torch.stack([cos_t, -sin_t, zero]),
         torch.stack([sin_t,  cos_t, zero]),
     ])
-    rot = rot.to(dtype=torch.float32).unsqueeze(0).expand(B, -1, -1)
+    rot = rot.unsqueeze(0).expand(B, -1, -1)
     return F.affine_grid(rot, list(shape), align_corners=False)
 
 
@@ -41,7 +41,7 @@ def _radon_forward_impl(image: torch.Tensor,
     assert H == W, "ParallelBeamRadon2D currently requires square images."
     sinos = []
     for theta in angles:
-        grid = _rotation_grid(theta, image.shape)
+        grid = _rotation_grid(theta.to(dtype=image.dtype), image.shape)
         rotated = F.grid_sample(image, grid, align_corners=False,
                                 padding_mode='zeros')
         sinos.append(rotated.sum(dim=-2))  # sum along H
@@ -51,23 +51,33 @@ def _radon_forward_impl(image: torch.Tensor,
 def _radon_adjoint_impl(sinogram: torch.Tensor,
                         angles: torch.Tensor,
                         image_size: int) -> torch.Tensor:
-    """Unfiltered back-projection (adjoint of Radon).
+    """Discrete transpose of rotation, zero padding and row summation.
 
     sinogram: (B, C, n_angles, W)
     returns: (B, C, image_size, image_size)
     """
     B, C, n_angles, W = sinogram.shape
     H = image_size
-    out = torch.zeros(B, C, H, W, device=sinogram.device, dtype=sinogram.dtype)
+    out = torch.zeros(B, C, H * W, device=sinogram.device, dtype=sinogram.dtype)
     target_shape = (B, C, H, W)
     for i in range(n_angles):
-        theta = angles[i]
         proj = sinogram[:, :, i:i + 1, :].expand(B, C, H, W)
-        grid = _rotation_grid(-theta, target_shape)
-        smeared = F.grid_sample(proj, grid, align_corners=False,
-                                padding_mode='zeros')
-        out = out + smeared
-    return out
+        grid = _rotation_grid(angles[i].to(dtype=sinogram.dtype), target_shape)
+        # grid_sample's align_corners=False unnormalization, in the same dtype
+        # as the forward grid. Do not rotate by the negative angle: an
+        # inverse interpolation is not the transpose of interpolation.
+        ix = ((grid[..., 0] + 1) * W - 1) / 2
+        iy = ((grid[..., 1] + 1) * H - 1) / 2
+        x0, y0 = ix.floor(), iy.floor()
+        for xj, wx in ((x0, x0 + 1 - ix), (x0 + 1, ix - x0)):
+            for yj, wy in ((y0, y0 + 1 - iy), (y0 + 1, iy - y0)):
+                valid = (xj >= 0) & (xj < W) & (yj >= 0) & (yj < H)
+                index = (yj.clamp(0, H - 1).long() * W
+                         + xj.clamp(0, W - 1).long())
+                weight = (wx * wy * valid).unsqueeze(1)
+                out.scatter_add_(2, index.reshape(B, 1, -1).expand(-1, C, -1),
+                                 (proj * weight).reshape(B, C, -1))
+    return out.reshape(B, C, H, W)
 
 
 class _RadonFunction(torch.autograd.Function):
@@ -80,7 +90,7 @@ class _RadonFunction(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         (angles,) = ctx.saved_tensors
-        grad_image = _radon_adjoint_impl(grad_output, angles, ctx.image_size)
+        grad_image = _RadonAdjointFunction.apply(grad_output, angles, ctx.image_size)
         return grad_image, None, None
 
 
@@ -94,7 +104,7 @@ class _RadonAdjointFunction(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         (angles,) = ctx.saved_tensors
-        grad_sino = _radon_forward_impl(grad_output, angles)
+        grad_sino = _RadonFunction.apply(grad_output, angles, ctx.image_size)
         return grad_sino, None, None
 
 
@@ -111,6 +121,8 @@ class ParallelBeamRadon2D(LinearOperator):
         Explicit projection angles (radians).
     device : str or torch.device
     """
+
+    nonnegative_matrix = True
 
     def __init__(self,
                  image_size: int,

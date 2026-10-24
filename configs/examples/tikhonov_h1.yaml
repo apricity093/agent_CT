@@ -1,0 +1,7 @@
+schema_version: 1
+name: tikhonov
+parameters:
+  regularizer: h1
+  strength: 0.01
+  num_iterations: 100
+  tolerance: 1.0e-6

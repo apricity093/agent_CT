@@ -129,7 +129,7 @@ def _estimate_lipschitz(
         steps=sample_size,
         dtype=reference.dtype,
         device=reference.device,
-    ).reshape((1, *tuple(operator.domain_shape)))
+    ).reshape((1, *tuple(operator.domain_shape))).expand(reference.shape[0], *tuple(operator.domain_shape))
     vector = seed / _batch_view(_batch_norm(seed).clamp_min(eps), seed)
 
     for _ in range(int(num_iterations)):
@@ -156,61 +156,16 @@ def tv_fista(
     min_value: Optional[float] = None,
     max_value: Optional[float] = None,
 ) -> torch.Tensor:
-    """FISTA for ``0.5 ||Ax-y||^2 + reg_strength * TV(x)``.
+    """Legacy TV entry point using the shared composite FISTA core."""
+    from .fista import fista
 
-    When ``step_size`` is omitted, a deterministic power iteration estimates
-    ``||A||^2``. The TV proximal is the dual FGP implementation provided by
-    ``TVRegularizer`` and is independent of TIGRE/TomoPy backends.
-    """
-    require_linear_operator(operator, "tv_fista")
-    validate_measurement_shape(y, operator, "tv_fista")
-    if len(tuple(operator.domain_shape)) < 2:
-        raise ValueError("tv_fista requires at least two spatial domain dimensions.")
-    if float(reg_strength) < 0.0:
-        raise ValueError("reg_strength must be nonnegative.")
-    if int(num_iterations) <= 0:
-        raise ValueError("num_iterations must be positive.")
-    if float(tolerance) < 0.0:
-        raise ValueError("tolerance must be nonnegative.")
-    if int(power_iterations) <= 0:
-        raise ValueError("power_iterations must be positive.")
-
-    tv = regularizer or TVRegularizer()
+    tv = regularizer if regularizer is not None else TVRegularizer()
     if not isinstance(tv, TVRegularizer):
-        raise TypeError(f"regularizer must be a TVRegularizer; got {type(tv).__name__}.")
-
-    if step_size is None:
-        lipschitz = _estimate_lipschitz(operator, y, int(power_iterations))
-        data_step = 1.0 if lipschitz <= 1e-12 else 0.99 / lipschitz
-    else:
-        data_step = float(step_size)
-        if data_step <= 0.0:
-            raise ValueError("step_size must be positive when provided.")
-
-    x = prepare_initial_image(y, operator, x_init=x_init, initial_value=0.0)
-    momentum = x.clone()
-    acceleration = 1.0
-
-    for _ in range(int(num_iterations)):
-        data_gradient = operator.adjoint(operator.forward(momentum) - y)
-        candidate = momentum - data_step * data_gradient
-        next_x = tv.proximal(candidate, data_step * float(reg_strength))
-        next_x = apply_box_constraints(next_x, min_value=min_value, max_value=max_value)
-
-        next_acceleration = 0.5 * (1.0 + (1.0 + 4.0 * acceleration * acceleration) ** 0.5)
-        momentum_scale = (acceleration - 1.0) / next_acceleration
-        momentum = next_x + momentum_scale * (next_x - x)
-
-        if float(tolerance) > 0.0:
-            delta = _batch_norm(next_x - x)
-            scale = _batch_norm(x).clamp_min(1.0)
-            if bool(torch.all(delta <= float(tolerance) * scale)):
-                x = next_x
-                break
-        x = next_x
-        acceleration = next_acceleration
-
-    return x
+        raise TypeError("regularizer must be a TVRegularizer")
+    return fista(operator, y, regularizer=tv, reg_strength=reg_strength,
+                 num_iterations=num_iterations, step_size=step_size, x_init=x_init,
+                 tolerance=tolerance, power_iterations=power_iterations,
+                 min_value=min_value, max_value=max_value, legacy=True)
 
 
 class TikhonovSolver(InverseProblemSolver):
@@ -239,6 +194,10 @@ class TikhonovSolver(InverseProblemSolver):
         x_init: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> torch.Tensor:
+        if kwargs.get('fidelity') is not None:
+            result=self.solve_detailed(measurement,operator,x_init=x_init,**kwargs)
+            if result.status in ('invalid_parameters','numerical_error'):raise ValueError(result.stopping_reason)
+            return result.reconstruction
         return tikhonov(
             operator,
             measurement,
@@ -263,7 +222,20 @@ class TikhonovSolver(InverseProblemSolver):
     ):
         from .detailed import solve_tikhonov_detailed
 
-        return solve_tikhonov_detailed(
+        from ..operators.gradient import GradientOperator
+        fidelity=kwargs.get("fidelity")
+        fidelity_before={k:getattr(fidelity,k,0) for k in ("weight_multiplications","prox_calls","prox_seconds")}
+        auxiliary = kwargs.get("regularization_operator", self.regularization_operator)
+        before = auxiliary.stats() if isinstance(auxiliary, GradientOperator) else {}
+        if fidelity is not None and kwargs.get('min_value',self.min_value) is None and kwargs.get('max_value',self.max_value) is None and callable(getattr(fidelity,'validate_normal',None)):
+            try:
+                reference=prepare_initial_image(measurement,operator,x_init=x_init,initial_value=0.)
+                fidelity.validate_normal(operator,auxiliary,reference)
+            except ValueError as error:
+                from .detailed import _parameter_failure_result
+                return _parameter_failure_result('tikhonov',measurement,operator,x_init=x_init,errors=[str(error)],max_iterations=self.num_iterations,parameters={})
+
+        result = solve_tikhonov_detailed(
             operator,
             measurement,
             reg_strength=kwargs.pop("reg_strength", self.reg_strength),
@@ -275,7 +247,16 @@ class TikhonovSolver(InverseProblemSolver):
             max_value=kwargs.pop("max_value", self.max_value),
             control=control,
             callback=callback,
+            fidelity=kwargs.pop("fidelity",None),
         )
+        if fidelity is not None:
+            from dataclasses import replace
+            result=replace(result,resources={**result.resources,**{'fidelity_'+k:getattr(fidelity,k,0)-v for k,v in fidelity_before.items()}},metadata={**result.metadata,'regularized_normal_residual_formula':'||A* gradient f(Ax)+lambda gradient R(x)|| / max(||A* linear_rhs(f)||+lambda ||gradient R(x)||,eps)'})
+        if isinstance(auxiliary, GradientOperator):
+            from dataclasses import replace
+            work = {name: value - before[name] for name, value in auxiliary.stats().items()}
+            result = replace(result, resources={**result.resources, **work})
+        return result
 
 
 class TVFISTASolver(InverseProblemSolver):

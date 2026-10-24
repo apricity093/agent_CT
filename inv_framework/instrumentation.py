@@ -44,6 +44,9 @@ RESOURCE_PHASES = (
 
 @dataclass
 class OperatorCounters:
+    wall_deadline: float | None = None
+    max_wall_seconds: float | None = None
+    wall_budget_exhausted: bool = False
     # ``forward_calls`` and ``adjoint_calls`` retain their historical meaning:
     # an invocation was admitted by the budget and entered the wrapped
     # operator.  Attempted calls, including a rejected call at the budget
@@ -76,6 +79,7 @@ class OperatorCounters:
     prox_gpu_seconds: float | None = None
     peak_memory_mb: float | None = None
     peak_gpu_memory_mb: float | None = None
+    cuda_used: bool = False
     last_backend_exception: str | None = None
     _active_phase: str | None = field(default=None, init=False, repr=False)
     _phase_peaks: dict[str, dict[str, float | None]] = field(default_factory=dict, init=False, repr=False)
@@ -123,7 +127,7 @@ class OperatorCounters:
             str(name),
             {
                 "peak_memory_mb": _memory_mb(),
-                "peak_gpu_memory_mb": _gpu_memory_mb(),
+                "peak_gpu_memory_mb": _gpu_memory_mb() if self.cuda_used else None,
             },
         )
         values = self._phase_peaks[str(name)]
@@ -346,7 +350,7 @@ class ResourceAccounting:
         phase, started, before = self._active
         if name is not None and str(name) != phase:
             raise RuntimeError(f"active resource phase is {phase!r}, got {name!r}")
-        self.counters._update_peak(_memory_mb(), _gpu_memory_mb())
+        self.counters._update_peak(_memory_mb(), _gpu_memory_mb() if self.counters.cuda_used else None)
         after = self.counters.to_dict()
         wall_seconds = max(0.0, time.perf_counter() - started)
         record = _counter_delta(before, after)
@@ -471,6 +475,8 @@ class ResourceAccounting:
             "phase_totals": phase_totals,
             "phase_sum_consistent": True,
             "budget": {
+                "max_wall_seconds": self.counters.max_wall_seconds,
+                "wall_time_budget_exhausted": self.counters.wall_budget_exhausted,
                 "max_forward_calls": self.max_forward_calls,
                 "max_adjoint_calls": self.max_adjoint_calls,
                 "forward_calls_used": self.counters.forward_calls,
@@ -486,10 +492,12 @@ class ResourceAccounting:
                     and self.counters.adjoint_calls >= int(self.max_adjoint_calls)
                 ),
                 "budget_rejected": bool(
+                    self.counters.wall_budget_exhausted or
                     self.counters.budget_rejected_forward_calls
                     or self.counters.budget_rejected_adjoint_calls
                 ),
                 "budget_exhausted": bool(
+                    self.counters.wall_budget_exhausted or
                     self.counters.budget_rejected_forward_calls
                     or self.counters.budget_rejected_adjoint_calls
                 ),
@@ -552,8 +560,13 @@ def _windows_working_set_mb() -> float | None:
 
         counters = PROCESS_MEMORY_COUNTERS()
         counters.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS)
-        process = ctypes.windll.kernel32.GetCurrentProcess()
-        ok = ctypes.windll.psapi.GetProcessMemoryInfo(
+        get_process = ctypes.windll.kernel32.GetCurrentProcess
+        get_process.restype = ctypes.c_void_p
+        memory_info = ctypes.windll.psapi.GetProcessMemoryInfo
+        memory_info.argtypes = [ctypes.c_void_p, ctypes.POINTER(PROCESS_MEMORY_COUNTERS), ctypes.c_ulong]
+        memory_info.restype = ctypes.c_int
+        process = get_process()
+        ok = memory_info(
             process,
             ctypes.byref(counters),
             counters.cb,
@@ -600,7 +613,13 @@ class CountingLinearOperator(LinearOperator):
         self.max_adjoint_calls = max_adjoint_calls
         self.counters = counters or OperatorCounters()
 
+    def check_wall_budget(self) -> None:
+        if self.counters.wall_deadline is not None and time.perf_counter() >= self.counters.wall_deadline:
+            self.counters.wall_budget_exhausted = True
+            raise OperatorBudgetExceeded('wall_time_budget_exhausted', kind='wall')
+
     def _before(self, kind: str) -> None:
+        self.check_wall_budget()
         current = self.counters.forward_calls if kind == "forward" else self.counters.adjoint_calls
         limit = self.max_forward_calls if kind == "forward" else self.max_adjoint_calls
         if kind == "forward":
@@ -627,10 +646,15 @@ class CountingLinearOperator(LinearOperator):
 
     def _after(self) -> None:
         memory = _memory_mb()
-        gpu_memory = _gpu_memory_mb()
+        gpu_memory = _gpu_memory_mb() if self.counters.cuda_used else None
         self.counters._update_peak(memory, gpu_memory)
 
+    @property
+    def nonnegative_matrix(self):
+        return self.operator.nonnegative_matrix
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        self.counters.cuda_used |= x.is_cuda
         self._before("forward")
         started = time.perf_counter()
         gpu_started = _gpu_event_start(x)
@@ -640,13 +664,14 @@ class CountingLinearOperator(LinearOperator):
             self.counters.forward_failed_calls += 1
             raise
         finally:
-            self.counters.forward_seconds += time.perf_counter() - started
             gpu_elapsed = _gpu_event_elapsed(gpu_started, x)
+            self.counters.forward_seconds += time.perf_counter() - started
             if gpu_elapsed is not None:
                 self.counters.forward_gpu_seconds = float(self.counters.forward_gpu_seconds or 0.0) + gpu_elapsed
             self._after()
 
     def adjoint(self, y: torch.Tensor) -> torch.Tensor:
+        self.counters.cuda_used |= y.is_cuda
         self._before("adjoint")
         started = time.perf_counter()
         gpu_started = _gpu_event_start(y)
@@ -656,8 +681,8 @@ class CountingLinearOperator(LinearOperator):
             self.counters.adjoint_failed_calls += 1
             raise
         finally:
-            self.counters.adjoint_seconds += time.perf_counter() - started
             gpu_elapsed = _gpu_event_elapsed(gpu_started, y)
+            self.counters.adjoint_seconds += time.perf_counter() - started
             if gpu_elapsed is not None:
                 self.counters.adjoint_gpu_seconds = float(self.counters.adjoint_gpu_seconds or 0.0) + gpu_elapsed
             self._after()

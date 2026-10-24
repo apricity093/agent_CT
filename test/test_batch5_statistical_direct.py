@@ -360,6 +360,10 @@ def test_direct_solvers_have_validity_not_convergence_states():
         _FDKOperator(), measurement, filter_type="hann"
     )
     assert fdk_invalid_filter.status == "invalid_parameters"
+    for result in (fdk_valid, fdk_invalid_filter):
+        exception = result.metadata['fairness_exceptions'][0]
+        assert {'code', 'reason', 'basis', 'affected_fields', 'fairness_impact'} <= exception.keys()
+        assert 'backend_reconstruction_calls' in exception['affected_fields']
     fdk_invalid = solve_fdk_detailed(_FDKOperator(), measurement, voxel_supersampling=0)
     assert fdk_invalid.status == "invalid_parameters"
     fdk_nonfinite = solve_fdk_detailed(_FDKOperator("nan"), measurement)

@@ -1,0 +1,7 @@
+schema_version: 1
+name: pdhg
+parameters:
+  data_fidelity: l2
+  regularizer: tikhonov
+  strength: 0.01
+  num_iterations: 200

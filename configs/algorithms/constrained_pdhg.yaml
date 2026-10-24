@@ -1,0 +1,7 @@
+schema_version: 1
+name: constrained_pdhg
+parameters:
+  epsilon: 0.2
+  epsilon_source: explicit demonstration radius in line-integral units; replace for actual observations
+  tv_mode: isotropic
+  num_iterations: 20

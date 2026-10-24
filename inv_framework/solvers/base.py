@@ -173,6 +173,7 @@ class SolveResult:
     relative_iterate_change: float | None = None
     predicted_measurement: torch.Tensor | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    previous_reconstruction: torch.Tensor | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         metadata = dict(self.metadata)
@@ -279,6 +280,7 @@ class IterationRecorder:
         self.started = time.perf_counter()
         self.records: list[IterationRecord] = []
         self.previous: torch.Tensor | None = None
+        self.terminal_previous: torch.Tensor | None = None
         # Keep the old attribute as a compatibility alias.  New result
         # payloads use the canonical ``numerical_error`` status.
         self.numerical_failure = False
@@ -334,6 +336,7 @@ class IterationRecorder:
         # skipped checkpoint must not hide a NaN/Inf that later contaminates
         # the reconstruction.
         finite = bool(torch.isfinite(value).all())
+        self.terminal_previous = self.previous
         if residual is not None:
             finite = finite and bool(torch.isfinite(residual).all())
         self.numerical_failure = self.numerical_failure or (self.control.check_finite and not finite)
@@ -488,6 +491,10 @@ class IterationRecorder:
             final_objective=final_objective,
             relative_iterate_change=last_change,
             predicted_measurement=predicted_measurement,
+            previous_reconstruction=self.terminal_previous if (
+                self.algorithm in {"sirt", "landweber", "sart", "os_sart"}
+                and self.previous is not None and torch.equal(self.previous, reconstruction)
+            ) else None,
             metadata={
                 "algorithm": self.algorithm,
                 "max_iterations": self.control.max_iterations,
@@ -549,7 +556,7 @@ class ConsecutiveStoppingMonitor:
         else:
             self.stall_run = 0
         if self.control.divergence_enabled and monitor_value is not None and self.previous_monitor is not None:
-            self.divergence_run = self.divergence_run + 1 if monitor_value > self.previous_monitor * (1.0 + self.control.divergence_relative_increase_tolerance) else 0
+            self.divergence_run = self.divergence_run + 1 if monitor_value > self.previous_monitor + abs(self.previous_monitor) * self.control.divergence_relative_increase_tolerance else 0
         self.previous_monitor = monitor_value
         return StoppingDecision(
             True,
