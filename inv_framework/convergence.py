@@ -1474,7 +1474,12 @@ def confirm_endpoint(
         )
         if algorithm == "fista":
             from .ct_runtime import _build_fista
-            tv = _build_fista(**{k:v for k,v in parameters.items() if k not in {"data_fidelity","weight_source","nll_tolerance","nll_max_iterations"}}).parameters["regularizer"]
+            options = {k:v for k,v in parameters.items() if k not in {"data_fidelity","weight_source","nll_tolerance","nll_max_iterations"}}
+            if options.get('regularizer') == 'h1':
+                from .operators.gradient import GradientOperator
+                from .regularizers import TikhonovRegularizer
+                options['smooth_regularizer']=TikhonovRegularizer(GradientOperator(reconstruction.shape[1:]))
+            tv = _build_fista(**options).parameters["regularizer"]
         strength = float(parameters.get("strength") if parameters.get("strength") is not None else parameters.get("reg_strength", 0.0))
         raw_step = (rows[-1].get("step_size") if rows else None)
         if raw_step is None:
@@ -1486,7 +1491,14 @@ def confirm_endpoint(
             objective_change = None
         else:
             gradient = operator.adjoint(fidelity.gradient(prediction) if fidelity is not None else native_residual) if native_residual is not None else torch.full_like(reconstruction, float("nan"))
-            prox = _proximal_with_accounting(
+            if algorithm == 'fista':
+                from .solvers.fista import proximal
+                smooth = type(tv).__name__ == 'GradientHuberRegularizer' or getattr(tv,'operator',None) is not None
+                if smooth and strength: gradient=gradient+strength*tv.gradient(reconstruction)
+                prox = proximal(tv, reconstruction-step*gradient, 0. if smooth else step*strength, operator,
+                    parameters.get('min_value'), parameters.get('max_value'),
+                    iteration=max(len(rows), 1), certified=True)
+            else: prox = _proximal_with_accounting(
                 tv,
                 reconstruction - step * gradient,
                 step * strength,
@@ -1557,7 +1569,7 @@ def confirm_endpoint(
             fidelity_before = {k:getattr(state["fidelity"],k,0) for k in ("prox_calls","inner_iterations","inner_failures","prox_seconds","weight_multiplications","mask_calls")}
             p, d = state["p"], state["d"]
             tau, sigma, weight = state["tau"], state["sigma"], state["weight"]
-            project = lambda z: z.clamp_min(0) if state["nonnegative"] else z
+            project = lambda z: _endpoint_box_constraints(z, state)
             tx = penalty.apply(reconstruction)
             g = operator.adjoint(p) + penalty.apply(d, True)
             rx = (reconstruction-project(reconstruction-tau*g))/tau
@@ -1575,6 +1587,22 @@ def confirm_endpoint(
             native_ok = False
             native_recomputation_error = "complete split endpoint unavailable"
             result["reasons"].append("complete_split_endpoint_unavailable")
+    if algorithm in {'cgls','lsqr'} and (fidelity is not None or parameters.get('strength',0)>0):
+        from .regularizers import TikhonovRegularizer
+        from .operators.gradient import GradientOperator
+        strength=float(parameters.get('strength',0))
+        if algorithm=='lsqr' and not strength: strength=float(parameters.get('damping',0))**2
+        reg=TikhonovRegularizer(GradientOperator(reconstruction.shape[1:]) if parameters.get('regularizer')=='h1' else None)
+        gradient=operator.adjoint(fidelity.gradient(prediction) if fidelity is not None else native_residual)
+        regularization_gradient=reg.gradient(reconstruction) if strength else torch.zeros_like(reconstruction)
+        gradient=gradient+strength*regularization_gradient
+        rhs=operator.adjoint(fidelity.linear_rhs() if fidelity is not None else native_measurement)
+        native_value=float(gradient.norm())/max(float(rhs.norm())+strength*float(regularization_gradient.norm()),1e-12)
+        native_name='normalized_regularized_normal_residual'
+        native_trajectory_value=None
+        native_ok=isfinite(native_value) and native_value<=normal_tol
+        result['composite_objective']=float(fidelity.value(prediction) if fidelity is not None else .5*native_residual.square().sum())+(strength*float(reg.value(reconstruction).sum()) if strength else 0.)
+        result['normal_residual_formula']='||B*(Bx-d)+lambda L*Lx|| / max(||B*d||+lambda||L*Lx||,eps)'
     if native_value is not None and not isfinite(float(native_value)):
         finite = False
         result["reasons"].append("non_finite_native_criterion")

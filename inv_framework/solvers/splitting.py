@@ -1,4 +1,4 @@
-"""L2 two-block ADMM and primal-dual hybrid gradient reconstruction."""
+"""Composite two-block observation-split ADMM and primal-dual reconstruction."""
 import math
 import time
 import torch
@@ -20,6 +20,8 @@ class Penalty:
         self.transform, self.bound = reg.split_transform(shape)
 
     def apply(self, x, adjoint=False):
+        if self.bound == 0:
+            return torch.zeros((x.shape[0], *self.shape), dtype=x.dtype, device=x.device) if adjoint else x.new_zeros((x.shape[0], 0))
         if x.is_cuda: torch.cuda.synchronize(x.device)
         start = time.perf_counter()
         self.calls['transform_adjoint_calls' if adjoint else 'transform_forward_calls'] += 1
@@ -33,9 +35,11 @@ class Penalty:
         return mask(z) if callable(mask) else torch.ones_like(z)
 
     def value(self, z):
+        if self.bound == 0: return z.new_tensor(0.)
         return self.reg.coefficient_value(z).sum()
 
     def prox(self, z, t):
+        if self.bound == 0: return z
         if z.is_cuda: torch.cuda.synchronize(z.device)
         start = time.perf_counter()
         self.calls['coefficient_prox_calls'] += 1
@@ -52,6 +56,7 @@ class Penalty:
             if callable(record):record(iterations=0,elapsed_seconds=elapsed,failed=failed)
 
     def dual_prox(self, z, sigma, weight):
+        if self.bound == 0: return z
         # Moreau also handles zero-weight LL: its conjugate is the indicator {0}.
         result = z-sigma*self.prox(z/sigma,weight/sigma)
         result = result*self.mask(result)
@@ -72,10 +77,11 @@ def solve_split_detailed(operator, measurement, *, algorithm, regularizer=None, 
     require_linear_operator(operator,algorithm)
     validate_measurement_shape(measurement,operator,algorithm)
     from ..fidelity import QuadraticFidelity
-    if algorithm == 'admm' and fidelity is not None and not all(callable(getattr(fidelity,k,None)) for k in ('normal_gradient','linear_rhs')):
-        raise ValueError('ADMM requires quadratic fidelity')
     weight = strength if strength is not None else reg_strength if reg_strength is not None else .01
     reg = regularizer if regularizer is not None else TikhonovRegularizer()
+    from ..regularizers import ZeroRegularizer
+    from ._utils import apply_box_constraints
+    if weight == 0: reg = ZeroRegularizer()
     if reg == "h1": reg = TikhonovRegularizer(GradientOperator(operator.domain_shape))
     errors = _common_parameter_errors(num_iterations,min_value,max_value)
     if strength is not None and reg_strength is not None and strength != reg_strength:
@@ -86,17 +92,17 @@ def solve_split_detailed(operator, measurement, *, algorithm, regularizer=None, 
         if v is not None and (not math.isfinite(float(v)) or v<=0): errors.append(name+' must be positive finite')
     if isinstance(cg_max_iterations,bool) or not isinstance(cg_max_iterations,int) or cg_max_iterations<=0:
         errors.append('cg_max_iterations must be positive integer')
-    if min_value not in (None,0) or max_value is not None:
-        errors.append('only unconstrained and nonnegative constraints supported')
     try: penalty = Penalty(reg,operator.domain_shape)
     except ValueError as e: errors.append(str(e))
     if errors:
         return _parameter_failure_result(algorithm,measurement,operator,x_init=x_init,errors=errors,max_iterations=num_iterations,parameters={})
     penalty.accounting_operator = operator
+    penalty.shape = operator.domain_shape
     control = resolve_control(control,default_iterations=num_iterations,default_tolerance=tolerance,callback=callback)
     x = prepare_initial_image(measurement,operator,x_init=x_init,initial_value=0.)
     nonnegative = min_value == 0
-    project = lambda v: v.clamp_min(0) if nonnegative else v
+    constrained = min_value is not None or max_value is not None
+    project = lambda v: apply_box_constraints(v, min_value=min_value, max_value=max_value)
     x = project(x)
     recorder = IterationRecorder(control,measurement,operator,algorithm=algorithm); recorder.set_initial(x)
     monitor = ConsecutiveStoppingMonitor(control)
@@ -112,6 +118,7 @@ def solve_split_detailed(operator, measurement, *, algorithm, regularizer=None, 
         if not bool(torch.isfinite(x).all() and torch.isfinite(measurement).all()):
             raise FloatingPointError('non_finite_input')
         fidelity = fidelity if fidelity is not None else QuadraticFidelity(measurement)
+        observation_split = algorithm == 'admm'
         if hasattr(fidelity,"accounting_operator"): fidelity.accounting_operator=operator
         z=penalty.apply(x); u=torch.zeros_like(z); q=x.clone(); v=torch.zeros_like(x)
         if algorithm=='pdhg':
@@ -130,14 +137,16 @@ def solve_split_detailed(operator, measurement, *, algorithm, regularizer=None, 
                 try:fidelity.validate_normal(operator,penalty.transform,x)
                 except ValueError as error:
                     return _parameter_failure_result(algorithm,measurement,operator,x_init=x_init,errors=[str(error)],max_iterations=num_iterations,parameters={})
-            aty=operator.adjoint(fidelity.linear_rhs())
+            if observation_split:
+                observation=operator.forward(x); observation_dual=torch.zeros_like(observation)
+            else: aty=operator.adjoint(fidelity.linear_rhs())
         for iteration in range(1,min(num_iterations,control.max_iterations)+1):
-            endpoint=False
             old=x
             if algorithm=='admm':
-                rhs=aty+rho*penalty.apply(z-u,True)+(rho*(q-v) if nonnegative else 0)
+                rhs=(rho*operator.adjoint(observation-observation_dual) if observation_split else aty)+rho*penalty.apply(z-u,True)+rho*(q-v)
                 def normal(a):
-                    return operator.adjoint(fidelity.normal_gradient(operator.forward(a)))+rho*penalty.apply(penalty.apply(a),True)+(rho*a if nonnegative else 0)
+                    prediction_a=operator.forward(a)
+                    return operator.adjoint(rho*prediction_a if observation_split else fidelity.normal_gradient(prediction_a))+rho*penalty.apply(penalty.apply(a),True)+rho*a
                 cg_started=time.perf_counter()
                 candidate=x.clone(); r=rhs-normal(candidate); direction=r.clone(); rr=(r*r).sum()
                 # Summable inner relative tolerance, bounded by user requested accuracy.
@@ -157,17 +166,27 @@ def solve_split_detailed(operator, measurement, *, algorithm, regularizer=None, 
                     cg_failures+=1; status,reason='max_iterations','cg_inner_max_iterations'; break
                 tx=penalty.apply(candidate)
                 nz=penalty.prox(tx+u,weight/rho)
-                nq=project(candidate+v) if nonnegative else candidate
-                nu=u+tx-nz; nv=v+candidate-nq if nonnegative else v
-                primal=math.sqrt(norm(tx-nz)**2+(norm(candidate-nq)**2 if nonnegative else 0))
-                ds=rho*(penalty.apply(nz-z,True)+(nq-q if nonnegative else 0))
+                nq=project(candidate+v)
+                nu=u+tx-nz; nv=v+candidate-nq
+                obs_primal=0.
+                ds=rho*(penalty.apply(nz-z,True)+(nq-q))
+                if observation_split:
+                    ax=operator.forward(candidate)
+                    next_observation=fidelity.proximal(ax+observation_dual, 1/rho)
+                    next_observation_dual=observation_dual+ax-next_observation
+                    obs_primal=norm(ax-next_observation)**2
+                    ds=ds+rho*operator.adjoint(next_observation-observation)
+                primal=math.sqrt(norm(tx-nz)**2+norm(candidate-nq)**2+obs_primal)
                 dual=norm(ds)
-                eps_p=tol*(math.sqrt(tx.numel()+(candidate.numel() if nonnegative else 0))+max(
-                    math.sqrt(norm(tx)**2+(norm(candidate)**2 if nonnegative else 0)),
-                    math.sqrt(norm(nz)**2+(norm(nq)**2 if nonnegative else 0))))
-                eps_d=tol*(math.sqrt(x.numel())+norm(rho*(penalty.apply(nu,True)+(nv if nonnegative else 0))))
+                eps_p=tol*(math.sqrt(tx.numel()+candidate.numel()+(ax.numel() if observation_split else 0))+max(
+                    math.sqrt(norm(tx)**2+norm(candidate)**2+(norm(ax)**2 if observation_split else 0)),
+                    math.sqrt(norm(nz)**2+norm(nq)**2+(norm(next_observation)**2 if observation_split else 0))))
+                multiplier=rho*(penalty.apply(nu,True)+nv)
+                if observation_split: multiplier=multiplier+rho*operator.adjoint(next_observation_dual)
+                eps_d=tol*(math.sqrt(x.numel())+norm(multiplier))
                 # Commit all split variables together; return feasible q for nonnegative runs.
                 x,z,u,q,v=candidate,nz,nu,nq,nv
+                if observation_split: observation,observation_dual=next_observation,next_observation_dual
                 metric=max(primal/max(eps_p,1e-30),dual/max(eps_d,1e-30))
                 criteria={'primal':primal<=eps_p,'dual':dual<=eps_d}
             else:
@@ -178,8 +197,9 @@ def solve_split_detailed(operator, measurement, *, algorithm, regularizer=None, 
                 bar=2*nx-x; x,p,d=nx,np,nd
                 criteria={}
             if endpoint_state is not None: endpoint_state.clear()
+            endpoint=False
             actual=iteration
-            returned=q if algorithm=='admm' and nonnegative else x
+            returned=q if algorithm=='admm' and constrained else x
             # Independent returned-point fixed-point / KKT check.
             prediction=operator.forward(returned); residual=prediction-measurement
             txr=penalty.apply(returned)
@@ -195,10 +215,11 @@ def solve_split_detailed(operator, measurement, *, algorithm, regularizer=None, 
                 raise FloatingPointError('non_finite_split_state')
             if endpoint_state is not None:
                 endpoint_state.clear()
-                endpoint_state.update(p=p.detach().clone() if algorithm=='pdhg' else fidelity.gradient(prediction).detach().clone(),
+                endpoint_state.update(p=p.detach().clone() if algorithm=='pdhg' else (rho*observation_dual if observation_split else fidelity.gradient(prediction)).detach().clone(),
                     d=d.detach().clone() if algorithm=='pdhg' else (rho*u).detach().clone(),
                     penalty=penalty, fidelity=fidelity, tau=tau if algorithm=='pdhg' else 1.,
-                    sigma=sigma if algorithm=='pdhg' else 1., weight=weight, nonnegative=nonnegative)
+                    sigma=sigma if algorithm=='pdhg' else 1., weight=weight, nonnegative=nonnegative,
+                    min_value=min_value, max_value=max_value)
             endpoint=True
             if control.discrepancy_target is not None:
                 criteria["discrepancy"] = norm(residual)/max(norm(measurement),1e-12)<=control.discrepancy_target
@@ -218,13 +239,13 @@ def solve_split_detailed(operator, measurement, *, algorithm, regularizer=None, 
         status,reason='resource_exhausted','wall_time_budget_exhausted' if e.kind=='wall' else 'operator_call_budget_exhausted'
         interruption={'kind':e.kind,'limit':e.limit,'attempted':e.attempted}
     except RuntimeError as e:
-        if str(e) != 'poisson_prox_inner_max_iterations': raise
+        if str(e) not in {'poisson_prox_inner_max_iterations','poisson_prox_returned_precision'}: raise
         status,reason='max_iterations','poisson_prox_inner_max_iterations'
         endpoint=False
     except FloatingPointError as e:
         status,reason='numerical_error',str(e); recorder.mark_numerical_error(reason)
     if cg_started is not None: cg_seconds += time.perf_counter()-cg_started
-    returned=q if algorithm=='admm' and nonnegative and 'q' in locals() else x
+    returned=q if algorithm=='admm' and constrained and 'q' in locals() else x
     return recorder.finish(returned,actual_iterations=actual,status=status,stopping_reason=reason,
         final_objective=objective if endpoint else None,final_residual=norm(residual)/max(norm(measurement),1e-12) if endpoint else None,
         predicted_measurement=prediction if endpoint else None,

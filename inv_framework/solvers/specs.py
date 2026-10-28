@@ -712,6 +712,9 @@ _COMMON = _common_parameters()
 
 
 REGULARIZER_SPECS: dict[str, RegularizerSpec] = {
+    'none': RegularizerSpec('none', 'No explicit regularizer', 'none', True, True, True, True, (),
+        description='Zero penalty; skips transforms.', full_proximal='identity',
+        supported_solvers=('cgls','lsqr','fista','admm','pdhg')),
     "tikhonov": RegularizerSpec(
         name="tikhonov",
         display_name="Quadratic Tikhonov",
@@ -723,8 +726,8 @@ REGULARIZER_SPECS: dict[str, RegularizerSpec] = {
         parameter_names=("reg_strength",),
         parameter_sensitivity="low_to_medium",
         description="Half squared norm; full proximal only for identity L.",
-        full_proximal="identity_L_only_closed_form", supported_solvers=("tikhonov", "fista", "admm", "pdhg"),
-        constraints=("fista: optional box via closed form", "admm/pdhg: unconstrained or nonnegative"), coefficient_proximal="quadratic_closed_form",
+        full_proximal="identity_L_only_closed_form", supported_solvers=("tikhonov", "cgls", "lsqr", "fista", "admm", "pdhg"),
+        constraints=("CG/Krylov: unconstrained", "fista/admm/pdhg: optional box"), coefficient_proximal="quadratic_closed_form",
     ),
     "tv": RegularizerSpec(
         name="tv",
@@ -736,21 +739,21 @@ REGULARIZER_SPECS: dict[str, RegularizerSpec] = {
         differentiable=False,
         parameter_names=("reg_strength", "tv_mode", "tv_num_iterations", "tv_tolerance"),
         parameter_sensitivity="medium_to_high",
-        description="Convex 2D TV; finite FGP approximate proximal, no gap certificate.",
-        full_proximal="finite_FGP_no_gap_certificate", supported_solvers=("tv_fista", "fista", "admm", "pdhg", "constrained_pdhg", "asd_pocs_tv"),
-        constraints=("fista: unconstrained", "tv_fista: legacy post-prox box projection", "admm/pdhg: unconstrained or nonnegative"), transform="D", coefficient_proximal="isotropic_vector_shrink_or_anisotropic_soft_threshold",
+        description="Convex 2D TV; generic FISTA uses a certified joint denoising proximal; legacy proximal remains finite FGP.",
+        full_proximal="joint_FGP_gap_in_fista; legacy_finite_FGP", supported_solvers=("tv_fista", "fista", "admm", "pdhg", "constrained_pdhg", "asd_pocs_tv"),
+        constraints=("fista/admm/pdhg: optional box", "tv_fista: legacy post-prox box projection"), transform="D", coefficient_proximal="isotropic_vector_shrink_or_anisotropic_soft_threshold",
     ),
     "h1": RegularizerSpec("h1", "Gradient quadratic H1", "quadratic_gradient",
         False, True, True, True, ("strength",), description="0.5||Dx||^2; unit-grid forward differences, zero terminal entries.",
-        supported_solvers=("tikhonov", "admm", "pdhg"), constraints=("unconstrained", "admm/pdhg: nonnegative"), transform="D", coefficient_proximal="quadratic_closed_form"),
+        supported_solvers=("tikhonov", "cgls", "lsqr", "fista", "admm", "pdhg"), constraints=("CG/Krylov: unconstrained", "fista/admm/pdhg: optional box"), transform="D", coefficient_proximal="quadratic_closed_form"),
     "huber": RegularizerSpec("huber", "Componentwise gradient Huber", "gradient_huber",
         False, True, True, True, ("strength", "delta"), description="Componentwise h_delta(Dx); delta in unit-grid difference units; no full proximal.",
-        supported_solvers=("admm", "pdhg"), constraints=("unconstrained", "nonnegative"), transform="D", coefficient_proximal="componentwise_huber_closed_form"),
+        supported_solvers=("fista", "admm", "pdhg"), constraints=("unconstrained", "nonnegative", "box"), transform="D", coefficient_proximal="componentwise_huber_closed_form"),
     "haar_l1": RegularizerSpec("haar_l1", "Haar detail L1", "wavelet_l1",
         True, False, True, False, ("strength", "level"),
         description="Periodic even-origin orthonormal Haar; LL unpenalized, unit detail weights.",
         full_proximal="orthogonal_analysis_soft_threshold_synthesis", supported_solvers=("fista", "admm", "pdhg"),
-        constraints=("fista: unconstrained", "admm/pdhg: unconstrained or nonnegative"), transform="full_orthogonal_Haar", coefficient_proximal="weighted_soft_threshold_LL_zero", shape_requirements=("level positive integer", "H,W divisible by 2**level")),
+        constraints=("fista: joint certified proximal for box", "admm/pdhg: optional box"), transform="full_orthogonal_Haar", coefficient_proximal="weighted_soft_threshold_LL_zero", shape_requirements=("level positive integer", "H,W divisible by 2**level")),
 }
 
 
@@ -841,12 +844,12 @@ def _algorithm(
         if code not in reason_codes:
             reason_codes.append(code)
     fidelity_requirements={}
-    if name in {'tikhonov','fista','admm','pdhg'}:
+    if name in {'tikhonov','cgls','lsqr','fista','admm','pdhg'}:
         fidelity_requirements={
             'l2':{'required_fields':('y_observed',),'approximation':False},
             'gaussian_nll':{'required_fields':('y_observed','sigma'),'approximation':False},
             'wls':{'required_fields':('y_observed','weights'),'approximation':'weight_source_dependent'}}
-        if name=='pdhg':fidelity_requirements['transmission_poisson_nll']={
+        if name in {'fista','admm','pdhg'}:fidelity_requirements['transmission_poisson_nll']={
             'required_fields':('counts','I0'),'noise_models':('poisson',),'background':0,
             'constraints':('nonnegative',),'assumptions':('finite_minimizer_exists',),
             'failure_modes':('zero_counts_noncoercive_prior_may_have_no_finite_minimizer',)}
@@ -947,6 +950,7 @@ def _constrained_spec(name):
     common = (
         _p('epsilon', required=True, minimum=0., units='line_integral_l2'),
         _p('epsilon_source', 'str', required=True),
+        _p('residual_metric', 'str', default='raw', choices=('raw','gaussian_whitened')),
         _p('num_iterations', 'int', default=200, minimum=1),
         _p('tolerance', default=1e-5, minimum=0., inclusive_minimum=False),
         _p('feasibility_tolerance', default=1e-5, minimum=0., inclusive_minimum=False),
@@ -978,6 +982,15 @@ def _constrained_spec(name):
                   'variant_id':'residual_ball_pdhg_v1' if name=='constrained_pdhg' else 'sart2d_feasibility_backtracking_v1',
                   'global_optimality_claim': name=='constrained_pdhg',
                   'step_policy':'0.99/sqrt(norm_A_bound_squared+8)' if name=='constrained_pdhg' else 'normalized_SART_TV_backtracking'})
+
+def _krylov_parameters():
+    return (
+        _p('data_fidelity','str',default='l2',choices=('l2','gaussian_nll','wls')),
+        _p('weight_source','str',default=None,nullable=True,choices=('known_variance','provided','post_log_poisson','post_log_poisson_gaussian')),
+        _p('regularizer','str',default='none',choices=('none','tikhonov','h1')),
+        _p('strength',default=0.,minimum=0.),
+    )
+
 
 SOLVER_SPECS: dict[str, CTAlgorithmSpec] = {
     "fbp": _algorithm(
@@ -1012,18 +1025,22 @@ SOLVER_SPECS: dict[str, CTAlgorithmSpec] = {
     ),
     "cgls": _algorithm(
         "cgls", "CGLS", (2,), ("parallel_2d",), "Conjugate-gradient least squares.",
-        _common_parameters(10) + (_p("tol", minimum=0.0, default=1e-6, tunable=True, description="Residual tolerance."),),
+        _common_parameters(10) + _krylov_parameters() + (_p("tol", minimum=0.0, default=1e-6, tunable=True, description="Residual tolerance."),),
+        regularizers=('none','tikhonov','h1'),
+        metadata={'data_fidelity':('l2','gaussian_nll','wls'), 'constraints':('unconstrained',)},
         sparse_view=True, limited_angle=True,
         failure_modes=("ill_conditioning", "normal_equation_breakdown"),
         convergence_criteria=("normalized_normal_residual", "data_residual", "relative_iterate_change"),
     ),
     "lsqr": _algorithm(
         "lsqr", "LSQR", (2,), ("parallel_2d",), "Golub-Kahan LSQR.",
-        _common_parameters(10) + (
+        _common_parameters(10) + _krylov_parameters() + (
             _p("damping", minimum=0.0, default=0.0, tunable=True),
             _p("atol", minimum=0.0, default=1e-6, tunable=True),
             _p("btol", minimum=0.0, default=1e-6, tunable=True),
-        ), sparse_view=True, limited_angle=True,
+        ), regularizers=('none','tikhonov','h1'),
+        metadata={'data_fidelity':('l2','gaussian_nll','wls'), 'constraints':('unconstrained',)},
+        sparse_view=True, limited_angle=True,
         failure_modes=("ill_conditioning", "premature_tolerance"),
         convergence_criteria=("normalized_normal_residual", "data_residual", "relative_iterate_change"),
     ),
@@ -1143,7 +1160,7 @@ SOLVER_SPECS: dict[str, CTAlgorithmSpec] = {
             _p("weight_source", "str", default=None, nullable=True, choices=("known_variance", "provided", "post_log_poisson", "post_log_poisson_gaussian")),
             _p("nll_tolerance", default=None, nullable=True, minimum=0., inclusive_minimum=False),
             _p("nll_max_iterations", "int", default=200, minimum=1),
-            _p("regularizer", "str", default="tikhonov", choices=("tikhonov", "tv", "haar_l1")),
+            _p("regularizer", "str", default="tikhonov", choices=("none", "tikhonov", "h1", "tv", "huber", "haar_l1")),
             _p("strength", default=1e-2, minimum=0.0, tunable=True),
             _p("reg_strength", default=None, nullable=True, minimum=0.0),
             _p("step_size", default=None, nullable=True, minimum=0.0, inclusive_minimum=False,
@@ -1154,21 +1171,26 @@ SOLVER_SPECS: dict[str, CTAlgorithmSpec] = {
             _p("tv_mode", "str", default="isotropic", choices=("isotropic", "anisotropic")),
             _p("tv_num_iterations", "int", default=50, minimum=1),
             _p("tv_tolerance", default=1e-5, minimum=0.0),
+            _p('delta', default=.01, minimum=0., inclusive_minimum=False),
         ), noise_models=("none","gaussian_relative","poisson_log","gaussian","poisson","poisson_gaussian"), family="variational", objective="composite_regularized_least_squares",
-        regularizers=("tikhonov", "tv", "haar_l1"), requires_proximal=True,
+        regularizers=("none", "tikhonov", "h1", "tv", "huber", "haar_l1"), requires_proximal=True,
         sparse_view=True, limited_angle=True,
         convergence_criteria=("prox_gradient_mapping", "relative_composite_objective_change"),
         failure_modes=("proximal_inexactness", "backtracking_limit", "over_smoothing"),
-        metadata={"data_fidelity": ("l2","gaussian_nll","wls"), "norm_estimate_is_upper_bound": False,
+        metadata={"data_fidelity": ("l2","gaussian_nll","wls","transmission_poisson_nll"), "norm_estimate_is_upper_bound": False,
+                  'constraints':('unconstrained','nonnegative','box'),
+                  'data_fidelity_constraints':{'transmission_poisson_nll':('nonnegative','box')},
+                  'regularizer_handling':{'none':'constraint_projection','tikhonov':'closed_form_joint_prox',
+                    'h1':'smooth_gradient','huber':'smooth_gradient','tv':'joint_FGP_gap','haar_l1':'orthogonal_or_joint_FGP_gap'},
                   "backtracking": "checked_smooth_quadratic_majorizer",
-                  "proximal_accuracy": {"tv": "finite_FGP_no_gap_certificate", "tikhonov": "closed_form", "haar_l1": "closed_form"}}),
+                  "proximal_accuracy": {"tv": "joint_FGP_gap", "tikhonov": "closed_form", "haar_l1": "joint_FGP_gap_or_orthogonal_closed_form"}}),
     "admm": _algorithm("admm", "ADMM", (2,), ("parallel_2d",), "L2 composite ADMM.",
         _common_parameters(200) + (
             _p("data_fidelity", "str", default="l2", choices=("l2", "gaussian_nll", "wls", "transmission_poisson_nll")),
             _p("weight_source", "str", default=None, nullable=True, choices=("known_variance", "provided", "post_log_poisson", "post_log_poisson_gaussian")),
             _p("nll_tolerance", default=None, nullable=True, minimum=0., inclusive_minimum=False),
             _p("nll_max_iterations", "int", default=200, minimum=1),
-            _p("regularizer", "str", default="tikhonov", choices=("tikhonov", "tv", "h1", "huber", "haar_l1")),
+            _p("regularizer", "str", default="tikhonov", choices=("none", "tikhonov", "tv", "h1", "huber", "haar_l1")),
             _p("strength", default=0.01, minimum=0.),
             _p("reg_strength", default=None, nullable=True, minimum=0.),
             _p("tolerance", default=1e-5, minimum=0.),
@@ -1179,16 +1201,16 @@ SOLVER_SPECS: dict[str, CTAlgorithmSpec] = {
             _p("cg_max_iterations", "int", default=100, minimum=1),
             _p("cg_tolerance", default=1e-6, minimum=0., inclusive_minimum=False),
         ), noise_models=("none","gaussian_relative","poisson_log","gaussian","poisson","poisson_gaussian"), family="variational", objective="composite_regularized_least_squares",
-        regularizers=("tikhonov", "tv", "h1", "huber", "haar_l1"), sparse_view=True, limited_angle=True,
+        regularizers=("none", "tikhonov", "tv", "h1", "huber", "haar_l1"), sparse_view=True, limited_angle=True,
         convergence_criteria=("split_residual",), failure_modes=("inner_solve_limit", "numerical_failure", "iteration_limit"),
-        metadata={"data_fidelity": ("l2","gaussian_nll","wls"), "constraints":("unconstrained","nonnegative"), "theta":1}),
+        metadata={"data_fidelity": ("l2","gaussian_nll","wls","transmission_poisson_nll"), "constraints":("unconstrained","nonnegative","box"), "theta":1}),
     "pdhg": _algorithm("pdhg", "PDHG", (2,), ("parallel_2d",), "L2 composite PDHG.",
         _common_parameters(200) + (
             _p("data_fidelity", "str", default="l2", choices=("l2", "gaussian_nll", "wls", "transmission_poisson_nll")),
             _p("weight_source", "str", default=None, nullable=True, choices=("known_variance", "provided", "post_log_poisson", "post_log_poisson_gaussian")),
             _p("nll_tolerance", default=None, nullable=True, minimum=0., inclusive_minimum=False),
             _p("nll_max_iterations", "int", default=200, minimum=1),
-            _p("regularizer", "str", default="tikhonov", choices=("tikhonov", "tv", "h1", "huber", "haar_l1")),
+            _p("regularizer", "str", default="tikhonov", choices=("none", "tikhonov", "tv", "h1", "huber", "haar_l1")),
             _p("strength", default=0.01, minimum=0.),
             _p("reg_strength", default=None, nullable=True, minimum=0.),
             _p("tolerance", default=1e-5, minimum=0.),
@@ -1198,9 +1220,9 @@ SOLVER_SPECS: dict[str, CTAlgorithmSpec] = {
             _p("tau", default=None, nullable=True, minimum=0., inclusive_minimum=False),
             _p("sigma", default=None, nullable=True, minimum=0., inclusive_minimum=False),
         ), noise_models=("none","gaussian_relative","poisson_log","gaussian","poisson","poisson_gaussian"), family="variational", objective="composite_regularized_least_squares",
-        regularizers=("tikhonov", "tv", "h1", "huber", "haar_l1"), sparse_view=True, limited_angle=True,
+        regularizers=("none", "tikhonov", "tv", "h1", "huber", "haar_l1"), sparse_view=True, limited_angle=True,
         convergence_criteria=("split_residual",), failure_modes=("inner_solve_limit", "numerical_failure", "iteration_limit"),
-        metadata={"data_fidelity_constraints":{"transmission_poisson_nll":("nonnegative",)}, "data_fidelity": ("l2","gaussian_nll","wls","transmission_poisson_nll"), "constraints":("unconstrained","nonnegative"), "theta":1}),
+        metadata={"data_fidelity_constraints":{"transmission_poisson_nll":("nonnegative","box")}, "data_fidelity": ("l2","gaussian_nll","wls","transmission_poisson_nll"), "constraints":("unconstrained","nonnegative","box"), "theta":1}),
     "constrained_pdhg": _constrained_spec("constrained_pdhg"),
     "asd_pocs_tv": _constrained_spec("asd_pocs_tv"),
     "fdk": _algorithm(
@@ -1741,21 +1763,29 @@ def validate_parameter_values(
             if shape is not None and (len(shape) != 3 or shape[0] != 1):
                 add_error('constrained TV requires one 2D channel', 'geometry_shape_invalid')
 
-    if algorithm in {"admm", "pdhg"}:
-        if normalized.get("min_value") not in (None, 0) or normalized.get("max_value") is not None:
-            add_error("only unconstrained and nonnegative constraints supported", "parameter_constraint_violation")
+    if algorithm in {'cgls','lsqr'}:
+        if (normalized.get('strength',0)>0 or normalized.get('data_fidelity','l2')!='l2') and (normalized.get('min_value') is not None or normalized.get('max_value') is not None):
+            add_error('augmented Krylov requires unconstrained reconstruction', 'parameter_constraint_violation')
+        if normalized.get('strength',0)>0 and normalized.get('regularizer')=='none':
+            add_error('nonzero strength requires an explicit regularizer', 'parameter_constraint_violation')
+        if normalized.get('strength',0)>0 and normalized.get('damping',0)>0:
+            add_error('explicit augmentation and damping cannot both be used', 'parameter_constraint_violation')
+    if algorithm in {'fista','admm','pdhg'} and normalized.get('regularizer')=='none':
+        normalized['strength']=0.
+    if algorithm in {'fista','admm','pdhg','cgls','lsqr'} and normalized.get('strength')==0 and not normalized.get('damping',0):
+        normalized['regularizer']='none'
+    if algorithm=='lsqr' and normalized.get('damping',0)>0 and normalized.get('strength',0)==0:
+        normalized['regularizer']='tikhonov'
     if algorithm=='tikhonov' and normalized.get('data_fidelity','l2')!='l2' and (normalized.get('min_value') is not None or normalized.get('max_value') is not None):
         add_error('weighted Tikhonov CG supports unconstrained reconstruction only','parameter_constraint_violation')
-    if algorithm=='pdhg' and normalized.get('data_fidelity')=='transmission_poisson_nll' and normalized.get('min_value')!=0:
+    if algorithm in {'fista','admm','pdhg'} and normalized.get('data_fidelity')=='transmission_poisson_nll' and normalized.get('min_value')!=0:
         add_error('P3 transmission_poisson_nll requires min_value=0', 'parameter_constraint_violation')
-    if algorithm in {"fista", "admm"} and normalized.get("data_fidelity") == "transmission_poisson_nll":
-        add_error("transmission_poisson_nll requires PDHG", "parameter_constraint_violation")
     if algorithm in {"fista", "admm", "pdhg"} and normalized.get("data_fidelity") == "wls" and normalized.get("weight_source") is None:
         add_error("wls requires explicit weight_source", "parameter_constraint_violation")
     if algorithm in {"fista", "tikhonov"}:
         prior = normalized.get("regularizer", "tikhonov")
         bounded = normalized.get("min_value") is not None or normalized.get("max_value") is not None
-        if bounded and ((algorithm == "fista" and prior in {"tv", "haar_l1"}) or prior == "h1"):
+        if bounded and algorithm == 'tikhonov':
             add_error(f"{algorithm}+{prior} requires unconstrained reconstruction", "parameter_constraint_violation")
         if prior == "haar_l1" and "level" in normalized:
             for shape in (image_shape, domain_shape):

@@ -324,7 +324,9 @@ class ASTRAFDKOperator3D(ASTRAOperator3D):
         }
         original_device = y.device
         original_dtype = y.dtype
-        work = y.detach().to(dtype=torch.float32).contiguous()
+        # FDK_CUDA filters linked projection storage in place. Own the working
+        # buffer so the caller's observations remain valid for evaluation.
+        work = y.detach().to(dtype=torch.float32).contiguous().clone()
         reconstructions = [self._run_fdk_one(work[index], options) for index in range(y.shape[0])]
         result = torch.stack(reconstructions, dim=0)
         return result.to(device=original_device, dtype=original_dtype)

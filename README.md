@@ -572,3 +572,62 @@ README 中的 `configs/examples`、benchmark/protocol 文件、`test/data` 和 d
 ## 许可证
 
 项目元数据声明为 MIT。外部后端和数据集保持各自许可证与使用条款。
+# Selected CT component combinations
+
+The 17 algorithm IDs remain unchanged. `cgls` and `lsqr` support weighted L2,
+known-variance Gaussian NLL and supplied WLS with no penalty, identity Tikhonov
+or H1 through a weighted augmented system. These new Krylov combinations are
+unconstrained. LSQR damping represents an identity strength of `damping**2`;
+explicit augmentation and damping cannot both be active. Rank-deficient least
+squares is allowed without a uniqueness claim. Regularized CG requires
+`ker(B) intersect ker(L) = {0}` for a positive-definite normal equation.
+
+`fista`, `admm` and `pdhg` support the same quadratic fidelities and zero-background
+transmission Poisson NLL with `none`, `tikhonov`, `h1`, `tv`, `huber` or `haar_l1`.
+TV has isotropic and anisotropic modes. A zero strength selects `none` and skips
+regularizer transforms. Quadratic problems allow no constraint, nonnegativity or
+an explicit box. Transmission NLL requires a nonnegative lower bound of zero,
+raw integer `counts`, public `I0 > 0` and public `scale > 0`. Zero counts are legal;
+when a finite minimizer is not established, a positive identity penalty or a
+public finite upper bound is required. No upper bound is inferred from truth.
+
+FISTA handles H1/Huber in the smooth gradient. Its accepted step must satisfy the
+actual smooth majorizer; Poisson extrapolation restarts if it leaves the
+nonnegative image domain. Identity and box have a closed-form joint prox.
+Generic TV and constrained Haar use dual FGP denoising with a primal-dual gap,
+including projection inside the dual iteration. Their distance error target is
+`tv_tolerance * max(norm(v), 1) / k**2.1`. `tv_num_iterations` also caps this Haar
+inner solve. Insufficient precision reports `joint_prox_inner_max_iterations`;
+it is not convergence. The legacy `tv_fista` entry retains its post-prox box
+projection semantics and is identified separately.
+
+ADMM uses the two blocks `x` and `(u,z,q)` with `u=Ax`, `z=Tx`, `q=x`; the
+observation prox covers quadratic and Poisson terms. The x step uses CG with
+relative target `cg_tolerance / k**2`, capped by `cg_max_iterations`. PDHG uses
+a Schur upper bound for `tau * sigma * norm(K)**2 < 1`, rather than treating a
+finite power estimate as a proven upper bound. Poisson prox diagnostics check
+the optimality residual after conversion to the returned dtype and include its
+roundoff allowance.
+
+`constrained_pdhg` and `asd_pocs_tv` accept `residual_metric: gaussian_whitened`
+with public known `sigma`; both data updates and the residual ball then use
+`Sigma**(-1/2) A`. Epsilon is dimensionless in this mode. The helper
+`gaussian_whitened_radius(m, alpha=0.01)` supplies the conservative chi-square
+radius. Raw residuals and whitened constraint diagnostics are recorded separately.
+ASD remains a feasibility/backtracking heuristic; feasible stagnation is not a
+global optimization certificate.
+
+Projection arrays, counts, sigma and fixed weights stay in the case public
+measurement fields. Gaussian NLL uses `1/sigma**2`; pure Poisson post-log WLS
+uses the public fixed count-floor rule and remains an approximation. Mixed-noise
+support is retained without a new likelihood. Penalized EM, MM and incremental
+proximal SART are mathematically feasible extensions outside this implementation.
+
+ASTRA FDK now owns a copy of its projection working buffer because `FDK_CUDA`
+filters GPU-linked storage in place. It preserves the caller's observations.
+GPU-link and CPU-copy reconstruction differences remain a separate backend
+limitation; observation preservation does not assert equality of these paths.
+
+The numerical references used for these interfaces are the
+[LSQR formulation](https://web.stanford.edu/group/SOL/software/lsqr/) and
+[inexact proximal-gradient analysis](https://arxiv.org/abs/1109.2415).

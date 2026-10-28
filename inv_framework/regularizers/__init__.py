@@ -15,3 +15,5 @@ from .wavelet import HaarL1Regularizer
 
 from .huber import GradientHuberRegularizer
 __all__ += ['GradientHuberRegularizer']
+from .zero import ZeroRegularizer
+__all__ += ['ZeroRegularizer']

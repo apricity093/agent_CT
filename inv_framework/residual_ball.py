@@ -4,6 +4,15 @@ import torch
 from .fidelity import _check, _timed_prox
 
 
+def gaussian_whitened_radius(sample_count, alpha=.01):
+    """Conservative chi-square upper radius for independent known variances."""
+    if not isinstance(sample_count,int) or isinstance(sample_count,bool) or sample_count<=0:
+        raise ValueError('sample_count must be a positive integer')
+    if not 0<alpha<1: raise ValueError('alpha must lie in (0,1)')
+    t=math.log(1/alpha)
+    return math.sqrt(sample_count+2*math.sqrt(sample_count*t)+2*t)
+
+
 class ResidualBall:
     """Indicator of ||mask * (v-y)||_2 <= epsilon, one joint measurement ball.
 

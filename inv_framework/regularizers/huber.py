@@ -9,6 +9,7 @@ class GradientHuberRegularizer(Regularizer):
         if not math.isfinite(float(delta)) or delta <= 0:
             raise ValueError("delta must be finite and positive")
         self.delta = float(delta)
+        self.gradient_calls = self.gradient_adjoint_calls = 0
 
     def split_transform(self, shape):
         from ..operators.gradient import GradientOperator
@@ -24,9 +25,12 @@ class GradientHuberRegularizer(Regularizer):
         return torch.where(v.abs() <= self.delta+t, self.delta*v/(self.delta+t), v-t*v.sign())
 
     def value(self, x):
+        self.gradient_calls += 1
         z = torch.stack(gradient(x), dim=1)
         return self.coefficient_value(z).flatten(1).sum(1)
 
     def gradient(self, x):
+        self.gradient_calls += 1
+        self.gradient_adjoint_calls += 1
         v, h = gradient(x)
         return gradient_adjoint((v/self.delta).clamp(-1,1), (h/self.delta).clamp(-1,1))

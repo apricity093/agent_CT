@@ -22,7 +22,8 @@ class ConstrainedTVSolver(InverseProblemSolver):
     def __init__(self, *, epsilon, epsilon_source, algorithm='pdhg', tv_mode='isotropic',
                  num_iterations=2000, tolerance=1e-5, feasibility_tolerance=1e-5,
                  relaxation=1., relaxation_decay=.99, tv_step=.2,
-                 tv_step_decay=.95, tv_updates=20, update_ratio=.95, block_size=1):
+                 tv_step_decay=.95, tv_updates=20, update_ratio=.95, block_size=1,
+                 residual_metric='raw', whitening=None):
         if algorithm not in ('pdhg', 'asd_pocs_tv'):
             raise ValueError('unsupported constrained TV algorithm')
         for name, value in dict(tolerance=tolerance, feasibility_tolerance=feasibility_tolerance,
@@ -48,12 +49,22 @@ class ConstrainedTVSolver(InverseProblemSolver):
             tv_step=tv_step, tv_step_decay=tv_step_decay, tv_updates=tv_updates,
             update_ratio=update_ratio, block_size=block_size)
         self.regularizer = TVRegularizer(tv_mode)
+        if residual_metric not in ('raw','gaussian_whitened'):
+            raise ValueError('unknown residual metric')
+        self.parameters['residual_metric'] = residual_metric
+        self.whitening = whitening
 
     def solve(self, measurement, operator, x_init=None, **kwargs):
         return self.solve_detailed(measurement, operator, x_init=x_init, **kwargs).reconstruction
 
     def solve_detailed(self, measurement, operator, x_init=None, *, mask=None, control=None, callback=None):
         cfg = self.parameters
+        if cfg['residual_metric'] == 'gaussian_whitened':
+            from ..operators.weighted import WeightedLinearOperator
+            if self.whitening is None:
+                raise ValueError('gaussian_whitened residual requires known sigma')
+            operator = WeightedLinearOperator(operator, self.whitening.square())
+            measurement = operator.whiten(measurement)
         validate_measurement_shape(measurement, operator, cfg['algorithm'])
         if len(operator.domain_shape) != 3 or operator.domain_shape[0] != 1 or measurement.shape[0] != 1:
             raise ValueError('constrained TV requires a single two-dimensional one-channel case')
@@ -209,6 +220,7 @@ class ConstrainedTVSolver(InverseProblemSolver):
                           constraint_diagnostics=diagnostic if endpoint else None,
                           feasibility_status=('feasible' if diagnostic['constraint_violation']<=cfg['feasibility_tolerance'] else 'violated') if endpoint else 'unconfirmed',
                           optimization_residual=metric if endpoint else None,
+                          residual_metric=cfg['residual_metric'],
                           nonnegative=bool((x>=0).all()), native_termination_managed=True))
 
         if not endpoint:

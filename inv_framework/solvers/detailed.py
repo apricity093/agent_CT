@@ -1347,6 +1347,46 @@ def solve_landweber_detailed(
     )
 
 
+def solve_krylov_composite(algorithm, measurement, operator, *, regularizer='none',
+                           strength=0., fidelity=None, damping=0., **kwargs):
+    """Run the original Krylov recurrence on a weighted augmented system."""
+    from dataclasses import replace
+    from ..fidelity import QuadraticFidelity
+    from ..operators.augmented import AugmentedLeastSquaresOperator
+    if regularizer not in {'none', 'tikhonov', 'h1'} or not _finite_nonnegative(strength):
+        raise ValueError('Krylov requires none, identity or H1 and nonnegative strength')
+    if kwargs.get('min_value') is not None or kwargs.get('max_value') is not None:
+        raise ValueError('augmented Krylov requires unconstrained reconstruction')
+    if strength and damping:
+        raise ValueError('explicit augmentation and LSQR damping cannot both be used')
+    if damping:
+        strength, regularizer = damping**2, 'tikhonov'
+    if regularizer == 'none' and strength:
+        raise ValueError('nonzero strength requires an explicit regularizer')
+    fidelity = fidelity if fidelity is not None else QuadraticFidelity(measurement)
+    if not getattr(fidelity, 'is_quadratic', False):
+        raise ValueError('Krylov requires quadratic fidelity')
+    augmented = AugmentedLeastSquaresOperator(operator, fidelity, strength, regularizer)
+    function = solve_cgls_detailed if algorithm == 'cgls' else solve_lsqr_detailed
+    result = function(augmented, augmented.rhs(measurement), **kwargs)
+    prediction = None
+    objective = residual = None
+    try:
+        prediction = operator.forward(result.reconstruction)
+        transformed = augmented.transform.forward(result.reconstruction) if strength and augmented.transform else result.reconstruction
+        objective = float(fidelity.value(prediction))+(strength/2*float(transformed.square().sum()) if strength else 0.)
+        residual = float((prediction-measurement).norm()/measurement.norm().clamp_min(1e-12))
+    except OperatorBudgetExceeded:
+        return replace(result, status='resource_exhausted', stopping_reason='operator_call_budget_exhausted',
+                       final_objective=None, final_residual=None, predicted_measurement=None)
+    return replace(result, predicted_measurement=prediction, final_objective=objective, final_residual=residual,
+        resources={**result.resources, 'gradient_calls':augmented.gradient_calls,
+                   'gradient_adjoint_calls':augmented.gradient_adjoint_calls},
+        metadata={**result.metadata, 'augmented_least_squares':True, 'regularizer':regularizer,
+                  'strength':strength, 'endpoint_diagnostics_complete':True,
+                  'uniqueness':'not_assumed; requires ker(B) intersect ker(L) = {0}'})
+
+
 def solve_cgls_detailed(
     operator: LinearOperator,
     measurement: torch.Tensor,

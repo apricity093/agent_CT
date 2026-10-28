@@ -93,6 +93,13 @@ class QuadraticFidelity:
         return self._multiply(prediction-self.observed)
 
     @_timed_prox
+    def proximal(self, value, step):
+        _check(value,self.observed)
+        if not math.isfinite(step) or step<=0: raise ValueError('step must be positive finite')
+        self.prox_calls+=1
+        return (value+step*self.weights*self.observed)/(1+step*self.weights)
+
+    @_timed_prox
     def dual_prox(self, value, step):
         self.prox_calls+=1
         if not math.isfinite(step) or step <= 0:
@@ -136,7 +143,15 @@ class TransmissionPoissonFidelity:
         return {'working_dtype':'torch.float64','returned_dtype':str(self.counts.dtype),
                 'requested_inner_tolerance':self.tolerance,'last_working_residual':self.last_residual,
                 'last_returned_residual':getattr(self,'last_returned_residual',None),
+                'returned_optimality_satisfied':getattr(self,'returned_optimality_satisfied',None),
+                'returned_residual_threshold':getattr(self,'returned_residual_threshold',None),
                 'inner_iterations_semantics':'batch-vector bisection iterations'}
+
+    def validate_minimizer(self, regularizer, strength, max_value):
+        positive_counts=bool((self.counts[self.mask.bool()]>0).all())
+        coercive=regularizer=='tikhonov' and strength>0
+        if not (positive_counts or coercive or max_value is not None):
+            raise ValueError('finite_minimizer_not_established: zero counts require identity penalty or public box')
 
     def measurement_diagnostics(self,prediction):
         _check(prediction,self.counts)
@@ -147,6 +162,11 @@ class TransmissionPoissonFidelity:
         self.mask_calls += 2
         p = torch.where(self.mask.bool(),self.scale*prediction,torch.zeros_like(prediction))
         return (self.mask*(self.I0*torch.exp(-p)+self.counts*p)).sum()
+
+    def value_per_batch(self, prediction):
+        _check(prediction, self.counts)
+        p = torch.where(self.mask.bool(), self.scale*prediction, torch.zeros_like(prediction))
+        return (self.mask*(self.I0*torch.exp(-p)+self.counts*p)).flatten(1).sum(1)
 
     def gradient(self, prediction):
         _check(prediction, self.observed if hasattr(self, "observed") else self.counts)
@@ -175,8 +195,17 @@ class TransmissionPoissonFidelity:
                 self.last_residual=working.last_residual
             result=root.to(value.dtype)
             mask_before=working.mask_calls
-            self.last_returned_residual=float((result.double()-value.double()+step*working.gradient(result.double())).abs().max())
+            residual=result.double()-value.double()+step*working.gradient(result.double())
+            self.last_returned_residual=float(residual.abs().max())
             self.mask_calls+=working.mask_calls-mask_before
+            active=torch.where(working.mask.bool(),result.double(),0.)
+            curvature=self.scale**2*working.I0*torch.exp(-self.scale*active)*working.mask
+            threshold=self.tolerance*(1+value.double().abs())+4*torch.finfo(value.dtype).eps*(1+result.double().abs())*(1+step*curvature)
+            self.returned_residual_threshold=float(threshold.max())
+            self.returned_optimality_satisfied=bool((residual.abs()<=threshold).all())
+            if not self.returned_optimality_satisfied:
+                self.inner_failures+=1
+                raise RuntimeError('poisson_prox_returned_precision')
             return result
         s = self.scale
         # In shifted coordinates u=s*(z-v+t*s*c), u+log(u)=log(t*s²*I0)-s*v+t*s²*c.
@@ -193,6 +222,9 @@ class TransmissionPoissonFidelity:
             self.inner_iterations += 1
             if bool((residual.abs() <= self.tolerance*(1+value.abs())).all()):
                 self.last_residual = float(residual.abs().max())
+                self.last_returned_residual=self.last_residual
+                self.returned_optimality_satisfied=True
+                self.returned_residual_threshold=float((self.tolerance*(1+value.abs())).max())
                 return z
             lower = torch.where(residual < 0, z, lower)
             upper = torch.where(residual >= 0, z, upper)

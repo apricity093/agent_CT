@@ -347,13 +347,17 @@ class CGLSSolver(InverseProblemSolver):
                  num_iterations: int = 10,
                  tol: float = 1e-6,
                  min_value: float = None,
-                 max_value: float = None):
+                 max_value: float = None,
+                 regularizer='none', strength=0., fidelity=None):
         self.num_iterations = num_iterations
         self.tol = tol
         self.min_value = min_value
         self.max_value = max_value
+        self.regularizer, self.strength, self.fidelity = regularizer, strength, fidelity
 
     def solve(self, measurement, operator, x_init=None, **kwargs):
+        if self.fidelity is not None or self.strength:
+            return self.solve_detailed(measurement, operator, x_init=x_init, **kwargs).reconstruction
         return cgls(operator, measurement,
                     num_iterations=self.num_iterations,
                     tol=self.tol,
@@ -363,7 +367,12 @@ class CGLSSolver(InverseProblemSolver):
 
     def solve_detailed(self, measurement, operator, x_init=None, *, control=None, callback=None, **kwargs):
         from .detailed import solve_cgls_detailed
-
+        if self.fidelity is not None or self.strength or kwargs.get('fidelity') is not None:
+            from .detailed import solve_krylov_composite
+            return solve_krylov_composite('cgls', measurement, operator, regularizer=self.regularizer,
+                strength=self.strength, fidelity=kwargs.pop('fidelity', self.fidelity),
+                num_iterations=kwargs.pop('num_iterations', self.num_iterations), tol=kwargs.pop('tol', self.tol),
+                min_value=self.min_value, max_value=self.max_value, x_init=x_init, control=control, callback=callback)
         return solve_cgls_detailed(
             operator, measurement,
             num_iterations=kwargs.pop("num_iterations", self.num_iterations),
@@ -384,15 +393,19 @@ class LSQRSolver(InverseProblemSolver):
                  atol: float = 1e-6,
                  btol: float = 1e-6,
                  min_value: float = None,
-                 max_value: float = None):
+                 max_value: float = None,
+                 regularizer='none', strength=0., fidelity=None):
         self.num_iterations = num_iterations
         self.damping = damping
         self.atol = atol
         self.btol = btol
         self.min_value = min_value
         self.max_value = max_value
+        self.regularizer, self.strength, self.fidelity = regularizer, strength, fidelity
 
     def solve(self, measurement, operator, x_init=None, **kwargs):
+        if self.fidelity is not None or self.strength:
+            return self.solve_detailed(measurement, operator, x_init=x_init, **kwargs).reconstruction
         return lsqr(operator, measurement,
                     num_iterations=self.num_iterations,
                     damping=self.damping,
@@ -404,7 +417,12 @@ class LSQRSolver(InverseProblemSolver):
 
     def solve_detailed(self, measurement, operator, x_init=None, *, control=None, callback=None, **kwargs):
         from .detailed import solve_lsqr_detailed
-
+        if self.fidelity is not None or self.strength or kwargs.get('fidelity') is not None:
+            from .detailed import solve_krylov_composite
+            return solve_krylov_composite('lsqr', measurement, operator, regularizer=self.regularizer,
+                strength=self.strength, fidelity=kwargs.pop('fidelity', self.fidelity), damping=self.damping,
+                num_iterations=kwargs.pop('num_iterations', self.num_iterations), atol=self.atol, btol=self.btol,
+                min_value=self.min_value, max_value=self.max_value, x_init=x_init, control=control, callback=callback)
         return solve_lsqr_detailed(
             operator, measurement,
             num_iterations=kwargs.pop("num_iterations", self.num_iterations),

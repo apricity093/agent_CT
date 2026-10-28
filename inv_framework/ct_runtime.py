@@ -57,7 +57,7 @@ from inv_framework.instrumentation import (
     start_memory_tracing,
 )
 from inv_framework.operators.ct import ParallelBeamRadon2D
-from inv_framework.regularizers import TVRegularizer, TikhonovRegularizer, HaarL1Regularizer
+from inv_framework.regularizers import TVRegularizer, TikhonovRegularizer, HaarL1Regularizer, ZeroRegularizer, GradientHuberRegularizer
 from inv_framework.operators.gradient import GradientOperator
 from inv_framework.solvers import (
     CGLSSolver,
@@ -646,10 +646,21 @@ def _build_fista(**parameters):
     tv_mode = params.pop("tv_mode", "isotropic")
     tv_iterations = params.pop("tv_num_iterations", 50)
     tv_tolerance = params.pop("tv_tolerance", 1e-5)
-    if prior == "tikhonov":
+    delta = params.pop('delta', .01)
+    if prior in (None, 'none'):
+        reg = ZeroRegularizer()
+        params['strength'] = 0.
+        params.pop('reg_strength', None)
+    elif prior == 'h1':
+        # The concrete image shape is supplied by build_solver below.
+        reg = params.pop('smooth_regularizer')
+    elif prior == 'huber':
+        reg = GradientHuberRegularizer(delta)
+    elif prior == "tikhonov":
         reg = TikhonovRegularizer()
     elif prior == "haar_l1":
         reg = HaarL1Regularizer(level)
+        reg.num_iterations, reg.tolerance = tv_iterations, tv_tolerance
     elif prior == "tv":
         reg = TVRegularizer(mode=tv_mode, num_iterations=tv_iterations, tolerance=tv_tolerance)
     else:
@@ -671,6 +682,9 @@ def _build_constrained(name, **parameters):
 def _confirm_constrained_endpoint(solver, result, reconstruction, prediction, measurement, mask):
     from .residual_ball import ResidualBall
     cfg = solver.parameters
+    raw_residual = float(((prediction-measurement)*(mask.to(prediction) if mask is not None else 1.)).norm())
+    if solver.whitening is not None:
+        prediction, measurement = prediction*solver.whitening, measurement*solver.whitening
     constraint = ResidualBall(measurement, cfg['epsilon'], source=cfg['epsilon_source'], mask=mask).diagnostics(prediction)
     tv = float(solver.regularizer.value(reconstruction))
     feasible = constraint['constraint_violation'] <= cfg['feasibility_tolerance']
@@ -681,7 +695,7 @@ def _confirm_constrained_endpoint(solver, result, reconstruction, prediction, me
         passed = passed and feasible and result.metadata['optimization_residual'] <= result.metadata['parameters']['tolerance']
     return {'schema_version':'ct.endpoint_confirmation.v1', 'status':'confirmed' if passed else 'unconfirmed',
             'passed':passed, 'finite':bool(torch.isfinite(reconstruction).all() and math.isfinite(tv) and math.isfinite(constraint['raw_residual_norm'])), 'endpoint_diagnostics_complete':complete, 'tv':tv,
-            'constraint_diagnostics':constraint, 'feasibility_status':'feasible' if feasible else 'violated',
+            'constraint_diagnostics':{**constraint, 'residual_metric':cfg['residual_metric'], 'unwhitened_residual_norm':raw_residual}, 'feasibility_status':'feasible' if feasible else 'violated',
             'solver_status':result.status, 'optimization_residual':result.metadata['optimization_residual'],
             'regularizer_work':{'endpoint_tv_value_calls':1, 'transform_forward_calls':1},
             'reasons':[] if passed else ['constrained_endpoint_inconsistent']}
@@ -695,7 +709,7 @@ def _build_split(name, **parameters):
     level = params.pop("level", 2)
     delta = params.pop("delta", .01)
     mode = params.pop("tv_mode", "isotropic")
-    reg = {"tikhonov": lambda: TikhonovRegularizer(), "h1": lambda: "h1",
+    reg = {"none": lambda: ZeroRegularizer(), "tikhonov": lambda: TikhonovRegularizer(), "h1": lambda: "h1",
            "tv": lambda: TVRegularizer(mode=mode), "huber": lambda: GradientHuberRegularizer(delta),
            "haar_l1": lambda: HaarL1Regularizer(level)}[prior]()
     return (ADMMSolver if name == "admm" else PDHGSolver)(regularizer=reg, **params)
@@ -766,22 +780,29 @@ def build_solver(name: str, parameters: Mapping[str, Any], case: Any):
             params["reg_strength"] = strength
         if prior == "h1":
             params["regularization_operator"] = GradientOperator(case.geometry["domain_shape"])
+    if name == 'fista' and params.get('regularizer') == 'h1':
+        params['smooth_regularizer'] = TikhonovRegularizer(GradientOperator(case.geometry['domain_shape']))
     builder = SOLVER_BUILDERS[name]
     try:
         solver = builder(**params)
-        if name in {'fista','admm','pdhg','tikhonov'}:
+        if name in CONSTRAINED_TV_IDS and params.get('residual_metric') == 'gaussian_whitened':
+            from .measurement import _parameter
+            public=getattr(case, 'public_measurement', {}) or {}
+            if 'sigma' not in public: raise ValueError('gaussian whitening requires public sigma')
+            solver.whitening=_parameter(public['sigma'],case.measurement,'sigma',True).reciprocal()
+        if name in {'fista','admm','pdhg','tikhonov','cgls','lsqr'}:
             from .fidelity import build_fidelity
             model = fidelity_options['data_fidelity'] or 'l2'
             if model=='transmission_poisson_nll' and params.get('min_value')!=0:
                 raise ValueError('P3 transmission_poisson_nll requires min_value=0')
-            if model == 'transmission_poisson_nll' and name != 'pdhg':
-                raise ValueError('transmission_poisson_nll requires PDHG')
             solver.fidelity = build_fidelity(model,case.measurement,getattr(case,'public_measurement',None),
                 (getattr(case,'metadata',{}) or {}).get('measurement',{}), mask=getattr(case,'valid_measurement_mask',None),
                 weight_source=fidelity_options['weight_source'], tolerance=fidelity_options['nll_tolerance'],
                 max_iterations=fidelity_options['nll_max_iterations'] or 200) if model != 'l2' or (getattr(case,'valid_measurement_mask',None) is not None and not bool(getattr(case,'valid_measurement_mask',None).all())) else None
             if name=='tikhonov' and solver.fidelity is not None and (params.get('min_value') is not None or params.get('max_value') is not None):
                 raise ValueError('weighted Tikhonov CG supports unconstrained reconstruction only')
+            if model == 'transmission_poisson_nll':
+                solver.fidelity.validate_minimizer(params.get('regularizer'), params.get('strength',0), params.get('max_value'))
         return solver
     except (TypeError, ValueError) as error:
         raise ConfigError(f"invalid parameters for {name}: {error}") from error
@@ -1665,11 +1686,11 @@ def run_case(
                 "normalized_data_residual": endpoint_report.final_residual,
             }
         except RuntimeError as error:
-            if str(error) != 'poisson_prox_inner_max_iterations': raise
+            if str(error) not in {'poisson_prox_inner_max_iterations','poisson_prox_returned_precision','joint_prox_inner_max_iterations'}: raise
             endpoint_confirmation = {
                 'schema_version':'ct.endpoint_confirmation.v1', 'passed':False,
                 'status':'inner_unconverged','native_criterion_value':None,
-                'reasons':['poisson_prox_inner_max_iterations'],
+                'reasons':[str(error)],
                 'endpoint_diagnostics_complete':False}
         if name in CONSTRAINED_TV_IDS and not endpoint_confirmation['passed']:
             raise NumericalFailure('constrained_endpoint_inconsistent')

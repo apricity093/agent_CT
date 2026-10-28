@@ -105,10 +105,9 @@ def test_h1_value_gradient_direction_and_generalized_cg():
     expected = torch.linalg.solve(a.T@a + 0.4*matrix_d.T@matrix_d, (y@a).T).T
     error = float((result.reconstruction.flatten(1)-expected).norm()/expected.norm())
     assert error < 1e-6
-    before = list(op.calls)
-    rejected = FISTASolver(reg).solve_detailed(y, op)
-    assert rejected.status == 'invalid_parameters' and rejected.actual_iterations == 0
-    assert op.calls == before
+    smooth = FISTASolver(reg, strength=.4, num_iterations=300, tolerance=1e-9).solve_detailed(y, op)
+    assert smooth.status != 'invalid_parameters'
+    torch.testing.assert_close(smooth.reconstruction.flatten(1), expected, atol=1e-6, rtol=1e-6)
     with pytest.raises(ValueError, match='Generalized'):
         reg.proximal(x, .1)
     print(f'H1 CG relative error={error:.3e}')
@@ -186,7 +185,7 @@ def test_fista_budget_and_nonfinite(prior):
     assert result.status == 'numerical_error' and result.actual_iterations == 0
 
 
-@pytest.mark.parametrize('params', [dict(regularizer='h1'), dict(regularizer='haar_l1',min_value=0),
+@pytest.mark.parametrize('params', [dict(regularizer='unknown'),
     dict(strength=.2,reg_strength=.3),dict(strength=float('inf')),dict(level=1.5),dict(power_iterations=0)])
 def test_composite_parameter_rejection(params):
     assert validate_parameter_values('fista', params).errors
