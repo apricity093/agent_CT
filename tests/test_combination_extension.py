@@ -109,6 +109,13 @@ def test_poisson_returned_float32_optimality_is_checked():
     assert report['last_returned_residual']<=report['returned_residual_threshold']
 
 
+@pytest.mark.parametrize('algorithm',['admm','pdhg'])
+def test_split_haar_shape_is_rejected_before_execution(algorithm):
+    from inv_framework.solvers.specs import validate_parameter_values
+    result=validate_parameter_values(algorithm,{'regularizer':'haar_l1','level':5},domain_shape=(1,16,16))
+    assert 'geometry_shape_invalid' in result.reason_codes
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(),reason='ASTRA CUDA required')
 def test_fdk_link_preserves_original_observations():
     import astra

@@ -1782,7 +1782,7 @@ def validate_parameter_values(
         add_error('P3 transmission_poisson_nll requires min_value=0', 'parameter_constraint_violation')
     if algorithm in {"fista", "admm", "pdhg"} and normalized.get("data_fidelity") == "wls" and normalized.get("weight_source") is None:
         add_error("wls requires explicit weight_source", "parameter_constraint_violation")
-    if algorithm in {"fista", "tikhonov"}:
+    if algorithm in {"fista", "tikhonov", "admm", "pdhg"}:
         prior = normalized.get("regularizer", "tikhonov")
         bounded = normalized.get("min_value") is not None or normalized.get("max_value") is not None
         if bounded and algorithm == 'tikhonov':
