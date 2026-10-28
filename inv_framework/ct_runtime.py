@@ -1533,6 +1533,17 @@ def run_case(
         resource_accounting.start_phase("solver")
         try:
             solve_result = solver.solve_detailed(case.measurement, counted_operator, control=control, **({"mask": case.valid_measurement_mask} if name in CONSTRAINED_TV_IDS else {}), **({"fidelity": solver.fidelity} if getattr(solver,"fidelity",None) is not None else {}))
+        except OperatorBudgetExceeded as error:
+            recorder=getattr(resource_accounting.counters,'last_solver_recorder',None)
+            if recorder is None or recorder.previous is None: raise
+            terminal=recorder.records[-1] if recorder.records else None
+            solve_result=recorder.finish(recorder.previous,
+                actual_iterations=recorder.completed_iteration,
+                status='resource_exhausted',
+                stopping_reason='wall_time_budget_exhausted' if error.kind=='wall' else 'operator_call_budget_exhausted',
+                final_objective=recorder.last_completed_objective,
+                final_residual=terminal.normalized_data_residual if terminal is not None and terminal.iteration==recorder.completed_iteration else None,
+                metadata={'checkpoint_source':'last_complete_iteration','endpoint_diagnostics_complete':False})
         finally:
             resource_accounting.finish_phase("solver")
         solver_counters = counted_operator.stats()

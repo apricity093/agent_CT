@@ -280,6 +280,16 @@ class IterationRecorder:
         self.started = time.perf_counter()
         self.records: list[IterationRecord] = []
         self.previous: torch.Tensor | None = None
+        self.completed_iteration=0
+        self.last_completed_objective=None
+        owner=operator
+        while not hasattr(owner,'counters') and hasattr(owner,'operator'):
+            owner=owner.operator
+        counters=getattr(owner,'counters',None)
+        if counters is not None:
+            # The runtime can retain the last complete checkpoint when a
+            # legacy detailed loop propagates a cooperative budget exception.
+            counters.last_solver_recorder=self
         self.terminal_previous: torch.Tensor | None = None
         # Keep the old attribute as a compatibility alias.  New result
         # payloads use the canonical ``numerical_error`` status.
@@ -336,6 +346,8 @@ class IterationRecorder:
         # skipped checkpoint must not hide a NaN/Inf that later contaminates
         # the reconstruction.
         finite = bool(torch.isfinite(value).all())
+        self.completed_iteration=int(iteration)
+        self.last_completed_objective=objective
         self.terminal_previous = self.previous
         if residual is not None:
             finite = finite and bool(torch.isfinite(residual).all())
