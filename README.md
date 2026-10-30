@@ -6,7 +6,6 @@
 
 当前源码提供 17 个 ordinary-CT solver、纯 PyTorch 2D parallel-beam Radon、ASTRA
 3D/FDK 后端，以及可供上层 inverse-problem Agent 程序化读取的算法 metadata。
-CT 与 USCT 是独立问题域；本仓库不包含或替代 USCT 算法。
 
 ## CT 重建模型
 
@@ -385,6 +384,17 @@ solver 迭代的 operator calls 分别记账；有限 TV proximal 的限制见�
 
 ## 可组合算法与 Agent
 
+当前完整支持矩阵及数学、数据和参数要求见 [已支持的 CT 组件组合](docs/supported_combinations.md)。
+
+CT 请求将 `solver`、`operator`、`regularizer`、`data_fidelity`、
+`observation_model`、`constraints` 与公开 `noise_parameters` 分开表达。
+Agent 先发现候选，再校验物理域、数据字段和数学兼容性，最后装配并执行。
+已登记的二次组合可使用 L2、已知方差 Gaussian NLL 或固定 WLS；
+FISTA/ADMM/PDHG 还提供纯透射 Poisson NLL 路径。正则包括无正则、恒等
+Tikhonov、H1、两种 TV、梯度 Huber 与 Haar detail-L1。
+这表示受兼容性约束的组件组合，并不表示任意 solver、prior 与几何均可互换；
+执行完成、优化收敛和重建质量分别记录。下方用固定种子的真实图像展示部分路径。
+
 FISTA/H1/Haar 的参数和兼容性见 [用法](docs/composable_reconstruction.md)，
 ADMM/PDHG/Huber 见 [分裂算法](docs/splitting_solvers.md)，
 Gaussian NLL、WLS 与透射 Poisson NLL 见 [保真项](docs/data_fidelity.md)。
@@ -402,42 +412,77 @@ ASD 变体及参考许可见 [来源](docs/constrained_tv_sources.md)。
 
 约束 PDHG 依赖凸 TV 与 A/D 谱上界，必须同时满足可行性和原生 fixed-point
 条件才报告 converged。ASD 为 SART2D feasibility-backtracking 变体，无全局最优保证。
-TV 整项 proximal 为有限 FGP，不提供精确近端 gap 证书。
-
-已有高精度尝试未通过：稀疏 CPU PDHG 在 20000 轮时 epsilon=.2、残差
-.2000011504、fixed-point 6.46e-5、相对 TV gap 1.88e-4，未达到 1e-5 门槛；
-稀疏 CPU ASD 在 320 sweeps 可行但 stalled，TV gap 约 8.16%。稀疏 CUDA 独立
-SLSQP 的 LSQ 子问题失败；有限角 CPU 参考成功但生产运行中断，其余长程与
-CUDA 成本验证不完整。严格参考成功、converged 和 TV gap<1e-5 的测试保留，
-这些限制没有被正常接口接入消除。
-
-独立质量示例的固定默认值、单 phantom/seed、CPU 32² 预算端点不代表普遍性能。
-混合 WLS 是近似；早期 SART 失败尝试在结构化成本输出前中断，其精确成本无法恢复，
-接受端点汇总不包含该缺口。
+`tv_fista` 的 TV proximal 为有限 FGP；通用 `fista` 的 TV/受约束 Haar
+使用带 gap 及误差目标的联合近端，内层精度不足不会标为收敛。
 
 ## 最新 Agent 端到端结果
 
-当前本地主项目的正式入口为
-[2026-10-24 组织 phantom 结果](../../artifacts/ct-agent-tissue-showcase-20261024/README.md)。
-17 项真实 Agent 调用中，15 项执行成功、2 项预算中断；优化状态分别为
-2 项 converged、2 项 completed_valid、11 项 max_iterations 和 2 项 resource_exhausted。
-分组图像、完整指标和读取说明集中在该入口，不在多个 README 维护重复表格。
+以下选取少量真实 Agent 结果，展示 **solver 切换、正则切换、保真项切换及
+3D 几何入口**。
 
-- [experiment.json](../../artifacts/ct-agent-tissue-showcase-20261024/experiment.json)：协议、环境、注册表、公平性门控与限制。
-- [summary.json](../../artifacts/ct-agent-tissue-showcase-20261024/summary.json)：各算法的状态、指标与 Agent 资源汇总。
-- `algorithms/<solver>/diagnostics.json`：独立原生参数、轨迹、终点与 CT runtime 资源。
-- `algorithms/<solver>/details.json`：请求、选择、实际导入与评价证据；重复内容用本地 JSON 引用保存。
-- `data/` 与 `algorithms/<solver>/reconstruction.pt`：可复现输入和完整或预算中断返回点。
+### 2D Gaussian：切换 solver 与 regularizer
 
-这些链接依赖主项目的本地结果目录，单独克隆 CT 仓库不携带该批结果。
-CT wall、完整 Agent wall 和 FDK backend reconstruction 时间分别解释；
-预算中断的未确认终点不填成收敛或有效独立评价。不同观测域/目标分组，
-门控拒绝的组不排名，单案例图像指标不代表普遍质量。
+128×128 组织 phantom，48 views 覆盖 180°，匹配的
+`ParallelBeamRadon2D` 生成观测并重建。Gaussian σ=0.002，使用已知方差 NLL、
+非负约束及零初始化。FISTA/ADMM/PDHG 的恒等 Tikhonov 对照共用
+λ=7499.99953125；FISTA 的 TV 与 Haar-L1 是另行记录参数的不同目标。
+参数通过独立种子 `271828` 的测量域双折验证选择，truth 只用于生成与最终评价。
 
-**FDK 数据一致性异常待核查：**源观测范数约 94.3765，运行 metrics 中约
-0.0223051，原生归一化残差约 4314.76。独立图像质量与此异常并存，
-completed_valid 不表示数据一致性通过。该批来自 dirty checkout，不代表 P6
-远程固定来源安装验收。既有严格精度限制见上节。
+![固定种子Gaussian观测下的solver和正则组合重建](docs/assets/component-showcase/gaussian_components.png)
+
+| Solver + regularizer | Data fidelity | λ | PSNR (dB) | SSIM | RMSE | 优化状态 |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| FISTA + 恒等 Tikhonov | Gaussian NLL | 7499.99953125 | 21.70 | 0.476 | 3.29036e-4 | resource_exhausted |
+| ADMM + 恒等 Tikhonov | Gaussian NLL | 7499.99953125 | 25.07 | 0.340 | 2.23034e-4 | resource_exhausted |
+| PDHG + 恒等 Tikhonov | Gaussian NLL | 7499.99953125 | 23.51 | 0.505 | 2.67076e-4 | resource_exhausted |
+| FISTA + isotropic TV | Gaussian NLL | 0.0749999953125 | 22.91 | 0.497 | 2.86273e-4 | resource_exhausted |
+| FISTA + Haar detail-L1，level=2 | Gaussian NLL | 14.9999990625 | 23.36 | 0.507 | 2.71626e-4 | resource_exhausted |
+
+
+这些案例说明组合能够通过 Agent 链路执行并保存结果，不表示已经收敛或质量最优。
+
+### 2D Poisson：同一 counts 切换 data fidelity
+
+保持 128×128、48 views、同一非负 TV 和零初始化，使用同一份纯透射计数：
+`counts ~ Poisson(1000 * exp(-Ax))`，s=1，无电子噪声或背景。
+post-log WLS 采用固定 1 个计数的 log-floor；pre-log NLL 直接读取原始 counts。
+两者 λ 均为 0.000261538623046875，原始 counts 不被修改。
+
+![同一Poisson计数下PDHG与TV的两种保真项重建](docs/assets/component-showcase/poisson_fidelity.png)
+
+| Solver + regularizer | Data fidelity | PSNR (dB) | SSIM | RMSE | 优化状态 |
+| --- | --- | ---: | ---: | ---: | --- |
+| PDHG + isotropic TV | post-log WLS，近似模型 | 2.70 | 0.122 | 2.93123e-3 | resource_exhausted |
+| PDHG + isotropic TV | pre-log 透射 Poisson NLL | 2.64 | 0.124 | 2.95284e-3 | resource_exhausted |
+
+该噪声条件下图像质量较差，两条路径都达到时间预算；这里展示保真项接入与输出保存，
+**不将其列为高质量重建成功案例**。
+
+### 3D cone-beam：FDK
+
+直接读取历史 `cone_3d/tissue_volume_clean_64` 的同一份 HDF5 truth、原始投影和几何，
+使用 `ASTRAFDKOperator3D + FDK`、无显式正则、Ram-Lak、
+`short_scan=false`、`voxel_supersampling=1`，经真实 Agent 调用。
+上排为 reference，下排为重建，依次显示中心 axial、coronal 和 sagittal 切面。
+
+![原README同一3D观测的FDK重建及三个正交切面](docs/assets/component-showcase/cone_fdk.png)
+
+| Operator + method | Regularizer | PSNR (dB) | SSIM | RMSE | 状态 |
+| --- | --- | ---: | ---: | ---: | --- |
+| ASTRA cone-beam + FDK | 无 | 30.68 | 0.818 | 1.16949e-4 | completed_valid |
+
+独立切面图已保存：[axial](docs/assets/component-showcase/fdk_axial.png)、
+[coronal](docs/assets/component-showcase/fdk_coronal.png)、
+[sagittal](docs/assets/component-showcase/fdk_sagittal.png)。
+服务器同时保留该次 `fdk/backend/reconstruction.pt`、输入 HDF5、请求、指标及诊断，
+便于后续复用；本仓库包含图版、独立 PNG、PDF/SVG 和
+[精确参数与成本](docs/assets/component-showcase/selected_results.json)。
+
+### 展示范围与完整实验
+
+- 所有面板统一灰度窗 `[0, 0.004]`，无裁剪、平滑或逐图归一化；显示窗外数值仅在显示时饱和。
+  PSNR/SSIM 使用固定 data range=0.004、完整图像/体数据，RMSE 使用原始数值。
+  3D SSIM 为轴向二维切片均值。
 
 ## Python API
 
@@ -505,8 +550,7 @@ python -c "import torch; import pytest; raise SystemExit(pytest.main(['test/test
 这组命令只检查命令发现、registry/config 对应及公平协议，不执行真实重建。
 下列完整测试和快速数值测试则包含真实 solver 调用。
 
-全部测试包含高成本独立参考与长程高精度 CT 专项，后者有已知未通过项，
-不作为日常快速检查或本地安装通过的默认标准。只有明确需要完整范围时运行：
+全部测试包含高成本独立参考与长程高精度 CT 专项，只有明确需要完整范围时运行：
 
 ```bash
 python -m pytest -q test tests
@@ -572,62 +616,3 @@ README 中的 `configs/examples`、benchmark/protocol 文件、`test/data` 和 d
 ## 许可证
 
 项目元数据声明为 MIT。外部后端和数据集保持各自许可证与使用条款。
-# Selected CT component combinations
-
-The 17 algorithm IDs remain unchanged. `cgls` and `lsqr` support weighted L2,
-known-variance Gaussian NLL and supplied WLS with no penalty, identity Tikhonov
-or H1 through a weighted augmented system. These new Krylov combinations are
-unconstrained. LSQR damping represents an identity strength of `damping**2`;
-explicit augmentation and damping cannot both be active. Rank-deficient least
-squares is allowed without a uniqueness claim. Regularized CG requires
-`ker(B) intersect ker(L) = {0}` for a positive-definite normal equation.
-
-`fista`, `admm` and `pdhg` support the same quadratic fidelities and zero-background
-transmission Poisson NLL with `none`, `tikhonov`, `h1`, `tv`, `huber` or `haar_l1`.
-TV has isotropic and anisotropic modes. A zero strength selects `none` and skips
-regularizer transforms. Quadratic problems allow no constraint, nonnegativity or
-an explicit box. Transmission NLL requires a nonnegative lower bound of zero,
-raw integer `counts`, public `I0 > 0` and public `scale > 0`. Zero counts are legal;
-when a finite minimizer is not established, a positive identity penalty or a
-public finite upper bound is required. No upper bound is inferred from truth.
-
-FISTA handles H1/Huber in the smooth gradient. Its accepted step must satisfy the
-actual smooth majorizer; Poisson extrapolation restarts if it leaves the
-nonnegative image domain. Identity and box have a closed-form joint prox.
-Generic TV and constrained Haar use dual FGP denoising with a primal-dual gap,
-including projection inside the dual iteration. Their distance error target is
-`tv_tolerance * max(norm(v), 1) / k**2.1`. `tv_num_iterations` also caps this Haar
-inner solve. Insufficient precision reports `joint_prox_inner_max_iterations`;
-it is not convergence. The legacy `tv_fista` entry retains its post-prox box
-projection semantics and is identified separately.
-
-ADMM uses the two blocks `x` and `(u,z,q)` with `u=Ax`, `z=Tx`, `q=x`; the
-observation prox covers quadratic and Poisson terms. The x step uses CG with
-relative target `cg_tolerance / k**2`, capped by `cg_max_iterations`. PDHG uses
-a Schur upper bound for `tau * sigma * norm(K)**2 < 1`, rather than treating a
-finite power estimate as a proven upper bound. Poisson prox diagnostics check
-the optimality residual after conversion to the returned dtype and include its
-roundoff allowance.
-
-`constrained_pdhg` and `asd_pocs_tv` accept `residual_metric: gaussian_whitened`
-with public known `sigma`; both data updates and the residual ball then use
-`Sigma**(-1/2) A`. Epsilon is dimensionless in this mode. The helper
-`gaussian_whitened_radius(m, alpha=0.01)` supplies the conservative chi-square
-radius. Raw residuals and whitened constraint diagnostics are recorded separately.
-ASD remains a feasibility/backtracking heuristic; feasible stagnation is not a
-global optimization certificate.
-
-Projection arrays, counts, sigma and fixed weights stay in the case public
-measurement fields. Gaussian NLL uses `1/sigma**2`; pure Poisson post-log WLS
-uses the public fixed count-floor rule and remains an approximation. Mixed-noise
-support is retained without a new likelihood. Penalized EM, MM and incremental
-proximal SART are mathematically feasible extensions outside this implementation.
-
-ASTRA FDK now owns a copy of its projection working buffer because `FDK_CUDA`
-filters GPU-linked storage in place. It preserves the caller's observations.
-GPU-link and CPU-copy reconstruction differences remain a separate backend
-limitation; observation preservation does not assert equality of these paths.
-
-The numerical references used for these interfaces are the
-[LSQR formulation](https://web.stanford.edu/group/SOL/software/lsqr/) and
-[inexact proximal-gradient analysis](https://arxiv.org/abs/1109.2415).

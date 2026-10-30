@@ -59,7 +59,7 @@ def test_quadratic_fista_closed_form_backtracking_and_actual_cost():
     torch.testing.assert_close(solver.solve(y, base), result.reconstruction)
     torch.testing.assert_close(fista(base, y, regularizer=reg, strength=strength, num_iterations=250,
                                      step_size=10., tolerance=0), result.reconstruction)
-    print(f'quadratic relative error={error:.3e}, counted_forward={op.stats()['forward_calls']}, counted_adjoint={op.stats()['adjoint_calls']}, rejected={result.resources["backtracking_rejections"]}')
+    print(f"quadratic relative error={error:.3e}, counted_forward={op.stats()['forward_calls']}, counted_adjoint={op.stats()['adjoint_calls']}, rejected={result.resources['backtracking_rejections']}")
 
 
 def test_identity_strength_nonnegative_and_convergence():

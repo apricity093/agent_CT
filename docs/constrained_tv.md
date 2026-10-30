@@ -1,5 +1,7 @@
 # Constrained TV library usage
 
+当前支持范围以[组件组合支持表](supported_combinations.md)为准；下文保留对应实现阶段的接口与数学说明。
+
 The library exposes `ConstrainedTVSolver`, `constrained_pdhg`, and `asd_pocs_tv`
 from `inv_framework.solvers`. The detailed API returns `SolveResult`;
 convenience functions return the image. The registry/CLI IDs are

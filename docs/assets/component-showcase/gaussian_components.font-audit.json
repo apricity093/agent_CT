@@ -1,0 +1,10 @@
+{
+  "pdf": "external/ct-benchlab/docs/assets/component-showcase/gaussian_components.pdf",
+  "auditable": true,
+  "minimum_required_pt": 5.0,
+  "minimum_found_pt": 10.0,
+  "text_run_count": 17,
+  "below_minimum_count": 0,
+  "below_minimum": [],
+  "warnings": []
+}

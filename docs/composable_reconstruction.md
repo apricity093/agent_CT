@@ -1,5 +1,7 @@
 # FISTA、H1 与 Haar 使用说明
 
+当前支持范围以[组件组合支持表](supported_combinations.md)为准；下文保留对应实现阶段的接口与数学说明。
+
 ## 接口与支持范围
 
 `solvers.specs`、`ct_runtime` 和 Agent 共用 registry。`fista` 是 solver ID；H1 和 Haar 是正则配置。Tikhonov-CG、`tv_fista` 函数与 `TVFISTASolver` 保留。

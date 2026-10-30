@@ -1,5 +1,7 @@
 # Data fidelity execution paths
 
+当前支持范围以[组件组合支持表](supported_combinations.md)为准；下文保留对应实现阶段的接口与数学说明。
+
 The default remains `parameters.data_fidelity: l2`. FISTA, ADMM and PDHG accept `gaussian_nll` and `wls`; only PDHG accepts `transmission_poisson_nll`. Existing prior/constraint restrictions still apply. FISTA does not acquire H1, Huber or constrained TV/Haar proximal capabilities through this extension.
 
 Registry parameter definitions drive configuration loading and Agent allowed parameters. Adapter forwards scalar parameters through the existing CLI overrides. Runtime `build_solver` constructs a fidelity using public measurement arrays; the existing detailed solve route passes this object to the numerical core and independent endpoint confirmation. No truth or clean projection enters this construction.

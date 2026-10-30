@@ -1,5 +1,7 @@
 # ADMM、PDHG 与梯度 Huber 使用说明
 
+当前支持范围以[组件组合支持表](supported_combinations.md)为准；下文保留对应实现阶段的接口与数学说明。
+
 ## 接口与支持矩阵
 
 `admm`、`pdhg` 的裸函数、`solve()` 和 `solve_detailed()` 共用 splitting.py 核心，runtime 构建器复用 registry。算法 YAML 位于 configs/algorithms。二次保真项和透射 NLL 的范围见 [保真项说明](data_fidelity.md)。

@@ -1,0 +1,340 @@
+{
+  "seed_2d": 104729,
+  "seed_3d": 20261024,
+  "selection_rule": "Fixed G2 intermediate Gaussian/Poisson conditions; component coverage, not best-seed or best-quality selection. 3D reuses the exact historical README input.",
+  "image_display": {
+    "window": [
+      0,
+      0.004
+    ],
+    "gamma": 1,
+    "colormap": "gray",
+    "crop": "none",
+    "interpolation": "nearest",
+    "note": "Identical fixed window across all panels; values outside the display window are saturated for display only; metrics use original values."
+  },
+  "case_count_2d": 2,
+  "additional_3d_baselines": 1,
+  "results": [
+    {
+      "case": "G2_gaussian_002_104729_128",
+      "method": "fista_identity",
+      "status": "resource_exhausted",
+      "convergence_status": "resource_exhausted",
+      "metrics": {
+        "image.rmse": 0.00032903611637040365,
+        "image.relative_l2": 0.21799493636068676,
+        "image.psnr": 21.696328415917932,
+        "image.ssim": 0.4762723899586334
+      },
+      "parameters": {
+        "num_iterations": 2000,
+        "data_fidelity": "gaussian_nll",
+        "regularizer": "tikhonov",
+        "strength": 7499.99953125,
+        "min_value": 0.0,
+        "tv_num_iterations": 1000,
+        "tv_tolerance": 0.001,
+        "level": 2
+      },
+      "parameter_sources": {
+        "num_iterations": "user_override",
+        "data_fidelity": "user_override",
+        "regularizer": "user_override",
+        "strength": "validation_search",
+        "min_value": "user_override",
+        "tv_num_iterations": "user_override",
+        "tv_tolerance": "user_override",
+        "level": "user_override"
+      },
+      "resource_usage": {
+        "runtime_s": 51.31397736817598,
+        "wall_seconds": 51.31397736817598,
+        "iterations_completed": 281,
+        "forward_calls": 585,
+        "adjoint_calls": 584,
+        "gpu_runtime_seconds": 45.15755723667147,
+        "peak_gpu_memory_mb": 10.19384765625,
+        "prox_iterations": 0,
+        "backend_reconstruction_calls": 0
+      }
+    },
+    {
+      "case": "G2_gaussian_002_104729_128",
+      "method": "admm_identity",
+      "status": "resource_exhausted",
+      "convergence_status": "resource_exhausted",
+      "metrics": {
+        "image.rmse": 0.0002230335968505285,
+        "image.relative_l2": 0.14776552582754512,
+        "image.psnr": 25.073794060862355,
+        "image.ssim": 0.3399272762798194
+      },
+      "parameters": {
+        "num_iterations": 2000,
+        "data_fidelity": "gaussian_nll",
+        "regularizer": "tikhonov",
+        "strength": 7499.99953125,
+        "min_value": 0.0,
+        "cg_max_iterations": 100,
+        "cg_tolerance": 1e-05
+      },
+      "parameter_sources": {
+        "num_iterations": "user_override",
+        "data_fidelity": "user_override",
+        "regularizer": "user_override",
+        "strength": "validation_search",
+        "min_value": "user_override",
+        "cg_max_iterations": "user_override",
+        "cg_tolerance": "user_override"
+      },
+      "resource_usage": {
+        "runtime_s": 51.08495229575783,
+        "wall_seconds": 51.08495229575783,
+        "iterations_completed": 9,
+        "forward_calls": 615,
+        "adjoint_calls": 624,
+        "gpu_runtime_seconds": 45.5076195106506,
+        "peak_gpu_memory_mb": 11.1015625,
+        "prox_iterations": 0,
+        "backend_reconstruction_calls": 0
+      }
+    },
+    {
+      "case": "G2_gaussian_002_104729_128",
+      "method": "pdhg_identity",
+      "status": "resource_exhausted",
+      "convergence_status": "resource_exhausted",
+      "metrics": {
+        "image.rmse": 0.00026707610727906247,
+        "image.relative_l2": 0.17694482797814864,
+        "image.psnr": 23.508499074068038,
+        "image.ssim": 0.5049989836488513
+      },
+      "parameters": {
+        "num_iterations": 2000,
+        "data_fidelity": "gaussian_nll",
+        "regularizer": "tikhonov",
+        "strength": 7499.99953125,
+        "min_value": 0.0
+      },
+      "parameter_sources": {
+        "num_iterations": "user_override",
+        "data_fidelity": "user_override",
+        "regularizer": "user_override",
+        "strength": "validation_search",
+        "min_value": "user_override"
+      },
+      "resource_usage": {
+        "runtime_s": 51.34697322268039,
+        "wall_seconds": 51.34697322268039,
+        "iterations_completed": 301,
+        "forward_calls": 614,
+        "adjoint_calls": 613,
+        "gpu_runtime_seconds": 44.929372632026656,
+        "peak_gpu_memory_mb": 10.71728515625,
+        "prox_iterations": 0,
+        "backend_reconstruction_calls": 0
+      }
+    },
+    {
+      "case": "G2_gaussian_002_104729_128",
+      "method": "fista_tv",
+      "status": "resource_exhausted",
+      "convergence_status": "resource_exhausted",
+      "metrics": {
+        "image.rmse": 0.0002862729952888467,
+        "image.relative_l2": 0.18966326273898562,
+        "image.psnr": 22.90559218503644,
+        "image.ssim": 0.4965419848704754
+      },
+      "parameters": {
+        "num_iterations": 2000,
+        "data_fidelity": "gaussian_nll",
+        "regularizer": "tv",
+        "strength": 0.0749999953125,
+        "min_value": 0.0,
+        "tv_num_iterations": 1000,
+        "tv_tolerance": 0.001,
+        "level": 2
+      },
+      "parameter_sources": {
+        "num_iterations": "user_override",
+        "data_fidelity": "user_override",
+        "regularizer": "user_override",
+        "strength": "validation_search",
+        "min_value": "user_override",
+        "tv_num_iterations": "user_override",
+        "tv_tolerance": "user_override",
+        "level": "user_override"
+      },
+      "resource_usage": {
+        "runtime_s": 51.16899138595909,
+        "wall_seconds": 51.16899138595909,
+        "iterations_completed": 242,
+        "forward_calls": 507,
+        "adjoint_calls": 507,
+        "gpu_runtime_seconds": 38.39640257692335,
+        "peak_gpu_memory_mb": 10.77978515625,
+        "prox_iterations": 484,
+        "backend_reconstruction_calls": 0
+      }
+    },
+    {
+      "case": "G2_gaussian_002_104729_128",
+      "method": "fista_haar",
+      "status": "resource_exhausted",
+      "convergence_status": "resource_exhausted",
+      "metrics": {
+        "image.rmse": 0.00027162634616787075,
+        "image.relative_l2": 0.17995947891657343,
+        "image.psnr": 23.361761993005263,
+        "image.ssim": 0.5072018445625385
+      },
+      "parameters": {
+        "num_iterations": 2000,
+        "data_fidelity": "gaussian_nll",
+        "regularizer": "haar_l1",
+        "strength": 14.999999062500002,
+        "min_value": 0.0,
+        "tv_num_iterations": 1000,
+        "tv_tolerance": 0.001,
+        "level": 2
+      },
+      "parameter_sources": {
+        "num_iterations": "user_override",
+        "data_fidelity": "user_override",
+        "regularizer": "user_override",
+        "strength": "validation_search",
+        "min_value": "user_override",
+        "tv_num_iterations": "user_override",
+        "tv_tolerance": "user_override",
+        "level": "user_override"
+      },
+      "resource_usage": {
+        "runtime_s": 51.08675598260015,
+        "wall_seconds": 51.08675598260015,
+        "iterations_completed": 241,
+        "forward_calls": 505,
+        "adjoint_calls": 504,
+        "gpu_runtime_seconds": 37.873784577369726,
+        "peak_gpu_memory_mb": 10.40478515625,
+        "prox_iterations": 654,
+        "backend_reconstruction_calls": 0
+      }
+    },
+    {
+      "case": "G2_poisson_1000_104729_128",
+      "method": "pdhg_wls_tv",
+      "status": "resource_exhausted",
+      "convergence_status": "resource_exhausted",
+      "metrics": {
+        "image.rmse": 0.002931225494249497,
+        "image.relative_l2": 1.9420126949176995,
+        "image.psnr": 2.700215241200085,
+        "image.ssim": 0.1215654967834431
+      },
+      "parameters": {
+        "num_iterations": 2000,
+        "data_fidelity": "wls",
+        "regularizer": "tv",
+        "weight_source": "post_log_poisson",
+        "strength": 0.000261538623046875,
+        "min_value": 0.0
+      },
+      "parameter_sources": {
+        "num_iterations": "user_override",
+        "data_fidelity": "user_override",
+        "regularizer": "user_override",
+        "weight_source": "user_override",
+        "strength": "validation_search",
+        "min_value": "user_override"
+      },
+      "resource_usage": {
+        "runtime_s": 51.185460469685495,
+        "wall_seconds": 51.185460469685495,
+        "iterations_completed": 285,
+        "forward_calls": 579,
+        "adjoint_calls": 579,
+        "gpu_runtime_seconds": 45.10002930164337,
+        "peak_gpu_memory_mb": 11.24072265625,
+        "prox_iterations": 0,
+        "backend_reconstruction_calls": 0
+      }
+    },
+    {
+      "case": "G2_poisson_1000_104729_128",
+      "method": "pdhg_poisson_tv",
+      "status": "resource_exhausted",
+      "convergence_status": "resource_exhausted",
+      "metrics": {
+        "image.rmse": 0.0029528402486158453,
+        "image.relative_l2": 1.9563330286686595,
+        "image.psnr": 2.6364007891968515,
+        "image.ssim": 0.12425604885955115
+      },
+      "parameters": {
+        "num_iterations": 2000,
+        "data_fidelity": "transmission_poisson_nll",
+        "regularizer": "tv",
+        "strength": 0.000261538623046875,
+        "min_value": 0.0
+      },
+      "parameter_sources": {
+        "num_iterations": "user_override",
+        "data_fidelity": "user_override",
+        "regularizer": "user_override",
+        "strength": "validation_search",
+        "min_value": "user_override"
+      },
+      "resource_usage": {
+        "runtime_s": 51.179785314016044,
+        "wall_seconds": 51.179785314016044,
+        "iterations_completed": 250,
+        "forward_calls": 510,
+        "adjoint_calls": 510,
+        "gpu_runtime_seconds": 36.660953302383426,
+        "peak_gpu_memory_mb": 11.28759765625,
+        "prox_iterations": 27000,
+        "backend_reconstruction_calls": 0
+      }
+    },
+    {
+      "case": "cone_3d/tissue_volume_clean_64",
+      "method": "fdk",
+      "seed": 20261024,
+      "status": "success",
+      "convergence_status": "completed_valid",
+      "metrics": {
+        "data_residual": 0.04356532543897629,
+        "runtime_seconds": 3.1968241007998586,
+        "objective": 8.454809188842773,
+        "image.rmse": 0.000116948940058945,
+        "image.psnr": 30.681274025953776,
+        "image.ssim": 0.8175359545128407
+      },
+      "parameters": {
+        "filter_type": "ram-lak",
+        "short_scan": false,
+        "voxel_supersampling": 1
+      },
+      "resource_usage": {
+        "runtime_s": 10.665738395415246,
+        "wall_seconds": 10.665738395415246,
+        "iterations_completed": 0,
+        "forward_calls": 1,
+        "adjoint_calls": 0,
+        "gpu_runtime_seconds": 0.011259360313415527,
+        "peak_gpu_memory_mb": 66.125,
+        "prox_iterations": 0,
+        "backend_reconstruction_calls": 1
+      },
+      "measurement_norm": 94.37808296940896
+    }
+  ],
+  "limitations": [
+    "One seed; not a performance ranking.",
+    "2D returned points are budget-limited, not convergence certificates.",
+    "3D FDK is a geometry-specific direct baseline, not evidence of arbitrary 3D solver/prior interchangeability."
+  ]
+}
