@@ -1,12 +1,12 @@
 # Independent quality example
 
-`examples/p5_quality.py` provides a bounded CPU example with independent pilot
+`examples/quality_comparison.py` provides a bounded CPU example with independent pilot
 and formal phantoms and seeded observations. From the CT repository root:
 
 ```powershell
-python examples/p5_quality.py pilot --out artifacts/quality-example
-python examples/p5_quality.py freeze --out artifacts/quality-example
-python examples/p5_quality.py formal --out artifacts/quality-example
+python examples/quality_comparison.py pilot --out artifacts/quality-example
+python examples/quality_comparison.py freeze --out artifacts/quality-example
+python examples/quality_comparison.py formal --out artifacts/quality-example
 ```
 
 Use a fresh output directory. `formal --resume` continues unsaved jobs with the

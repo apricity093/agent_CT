@@ -23,8 +23,8 @@ import torch.nn.functional as F
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from inv_framework.models.tiny_unet import TinyUNet
-from inv_framework.solvers.diffusion.scheduler import VPSchedule
+from inv_framework.solvers.deep.models.tiny_unet import TinyUNet
+from inv_framework.solvers.deep.diffusion.scheduler import VPSchedule
 
 
 def random_ellipse_phantom(N: int, num_ellipses: int = 6,
@@ -62,9 +62,7 @@ def build_tiny(args, device):
 
 def build_diffusers(args, device):
     from diffusers import UNet2DModel, DDPMScheduler
-    from inv_framework.solvers.diffusion.diffusers_compat import (
-        DiffusersScheduleAdapter,
-    )
+    from inv_framework.solvers.deep.diffusion.diffusers_compat import DiffusersScheduleAdapter
     model = UNet2DModel(
         sample_size=args.image_size,
         in_channels=1,

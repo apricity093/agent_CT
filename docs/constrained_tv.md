@@ -85,7 +85,7 @@ cancellation and interrupted endpoints. Their saved runtime checks are in
 A confirmed endpoint can still violate epsilon; feasibility alone is not optimality.
 
 The original [high-precision failure evidence](../artifacts/ct_composable/p4/acceptance-20261023/report.md)
-and strict `tests/test_p4_ct_acceptance.py::test_nonconstant_ct` remain:
+and strict `tests/test_constrained_ct_reference.py::test_nonconstant_ct` remain:
 
 - Sparse CPU PDHG reached 20000 iterations with epsilon=.2, residual .2000011504,
   fixed-point residual 6.46e-5 and relative TV gap 1.88e-4, above the unchanged

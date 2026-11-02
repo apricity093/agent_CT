@@ -34,31 +34,6 @@ Windows 回归实际触发资源记账的 invalid handle 异常信息，定位�
 
 本次另从 Git 基点读取旧实现重新测量：8²/7 角度、种子 17 的旧伴随误差 `0.0629649758`，新伴随误差 `1.125489e-7`，forward 最大差值 `0.0`。同一随机输入的三步 Tikhonov/TV-FISTA 相对旧图像差异分别为约 4.45%/2.88%，对应 corrected transpose 对 CG 正规方程和数据梯度的影响，不要求旧错误结果保持不变。
 
-### 冻结短轨迹
-
-`test/data/p0_short_trajectories.json` 由 `tools/freeze_p0_baseline.py` 显式生成，pytest 只读取固定记录。参考使用冻结的旧原生 forward 作用于基向量构造 A；随后完全使用 NumPy float64 的 A、A.T、独立组装的差分矩阵与求解递推，不调用生产 adjoint、solver 或 regularizer。保存测量、实际角度、完整最终图像、逐步目标/残差和参数。
-
-固定 8² 小图、7 均匀角度、零初始化、3 次迭代/epoch；Tikhonov lambda=0.2，TV lambda=0.08，TV step=0.01，prox=30 次且 tolerance=0，SART block_size=2。无调参。该实例 `||A||_1 ||A||_inf=57.671568` 是平方谱范数上界，TV step=0.01 满足光滑数据梯度稳定条件；这组参数仅作回归依据。
-
-| 入口 | 相对参考图像误差 | 最终归一化残差 | forward / adjoint | 状态 |
-| --- | ---: | ---: | ---: | --- |
-| Tikhonov | 9.533e-7 | 0.062383813 | 5 / 5 | max_iterations |
-| TV-FISTA | 7.192e-8 | 0.337198120 | 4 / 3 | max_iterations |
-| CGLS | 1.916e-6 | 0.061651822 | 8 / 4 | max_iterations |
-| SIRT | 9.616e-8 | 0.223378667 | 5 / 4 | max_iterations |
-| SART | 8.877e-8 | 0.074309215 | 27 / 24 | max_iterations（maximum_epochs_reached） |
-| FBP | 2.598e-7 | 0.102269687 | 1 / 1 | completed_valid |
-
-裸 `solve()` 与 detailed 各自对照冻结参考；计数还与实际 `_radon_*_impl` spy 对照，包含子算子调用。TV 另核对 3 次 prox / 90 次内层迭代。FBP 本身为 0 次优化迭代，detailed 不提供轨迹/残差；表内包含单独执行并计账的一次终点 forward。TV legacy detailed 保留 momentum 状态轨迹，终点单独评估，未将它改成返回点轨迹。迭代上限没有被记为收敛。原有 dense-view disk FBP 回归为 29.04 dB，超过原阈值 20 dB。
-
-### 已保存的验证证据
-
-初始 CT 与 Agent 专项日志分别为
-[CT 测试日志](../artifacts/ct_composable/p0/p0_ct_tests.log) 和
-[Agent 测试日志](../artifacts/ct_composable/p0/p0_agent_tests.log)。这些是初始版本的
-观测记录，不是当前全部套件的通过数量。当前回归仍由 `tests/test_p0_operators.py`、
-`tests/test_p0_short_trajectories.py` 及 `tests/test_radon_adjoint.py` 保护。
-
 ## 当前行为与限制
 
 Radon 网格按输入 dtype 构造，CPU/CUDA float32/float64 均有专项测试；
@@ -66,10 +41,6 @@ Radon 网格按输入 dtype 构造，CPU/CUDA float32/float64 均有专项测试
 TV FGP 使用有限内层迭代，没有严格近端 gap 证书。当前 FISTA 步长与回溯约定见
 [FISTA 用法](composable_reconstruction.md)，预算和固定来源状态见
 [Agent 用法](agent_usage.md)。历史重建对应其记录的实现，不能与当前实现混作同版比较。
-
-冻结参考由 `tools/freeze_p0_baseline.py` 和 `tests/p0_reference.py` 产生，
-`test/data/p0_short_trajectories.json` 是永久回归输入，测试不会自动重写它。
-原始修正前后观测见 [p0_before_after.json](../artifacts/ct_composable/p0/p0_before_after.json)。
 
 ## 2026-10-23 CUDA 专项验收
 

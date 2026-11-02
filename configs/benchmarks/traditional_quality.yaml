@@ -1,15 +1,12 @@
 schema_version: 1
 name: traditional_ct_quality
-data_root: ../../test/data
+data_root: ../../tests/data
 output_root: ../../artifacts/invct_traditional_quality
 device: cuda
 overwrite: false
 continue_on_error: true
 protocol: ../protocols/traditional_quality.yaml
 benchmark_protocol: fixed_defaults
-budget:
-  protocol: fixed_defaults
-retry_budget: 0
 groups:
   - algorithms:
       - {name: fbp, config: ../algorithms/fbp.yaml}
@@ -22,9 +19,9 @@ groups:
       - {name: tikhonov, config: ../algorithms/tikhonov.yaml}
       - {name: tv_fista, config: ../algorithms/tv_fista.yaml}
     cases:
-      - parallel_2d/tissue_breast_dense_clean_128
-      - parallel_2d/tissue_breast_sparse_poisson_128
-      - parallel_2d/tissue_breast_limited_angle_128
+      - parallel_2d__ellipses_dense_clean
+      - parallel_2d__ellipses_sparse_poisson
+      - parallel_2d__ellipses_limited_angle
   - algorithms:
       - {name: fdk, config: ../algorithms/fdk.yaml}
     cases:

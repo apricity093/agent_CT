@@ -21,7 +21,7 @@ Python 入口：
 
 ```python
 from inv_framework.solvers import FISTASolver, TikhonovSolver, fista
-from inv_framework.regularizers import TikhonovRegularizer, HaarL1Regularizer
+from inv_framework.core.regularizer import TikhonovRegularizer, HaarL1Regularizer
 from inv_framework.operators import GradientOperator
 
 x = fista(A, y, regularizer=TikhonovRegularizer(), strength=0.01)
@@ -31,13 +31,13 @@ h1 = TikhonovSolver(reg_strength=0.01,
 x_h1 = h1.solve(y, A)
 ```
 
-`fista()`、`FISTASolver.solve()`、`solve_detailed()`、旧 TV 裸函数和 wrapper 均委托 `solvers/fista.py` 的同一更新循环。Python 通用核心接受实现 `Regularizer` 与 `ProximalOperator` 的对象；正式 CLI/Agent 能力限制为表中已验证配置。
+`fista()`、`FISTASolver.solve()`、`solve_detailed()`、旧 TV 裸函数和 wrapper 均委托 `solvers/splitting.py` 的同一更新循环。Python 通用核心接受实现 `Regularizer` 与 `ProximalOperator` 的对象；正式 CLI/Agent 能力限制为表中已验证配置。
 
 CLI 继续通过既有 solver 位置参数和 YAML `parameters.regularizer` 独立选择。新增示例位于 `configs/examples/`，不会加入算法文件清单：
 
 ```powershell
-python -m inv_framework.cli run fista --case parallel_2d/disk_analytic_32 --config configs/examples/fista_haar_l1.yaml --out artifacts/p1_haar_example --device cpu
-python -m inv_framework.cli run tikhonov --case parallel_2d/disk_analytic_32 --config configs/examples/tikhonov_h1.yaml --out artifacts/p1_h1_example --device cpu
+python -m inv_framework.cli run fista --case parallel_2d__ellipses_dense_clean --config configs/examples/fista_haar_l1.yaml --out artifacts/haar_example --device cpu
+python -m inv_framework.cli run tikhonov --case parallel_2d__ellipses_dense_clean --config configs/examples/tikhonov_h1.yaml --out artifacts/h1_example --device cpu
 ```
 
 Agent 使用同样的 solver ID、示例 config URI 和 `algorithm.parameters.regularizer`。参数推荐复用 registry defaults、合法范围和兼容性验证。FISTA 无需在请求阶段预先提供谱范数；运行时估计并检查步长。动态回溯及 H1 的 D 工作使用运行时预算，不以旧 TV 单次 forward 成本或恒等 L 成本作保守估计。

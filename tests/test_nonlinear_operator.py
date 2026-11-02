@@ -12,12 +12,14 @@ import math
 import os
 import sys
 import torch
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from inv_framework.operators.base import ForwardOperator, LinearOperator
-from inv_framework.solvers.classical import fbp, sirt, landweber
-from inv_framework.solvers.dip import DIPSolver
+from inv_framework.core.operator import ForwardOperator, LinearOperator
+from inv_framework.solvers.analytic import fbp
+from inv_framework.solvers.algebraic import sirt, landweber
+from inv_framework.solvers.deep.dip import DIPSolver
 
 
 class _SquaredBlur(ForwardOperator):
@@ -61,6 +63,7 @@ def test_classical_refuses_nonlinear():
         raise AssertionError(f"{name} should have raised TypeError")
 
 
+@pytest.mark.training
 def test_dip_recovers_nonlinear(image_size=32, iters=400, tol_psnr=15.0,
                                  seed=0):
     """DIP fits the non-linear forward; check the recovered x reduces residual."""

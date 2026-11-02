@@ -7,13 +7,13 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 
-from .ct_cases import load_ct_case, write_ct_case
-from ..operators.ct import ASTRAFDKOperator3D
-from ..operators.ct.radon_torch import ParallelBeamRadon2D
+from inv_framework.ct.cases import load_ct_case, write_ct_case
+from inv_framework.ct.backends import ASTRAFDKOperator3D
+from inv_framework.ct.backends.radon_torch import ParallelBeamRadon2D
 
 
 SEED = 20261024
-TISSUE_CASE = "parallel_2d/tissue_breast_sparse_poisson_128"
+TISSUE_CASE = "parallel_2d__ellipses_sparse_poisson"
 
 
 def gaussian_radius(sample_count: int, sigma: float) -> float:
@@ -68,7 +68,7 @@ def prepare_cases(root: Path, ct_repo: Path) -> tuple[dict, float]:
     Requires CUDA ASTRA for the 64-cubed cone case.
     """
     import astra
-    template = load_ct_case(TISSUE_CASE, data_root=ct_repo / "test/data")
+    template = load_ct_case(TISSUE_CASE, data_root=ct_repo / "tests/data")
     op = ParallelBeamRadon2D(128, angles=torch.tensor(template.geometry["angles_rad"]))
     clean = op.forward(template.truth)
     bound = float(op.forward(torch.ones_like(template.truth)).abs().max()

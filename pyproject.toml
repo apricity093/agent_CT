@@ -18,11 +18,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "scipy"]
 diffusion = ["diffusers>=0.30"]
 
 [project.scripts]
-invct = "inv_framework.cli:main"
+invct = "inv_framework.api.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["inv_framework*", "configs*"]
@@ -31,4 +31,6 @@ include = ["inv_framework*", "configs*"]
 configs = ["algorithms/*.yaml"]
 
 [tool.pytest.ini_options]
-testpaths = ["test", "tests"]
+testpaths = ["tests"]
+addopts = "-m 'not training'"
+markers = ["training: long deep-prior training; run explicitly with -m training"]

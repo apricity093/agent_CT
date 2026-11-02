@@ -22,11 +22,12 @@ import torch
 # Make the package importable when run from the project root without install.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from inv_framework.operators.ct.radon_torch import ParallelBeamRadon2D
-from inv_framework.operators.noise import GaussianNoise, NoNoise
-from inv_framework.solvers.classical import FBPSolver, SIRTSolver
-from inv_framework.solvers.dip import DIPSolver
-from inv_framework.solvers.inr import INRSolver
+from inv_framework.ct.backends.radon_torch import ParallelBeamRadon2D
+from inv_framework.ct.noise import GaussianNoise, NoNoise
+from inv_framework.solvers.analytic import FBPSolver
+from inv_framework.solvers.algebraic import SIRTSolver
+from inv_framework.solvers.deep.dip import DIPSolver
+from inv_framework.solvers.deep.inr import INRSolver
 from inv_framework.utils.metrics import psnr, ssim
 
 
@@ -124,20 +125,18 @@ def main():
 
     if args.dps_checkpoint and os.path.exists(args.dps_checkpoint):
         print(f"Solving with DPS using {args.dps_checkpoint}...")
-        from inv_framework.solvers.diffusion.dps import DPSSolver
+        from inv_framework.solvers.deep.diffusion.dps import DPSSolver
 
         if args.dps_use_diffusers:
             from diffusers import UNet2DModel, DDIMScheduler
-            from inv_framework.solvers.diffusion.diffusers_compat import (
-                DiffusersScheduleAdapter, DiffusersUNetWrapper,
-            )
+            from inv_framework.solvers.deep.diffusion.diffusers_compat import DiffusersScheduleAdapter, DiffusersUNetWrapper
             unet = UNet2DModel.from_pretrained(args.dps_checkpoint).to(device)
             model = DiffusersUNetWrapper(unet)
             schedule = DiffusersScheduleAdapter(
                 DDIMScheduler(num_train_timesteps=1000))
         else:
-            from inv_framework.models.tiny_unet import TinyUNet
-            from inv_framework.solvers.diffusion.scheduler import VPSchedule
+            from inv_framework.solvers.deep.models.tiny_unet import TinyUNet
+            from inv_framework.solvers.deep.diffusion.scheduler import VPSchedule
             model = TinyUNet(channels=1).to(device)
             model.load_state_dict(
                 torch.load(args.dps_checkpoint, map_location=device))

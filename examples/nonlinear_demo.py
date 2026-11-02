@@ -22,11 +22,11 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from inv_framework.operators.base import ForwardOperator
-from inv_framework.operators.ct.radon_torch import ParallelBeamRadon2D
-from inv_framework.operators.noise import GaussianNoise, NoNoise
-from inv_framework.solvers.dip import DIPSolver
-from inv_framework.solvers.inr import INRSolver
+from inv_framework.core.operator import ForwardOperator
+from inv_framework.ct.backends.radon_torch import ParallelBeamRadon2D
+from inv_framework.ct.noise import GaussianNoise, NoNoise
+from inv_framework.solvers.deep.dip import DIPSolver
+from inv_framework.solvers.deep.inr import INRSolver
 from inv_framework.utils.metrics import psnr, ssim
 
 from examples.ct_demo import shepp_logan
@@ -99,7 +99,7 @@ def main():
     # Show that classical solvers correctly refuse a non-linear operator.
     print("\nTrying FBP on the non-linear operator (should raise)...")
     try:
-        from inv_framework.solvers.classical import fbp
+        from inv_framework.solvers.analytic import fbp
         fbp(op, y)
     except TypeError as e:
         print(f"  caught TypeError: {e}")

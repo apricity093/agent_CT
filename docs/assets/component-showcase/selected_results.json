@@ -1,340 +1,906 @@
 {
-  "seed_2d": 104729,
-  "seed_3d": 20261024,
-  "selection_rule": "Fixed G2 intermediate Gaussian/Poisson conditions; component coverage, not best-seed or best-quality selection. 3D reuses the exact historical README input.",
-  "image_display": {
-    "window": [
-      0,
-      0.004
-    ],
-    "gamma": 1,
-    "colormap": "gray",
-    "crop": "none",
-    "interpolation": "nearest",
-    "note": "Identical fixed window across all panels; values outside the display window are saturated for display only; metrics use original values."
-  },
-  "case_count_2d": 2,
-  "additional_3d_baselines": 1,
-  "results": [
+  "date": "2026-11-02",
+  "device": "cuda",
+  "gpu": "NVIDIA GeForce GTX 1650",
+  "dtype": "float32",
+  "configurations": [
     {
-      "case": "G2_gaussian_002_104729_128",
-      "method": "fista_identity",
-      "status": "resource_exhausted",
-      "convergence_status": "resource_exhausted",
-      "metrics": {
-        "image.rmse": 0.00032903611637040365,
-        "image.relative_l2": 0.21799493636068676,
-        "image.psnr": 21.696328415917932,
-        "image.ssim": 0.4762723899586334
-      },
-      "parameters": {
-        "num_iterations": 2000,
-        "data_fidelity": "gaussian_nll",
-        "regularizer": "tikhonov",
-        "strength": 7499.99953125,
+      "name": "gaussian_fista_tikhonov",
+      "group": "gaussian",
+      "solver": "fista",
+      "fidelity": "gaussian_nll",
+      "regularizer": "tikhonov",
+      "resolved_parameters": {
+        "num_iterations": 200,
         "min_value": 0.0,
-        "tv_num_iterations": 1000,
-        "tv_tolerance": 0.001,
-        "level": 2
+        "max_value": null,
+        "data_fidelity": "gaussian_nll",
+        "weight_source": null,
+        "nll_tolerance": null,
+        "nll_max_iterations": 200,
+        "regularizer": "tikhonov",
+        "strength": 0.01,
+        "reg_strength": null,
+        "step_size": null,
+        "tolerance": 1e-05,
+        "power_iterations": 12,
+        "level": 2,
+        "tv_mode": "isotropic",
+        "tv_num_iterations": 50,
+        "tv_tolerance": 1e-05,
+        "delta": 0.01
       },
       "parameter_sources": {
         "num_iterations": "user_override",
-        "data_fidelity": "user_override",
-        "regularizer": "user_override",
-        "strength": "validation_search",
         "min_value": "user_override",
-        "tv_num_iterations": "user_override",
-        "tv_tolerance": "user_override",
-        "level": "user_override"
+        "max_value": "registry_default",
+        "data_fidelity": "user_override",
+        "weight_source": "registry_default",
+        "nll_tolerance": "registry_default",
+        "nll_max_iterations": "registry_default",
+        "regularizer": "user_override",
+        "strength": "user_override",
+        "reg_strength": "registry_default",
+        "step_size": "registry_default",
+        "tolerance": "registry_default",
+        "power_iterations": "registry_default",
+        "level": "registry_default",
+        "tv_mode": "registry_default",
+        "tv_num_iterations": "registry_default",
+        "tv_tolerance": "registry_default",
+        "delta": "registry_default",
+        "backend": "registry_default"
       },
-      "resource_usage": {
-        "runtime_s": 51.31397736817598,
-        "wall_seconds": 51.31397736817598,
-        "iterations_completed": 281,
-        "forward_calls": 585,
-        "adjoint_calls": 584,
-        "gpu_runtime_seconds": 45.15755723667147,
-        "peak_gpu_memory_mb": 10.19384765625,
-        "prox_iterations": 0,
-        "backend_reconstruction_calls": 0
+      "initialization": "zeros",
+      "dtype": "float32",
+      "budget": {
+        "timeout_s": 420.0,
+        "max_wall_seconds": 300.0,
+        "max_memory_mb": null,
+        "max_iterations": 200,
+        "max_forward_calls": null,
+        "max_adjoint_calls": null,
+        "device": "cuda",
+        "cpu_threads": 1
+      },
+      "stopping_policy": {
+        "schema_version": "1.0",
+        "mode": "solver_native_and_endpoint",
+        "stop_on_convergence": true,
+        "min_iterations": 5,
+        "check_every": 1,
+        "patience": 5,
+        "relative_iterate_tolerance": 0.0001,
+        "normalized_normal_residual_tolerance": 0.0001,
+        "relative_objective_tolerance": 1e-05,
+        "prox_gradient_mapping_tolerance": 0.0001,
+        "discrepancy": {
+          "enabled": false,
+          "tau": 1.05,
+          "count_floor": 1.0,
+          "epsilon": 1e-12,
+          "use_valid_measurement_mask": true
+        },
+        "stalled": {
+          "enabled": true,
+          "relative_iterate_tolerance": 1e-08,
+          "patience": 5,
+          "require_discrepancy_unmet": true
+        },
+        "divergence": {
+          "enabled": true,
+          "relative_increase_tolerance": 0.0001,
+          "patience": 5
+        }
       }
     },
     {
-      "case": "G2_gaussian_002_104729_128",
-      "method": "admm_identity",
-      "status": "resource_exhausted",
-      "convergence_status": "resource_exhausted",
-      "metrics": {
-        "image.rmse": 0.0002230335968505285,
-        "image.relative_l2": 0.14776552582754512,
-        "image.psnr": 25.073794060862355,
-        "image.ssim": 0.3399272762798194
-      },
-      "parameters": {
-        "num_iterations": 2000,
-        "data_fidelity": "gaussian_nll",
-        "regularizer": "tikhonov",
-        "strength": 7499.99953125,
+      "name": "gaussian_admm_tikhonov",
+      "group": "gaussian",
+      "solver": "admm",
+      "fidelity": "gaussian_nll",
+      "regularizer": "tikhonov",
+      "resolved_parameters": {
+        "num_iterations": 20,
         "min_value": 0.0,
+        "max_value": null,
+        "data_fidelity": "gaussian_nll",
+        "weight_source": null,
+        "nll_tolerance": null,
+        "nll_max_iterations": 200,
+        "regularizer": "tikhonov",
+        "strength": 0.01,
+        "reg_strength": null,
+        "tolerance": 1e-05,
+        "level": 2,
+        "delta": 0.01,
+        "tv_mode": "isotropic",
+        "rho": 1.0,
         "cg_max_iterations": 100,
-        "cg_tolerance": 1e-05
+        "cg_tolerance": 1e-06
       },
       "parameter_sources": {
         "num_iterations": "user_override",
-        "data_fidelity": "user_override",
-        "regularizer": "user_override",
-        "strength": "validation_search",
         "min_value": "user_override",
-        "cg_max_iterations": "user_override",
-        "cg_tolerance": "user_override"
+        "max_value": "registry_default",
+        "data_fidelity": "user_override",
+        "weight_source": "registry_default",
+        "nll_tolerance": "registry_default",
+        "nll_max_iterations": "registry_default",
+        "regularizer": "user_override",
+        "strength": "user_override",
+        "reg_strength": "registry_default",
+        "tolerance": "registry_default",
+        "level": "registry_default",
+        "delta": "registry_default",
+        "tv_mode": "registry_default",
+        "rho": "registry_default",
+        "cg_max_iterations": "registry_default",
+        "cg_tolerance": "registry_default",
+        "backend": "registry_default"
       },
-      "resource_usage": {
-        "runtime_s": 51.08495229575783,
-        "wall_seconds": 51.08495229575783,
-        "iterations_completed": 9,
-        "forward_calls": 615,
-        "adjoint_calls": 624,
-        "gpu_runtime_seconds": 45.5076195106506,
-        "peak_gpu_memory_mb": 11.1015625,
-        "prox_iterations": 0,
-        "backend_reconstruction_calls": 0
+      "initialization": "zeros",
+      "dtype": "float32",
+      "budget": {
+        "timeout_s": 1020,
+        "max_wall_seconds": 900,
+        "max_memory_mb": null,
+        "max_iterations": 20,
+        "max_forward_calls": null,
+        "max_adjoint_calls": null,
+        "device": "cuda",
+        "cpu_threads": 1
+      },
+      "stopping_policy": {
+        "schema_version": "1.0",
+        "mode": "solver_native_and_endpoint",
+        "stop_on_convergence": true,
+        "min_iterations": 5,
+        "check_every": 1,
+        "patience": 5,
+        "relative_iterate_tolerance": 0.0001,
+        "normalized_normal_residual_tolerance": 0.0001,
+        "relative_objective_tolerance": 1e-05,
+        "prox_gradient_mapping_tolerance": 0.0001,
+        "discrepancy": {
+          "enabled": false,
+          "tau": 1.05,
+          "count_floor": 1.0,
+          "epsilon": 1e-12,
+          "use_valid_measurement_mask": true
+        },
+        "stalled": {
+          "enabled": true,
+          "relative_iterate_tolerance": 1e-08,
+          "patience": 5,
+          "require_discrepancy_unmet": true
+        },
+        "divergence": {
+          "enabled": true,
+          "relative_increase_tolerance": 0.0001,
+          "patience": 5
+        }
       }
     },
     {
-      "case": "G2_gaussian_002_104729_128",
-      "method": "pdhg_identity",
-      "status": "resource_exhausted",
-      "convergence_status": "resource_exhausted",
-      "metrics": {
-        "image.rmse": 0.00026707610727906247,
-        "image.relative_l2": 0.17694482797814864,
-        "image.psnr": 23.508499074068038,
-        "image.ssim": 0.5049989836488513
-      },
-      "parameters": {
-        "num_iterations": 2000,
+      "name": "gaussian_pdhg_tikhonov",
+      "group": "gaussian",
+      "solver": "pdhg",
+      "fidelity": "gaussian_nll",
+      "regularizer": "tikhonov",
+      "resolved_parameters": {
+        "num_iterations": 200,
+        "min_value": 0.0,
+        "max_value": null,
         "data_fidelity": "gaussian_nll",
+        "weight_source": null,
+        "nll_tolerance": null,
+        "nll_max_iterations": 200,
         "regularizer": "tikhonov",
-        "strength": 7499.99953125,
-        "min_value": 0.0
+        "strength": 0.01,
+        "reg_strength": null,
+        "tolerance": 1e-05,
+        "level": 2,
+        "delta": 0.01,
+        "tv_mode": "isotropic",
+        "tau": null,
+        "sigma": null
       },
       "parameter_sources": {
         "num_iterations": "user_override",
-        "data_fidelity": "user_override",
-        "regularizer": "user_override",
-        "strength": "validation_search",
-        "min_value": "user_override"
-      },
-      "resource_usage": {
-        "runtime_s": 51.34697322268039,
-        "wall_seconds": 51.34697322268039,
-        "iterations_completed": 301,
-        "forward_calls": 614,
-        "adjoint_calls": 613,
-        "gpu_runtime_seconds": 44.929372632026656,
-        "peak_gpu_memory_mb": 10.71728515625,
-        "prox_iterations": 0,
-        "backend_reconstruction_calls": 0
-      }
-    },
-    {
-      "case": "G2_gaussian_002_104729_128",
-      "method": "fista_tv",
-      "status": "resource_exhausted",
-      "convergence_status": "resource_exhausted",
-      "metrics": {
-        "image.rmse": 0.0002862729952888467,
-        "image.relative_l2": 0.18966326273898562,
-        "image.psnr": 22.90559218503644,
-        "image.ssim": 0.4965419848704754
-      },
-      "parameters": {
-        "num_iterations": 2000,
-        "data_fidelity": "gaussian_nll",
-        "regularizer": "tv",
-        "strength": 0.0749999953125,
-        "min_value": 0.0,
-        "tv_num_iterations": 1000,
-        "tv_tolerance": 0.001,
-        "level": 2
-      },
-      "parameter_sources": {
-        "num_iterations": "user_override",
-        "data_fidelity": "user_override",
-        "regularizer": "user_override",
-        "strength": "validation_search",
         "min_value": "user_override",
-        "tv_num_iterations": "user_override",
-        "tv_tolerance": "user_override",
-        "level": "user_override"
+        "max_value": "registry_default",
+        "data_fidelity": "user_override",
+        "weight_source": "registry_default",
+        "nll_tolerance": "registry_default",
+        "nll_max_iterations": "registry_default",
+        "regularizer": "user_override",
+        "strength": "user_override",
+        "reg_strength": "registry_default",
+        "tolerance": "registry_default",
+        "level": "registry_default",
+        "delta": "registry_default",
+        "tv_mode": "registry_default",
+        "tau": "registry_default",
+        "sigma": "registry_default",
+        "backend": "registry_default"
       },
-      "resource_usage": {
-        "runtime_s": 51.16899138595909,
-        "wall_seconds": 51.16899138595909,
-        "iterations_completed": 242,
-        "forward_calls": 507,
-        "adjoint_calls": 507,
-        "gpu_runtime_seconds": 38.39640257692335,
-        "peak_gpu_memory_mb": 10.77978515625,
-        "prox_iterations": 484,
-        "backend_reconstruction_calls": 0
+      "initialization": "zeros",
+      "dtype": "float32",
+      "budget": {
+        "timeout_s": 420.0,
+        "max_wall_seconds": 300.0,
+        "max_memory_mb": null,
+        "max_iterations": 200,
+        "max_forward_calls": null,
+        "max_adjoint_calls": null,
+        "device": "cuda",
+        "cpu_threads": 1
+      },
+      "stopping_policy": {
+        "schema_version": "1.0",
+        "mode": "solver_native_and_endpoint",
+        "stop_on_convergence": true,
+        "min_iterations": 5,
+        "check_every": 1,
+        "patience": 5,
+        "relative_iterate_tolerance": 0.0001,
+        "normalized_normal_residual_tolerance": 0.0001,
+        "relative_objective_tolerance": 1e-05,
+        "prox_gradient_mapping_tolerance": 0.0001,
+        "discrepancy": {
+          "enabled": false,
+          "tau": 1.05,
+          "count_floor": 1.0,
+          "epsilon": 1e-12,
+          "use_valid_measurement_mask": true
+        },
+        "stalled": {
+          "enabled": true,
+          "relative_iterate_tolerance": 1e-08,
+          "patience": 5,
+          "require_discrepancy_unmet": true
+        },
+        "divergence": {
+          "enabled": true,
+          "relative_increase_tolerance": 0.0001,
+          "patience": 5
+        }
       }
     },
     {
-      "case": "G2_gaussian_002_104729_128",
-      "method": "fista_haar",
-      "status": "resource_exhausted",
-      "convergence_status": "resource_exhausted",
-      "metrics": {
-        "image.rmse": 0.00027162634616787075,
-        "image.relative_l2": 0.17995947891657343,
-        "image.psnr": 23.361761993005263,
-        "image.ssim": 0.5072018445625385
-      },
-      "parameters": {
-        "num_iterations": 2000,
+      "name": "gaussian_fista_tv",
+      "group": "gaussian",
+      "solver": "fista",
+      "fidelity": "gaussian_nll",
+      "regularizer": "tv",
+      "resolved_parameters": {
+        "num_iterations": 200,
+        "min_value": 0.0,
+        "max_value": null,
         "data_fidelity": "gaussian_nll",
+        "weight_source": null,
+        "nll_tolerance": null,
+        "nll_max_iterations": 200,
+        "regularizer": "tv",
+        "strength": 0.01,
+        "reg_strength": null,
+        "step_size": null,
+        "tolerance": 1e-05,
+        "power_iterations": 12,
+        "level": 2,
+        "tv_mode": "isotropic",
+        "tv_num_iterations": 50,
+        "tv_tolerance": 1e-05,
+        "delta": 0.01
+      },
+      "parameter_sources": {
+        "num_iterations": "user_override",
+        "min_value": "user_override",
+        "max_value": "registry_default",
+        "data_fidelity": "user_override",
+        "weight_source": "registry_default",
+        "nll_tolerance": "registry_default",
+        "nll_max_iterations": "registry_default",
+        "regularizer": "user_override",
+        "strength": "user_override",
+        "reg_strength": "registry_default",
+        "step_size": "registry_default",
+        "tolerance": "registry_default",
+        "power_iterations": "registry_default",
+        "level": "registry_default",
+        "tv_mode": "registry_default",
+        "tv_num_iterations": "registry_default",
+        "tv_tolerance": "registry_default",
+        "delta": "registry_default",
+        "backend": "registry_default"
+      },
+      "initialization": "zeros",
+      "dtype": "float32",
+      "budget": {
+        "timeout_s": 420.0,
+        "max_wall_seconds": 300.0,
+        "max_memory_mb": null,
+        "max_iterations": 200,
+        "max_forward_calls": null,
+        "max_adjoint_calls": null,
+        "device": "cuda",
+        "cpu_threads": 1
+      },
+      "stopping_policy": {
+        "schema_version": "1.0",
+        "mode": "solver_native_and_endpoint",
+        "stop_on_convergence": true,
+        "min_iterations": 5,
+        "check_every": 1,
+        "patience": 5,
+        "relative_iterate_tolerance": 0.0001,
+        "normalized_normal_residual_tolerance": 0.0001,
+        "relative_objective_tolerance": 1e-05,
+        "prox_gradient_mapping_tolerance": 0.0001,
+        "discrepancy": {
+          "enabled": false,
+          "tau": 1.05,
+          "count_floor": 1.0,
+          "epsilon": 1e-12,
+          "use_valid_measurement_mask": true
+        },
+        "stalled": {
+          "enabled": true,
+          "relative_iterate_tolerance": 1e-08,
+          "patience": 5,
+          "require_discrepancy_unmet": true
+        },
+        "divergence": {
+          "enabled": true,
+          "relative_increase_tolerance": 0.0001,
+          "patience": 5
+        }
+      }
+    },
+    {
+      "name": "gaussian_fista_haar",
+      "group": "gaussian",
+      "solver": "fista",
+      "fidelity": "gaussian_nll",
+      "regularizer": "haar_l1",
+      "resolved_parameters": {
+        "num_iterations": 200,
+        "min_value": 0.0,
+        "max_value": null,
+        "data_fidelity": "gaussian_nll",
+        "weight_source": null,
+        "nll_tolerance": null,
+        "nll_max_iterations": 200,
         "regularizer": "haar_l1",
-        "strength": 14.999999062500002,
-        "min_value": 0.0,
-        "tv_num_iterations": 1000,
-        "tv_tolerance": 0.001,
-        "level": 2
+        "strength": 0.01,
+        "reg_strength": null,
+        "step_size": null,
+        "tolerance": 1e-05,
+        "power_iterations": 12,
+        "level": 2,
+        "tv_mode": "isotropic",
+        "tv_num_iterations": 50,
+        "tv_tolerance": 1e-05,
+        "delta": 0.01
       },
       "parameter_sources": {
         "num_iterations": "user_override",
-        "data_fidelity": "user_override",
-        "regularizer": "user_override",
-        "strength": "validation_search",
         "min_value": "user_override",
-        "tv_num_iterations": "user_override",
-        "tv_tolerance": "user_override",
-        "level": "user_override"
+        "max_value": "registry_default",
+        "data_fidelity": "user_override",
+        "weight_source": "registry_default",
+        "nll_tolerance": "registry_default",
+        "nll_max_iterations": "registry_default",
+        "regularizer": "user_override",
+        "strength": "user_override",
+        "reg_strength": "registry_default",
+        "step_size": "registry_default",
+        "tolerance": "registry_default",
+        "power_iterations": "registry_default",
+        "level": "registry_default",
+        "tv_mode": "registry_default",
+        "tv_num_iterations": "registry_default",
+        "tv_tolerance": "registry_default",
+        "delta": "registry_default",
+        "backend": "registry_default"
       },
-      "resource_usage": {
-        "runtime_s": 51.08675598260015,
-        "wall_seconds": 51.08675598260015,
-        "iterations_completed": 241,
-        "forward_calls": 505,
-        "adjoint_calls": 504,
-        "gpu_runtime_seconds": 37.873784577369726,
-        "peak_gpu_memory_mb": 10.40478515625,
-        "prox_iterations": 654,
-        "backend_reconstruction_calls": 0
+      "initialization": "zeros",
+      "dtype": "float32",
+      "budget": {
+        "timeout_s": 420.0,
+        "max_wall_seconds": 300.0,
+        "max_memory_mb": null,
+        "max_iterations": 200,
+        "max_forward_calls": null,
+        "max_adjoint_calls": null,
+        "device": "cuda",
+        "cpu_threads": 1
+      },
+      "stopping_policy": {
+        "schema_version": "1.0",
+        "mode": "solver_native_and_endpoint",
+        "stop_on_convergence": true,
+        "min_iterations": 5,
+        "check_every": 1,
+        "patience": 5,
+        "relative_iterate_tolerance": 0.0001,
+        "normalized_normal_residual_tolerance": 0.0001,
+        "relative_objective_tolerance": 1e-05,
+        "prox_gradient_mapping_tolerance": 0.0001,
+        "discrepancy": {
+          "enabled": false,
+          "tau": 1.05,
+          "count_floor": 1.0,
+          "epsilon": 1e-12,
+          "use_valid_measurement_mask": true
+        },
+        "stalled": {
+          "enabled": true,
+          "relative_iterate_tolerance": 1e-08,
+          "patience": 5,
+          "require_discrepancy_unmet": true
+        },
+        "divergence": {
+          "enabled": true,
+          "relative_increase_tolerance": 0.0001,
+          "patience": 5
+        }
       }
     },
     {
-      "case": "G2_poisson_1000_104729_128",
-      "method": "pdhg_wls_tv",
-      "status": "resource_exhausted",
-      "convergence_status": "resource_exhausted",
-      "metrics": {
-        "image.rmse": 0.002931225494249497,
-        "image.relative_l2": 1.9420126949176995,
-        "image.psnr": 2.700215241200085,
-        "image.ssim": 0.1215654967834431
-      },
-      "parameters": {
-        "num_iterations": 2000,
+      "name": "poisson_pdhg_wls_tv",
+      "group": "poisson",
+      "solver": "pdhg",
+      "fidelity": "wls",
+      "regularizer": "tv",
+      "resolved_parameters": {
+        "num_iterations": 200,
+        "min_value": 0.0,
+        "max_value": null,
         "data_fidelity": "wls",
-        "regularizer": "tv",
         "weight_source": "post_log_poisson",
-        "strength": 0.000261538623046875,
-        "min_value": 0.0
-      },
-      "parameter_sources": {
-        "num_iterations": "user_override",
-        "data_fidelity": "user_override",
-        "regularizer": "user_override",
-        "weight_source": "user_override",
-        "strength": "validation_search",
-        "min_value": "user_override"
-      },
-      "resource_usage": {
-        "runtime_s": 51.185460469685495,
-        "wall_seconds": 51.185460469685495,
-        "iterations_completed": 285,
-        "forward_calls": 579,
-        "adjoint_calls": 579,
-        "gpu_runtime_seconds": 45.10002930164337,
-        "peak_gpu_memory_mb": 11.24072265625,
-        "prox_iterations": 0,
-        "backend_reconstruction_calls": 0
-      }
-    },
-    {
-      "case": "G2_poisson_1000_104729_128",
-      "method": "pdhg_poisson_tv",
-      "status": "resource_exhausted",
-      "convergence_status": "resource_exhausted",
-      "metrics": {
-        "image.rmse": 0.0029528402486158453,
-        "image.relative_l2": 1.9563330286686595,
-        "image.psnr": 2.6364007891968515,
-        "image.ssim": 0.12425604885955115
-      },
-      "parameters": {
-        "num_iterations": 2000,
-        "data_fidelity": "transmission_poisson_nll",
+        "nll_tolerance": null,
+        "nll_max_iterations": 200,
         "regularizer": "tv",
-        "strength": 0.000261538623046875,
-        "min_value": 0.0
+        "strength": 0.01,
+        "reg_strength": null,
+        "tolerance": 1e-05,
+        "level": 2,
+        "delta": 0.01,
+        "tv_mode": "isotropic",
+        "tau": null,
+        "sigma": null
       },
       "parameter_sources": {
         "num_iterations": "user_override",
+        "min_value": "user_override",
+        "max_value": "registry_default",
         "data_fidelity": "user_override",
+        "weight_source": "user_override",
+        "nll_tolerance": "registry_default",
+        "nll_max_iterations": "registry_default",
         "regularizer": "user_override",
-        "strength": "validation_search",
-        "min_value": "user_override"
+        "strength": "user_override",
+        "reg_strength": "registry_default",
+        "tolerance": "registry_default",
+        "level": "registry_default",
+        "delta": "registry_default",
+        "tv_mode": "registry_default",
+        "tau": "registry_default",
+        "sigma": "registry_default",
+        "backend": "registry_default"
       },
-      "resource_usage": {
-        "runtime_s": 51.179785314016044,
-        "wall_seconds": 51.179785314016044,
-        "iterations_completed": 250,
-        "forward_calls": 510,
-        "adjoint_calls": 510,
-        "gpu_runtime_seconds": 36.660953302383426,
-        "peak_gpu_memory_mb": 11.28759765625,
-        "prox_iterations": 27000,
-        "backend_reconstruction_calls": 0
+      "initialization": "zeros",
+      "dtype": "float32",
+      "budget": {
+        "timeout_s": 420.0,
+        "max_wall_seconds": 300.0,
+        "max_memory_mb": null,
+        "max_iterations": 200,
+        "max_forward_calls": null,
+        "max_adjoint_calls": null,
+        "device": "cuda",
+        "cpu_threads": 1
+      },
+      "stopping_policy": {
+        "schema_version": "1.0",
+        "mode": "solver_native_and_endpoint",
+        "stop_on_convergence": true,
+        "min_iterations": 5,
+        "check_every": 1,
+        "patience": 5,
+        "relative_iterate_tolerance": 0.0001,
+        "normalized_normal_residual_tolerance": 0.0001,
+        "relative_objective_tolerance": 1e-05,
+        "prox_gradient_mapping_tolerance": 0.0001,
+        "discrepancy": {
+          "enabled": false,
+          "tau": 1.05,
+          "count_floor": 1.0,
+          "epsilon": 1e-12,
+          "use_valid_measurement_mask": true
+        },
+        "stalled": {
+          "enabled": true,
+          "relative_iterate_tolerance": 1e-08,
+          "patience": 5,
+          "require_discrepancy_unmet": true
+        },
+        "divergence": {
+          "enabled": true,
+          "relative_increase_tolerance": 0.0001,
+          "patience": 5
+        }
       }
     },
     {
-      "case": "cone_3d/tissue_volume_clean_64",
-      "method": "fdk",
-      "seed": 20261024,
-      "status": "success",
-      "convergence_status": "completed_valid",
-      "metrics": {
-        "data_residual": 0.04356532543897629,
-        "runtime_seconds": 3.1968241007998586,
-        "objective": 8.454809188842773,
-        "image.rmse": 0.000116948940058945,
-        "image.psnr": 30.681274025953776,
-        "image.ssim": 0.8175359545128407
+      "name": "poisson_pdhg_nll_tv",
+      "group": "poisson",
+      "solver": "pdhg",
+      "fidelity": "transmission_poisson_nll",
+      "regularizer": "tv",
+      "resolved_parameters": {
+        "num_iterations": 200,
+        "min_value": 0.0,
+        "max_value": null,
+        "data_fidelity": "transmission_poisson_nll",
+        "weight_source": null,
+        "nll_tolerance": null,
+        "nll_max_iterations": 200,
+        "regularizer": "tv",
+        "strength": 0.01,
+        "reg_strength": null,
+        "tolerance": 1e-05,
+        "level": 2,
+        "delta": 0.01,
+        "tv_mode": "isotropic",
+        "tau": null,
+        "sigma": null
       },
-      "parameters": {
+      "parameter_sources": {
+        "num_iterations": "user_override",
+        "min_value": "user_override",
+        "max_value": "registry_default",
+        "data_fidelity": "user_override",
+        "weight_source": "registry_default",
+        "nll_tolerance": "registry_default",
+        "nll_max_iterations": "registry_default",
+        "regularizer": "user_override",
+        "strength": "user_override",
+        "reg_strength": "registry_default",
+        "tolerance": "registry_default",
+        "level": "registry_default",
+        "delta": "registry_default",
+        "tv_mode": "registry_default",
+        "tau": "registry_default",
+        "sigma": "registry_default",
+        "backend": "registry_default"
+      },
+      "initialization": "zeros",
+      "dtype": "float32",
+      "budget": {
+        "timeout_s": 420.0,
+        "max_wall_seconds": 300.0,
+        "max_memory_mb": null,
+        "max_iterations": 200,
+        "max_forward_calls": null,
+        "max_adjoint_calls": null,
+        "device": "cuda",
+        "cpu_threads": 1
+      },
+      "stopping_policy": {
+        "schema_version": "1.0",
+        "mode": "solver_native_and_endpoint",
+        "stop_on_convergence": true,
+        "min_iterations": 5,
+        "check_every": 1,
+        "patience": 5,
+        "relative_iterate_tolerance": 0.0001,
+        "normalized_normal_residual_tolerance": 0.0001,
+        "relative_objective_tolerance": 1e-05,
+        "prox_gradient_mapping_tolerance": 0.0001,
+        "discrepancy": {
+          "enabled": false,
+          "tau": 1.05,
+          "count_floor": 1.0,
+          "epsilon": 1e-12,
+          "use_valid_measurement_mask": true
+        },
+        "stalled": {
+          "enabled": true,
+          "relative_iterate_tolerance": 1e-08,
+          "patience": 5,
+          "require_discrepancy_unmet": true
+        },
+        "divergence": {
+          "enabled": true,
+          "relative_increase_tolerance": 0.0001,
+          "patience": 5
+        }
+      }
+    },
+    {
+      "name": "cone_fdk",
+      "group": "cone_fdk",
+      "solver": "fdk",
+      "fidelity": null,
+      "regularizer": null,
+      "resolved_parameters": {
         "filter_type": "ram-lak",
         "short_scan": false,
         "voxel_supersampling": 1
       },
-      "resource_usage": {
-        "runtime_s": 10.665738395415246,
-        "wall_seconds": 10.665738395415246,
-        "iterations_completed": 0,
-        "forward_calls": 1,
-        "adjoint_calls": 0,
-        "gpu_runtime_seconds": 0.011259360313415527,
-        "peak_gpu_memory_mb": 66.125,
-        "prox_iterations": 0,
-        "backend_reconstruction_calls": 1
+      "parameter_sources": {
+        "filter_type": "registry_default",
+        "short_scan": "registry_default",
+        "voxel_supersampling": "registry_default",
+        "backend": "registry_default"
       },
-      "measurement_norm": 94.37808296940896
+      "initialization": "direct",
+      "dtype": "float32",
+      "budget": {
+        "timeout_s": 420.0,
+        "max_wall_seconds": null,
+        "max_memory_mb": null,
+        "max_iterations": null,
+        "max_forward_calls": null,
+        "max_adjoint_calls": null,
+        "device": "cuda",
+        "cpu_threads": 1
+      },
+      "stopping_policy": {
+        "schema_version": "1.0",
+        "mode": "solver_native_and_endpoint",
+        "stop_on_convergence": true,
+        "min_iterations": 5,
+        "check_every": 1,
+        "patience": 5,
+        "relative_iterate_tolerance": 0.0001,
+        "normalized_normal_residual_tolerance": 0.0001,
+        "relative_objective_tolerance": 1e-05,
+        "prox_gradient_mapping_tolerance": 0.0001,
+        "discrepancy": {
+          "enabled": true,
+          "tau": 1.05,
+          "count_floor": 1.0,
+          "epsilon": 1e-12,
+          "use_valid_measurement_mask": true
+        },
+        "stalled": {
+          "enabled": true,
+          "relative_iterate_tolerance": 1e-08,
+          "patience": 5,
+          "require_discrepancy_unmet": true
+        },
+        "divergence": {
+          "enabled": true,
+          "relative_increase_tolerance": 0.0001,
+          "patience": 5
+        }
+      }
     }
   ],
-  "limitations": [
-    "One seed; not a performance ranking.",
-    "2D returned points are budget-limited, not convergence certificates.",
-    "3D FDK is a geometry-specific direct baseline, not evidence of arbitrary 3D solver/prior interchangeability."
+  "results": [
+    {
+      "name": "gaussian_fista_tikhonov",
+      "group": "gaussian",
+      "solver": "fista",
+      "fidelity": "gaussian_nll",
+      "regularizer": "tikhonov",
+      "case_id": "parallel_2d__ellipses_sparse_gaussian",
+      "device": "cuda",
+      "strength": 0.01,
+      "status": "success",
+      "convergence_status": "max_iterations",
+      "converged": false,
+      "iterations": 200,
+      "reason_code": "maximum_iterations_reached",
+      "stopping_reason": "maximum_iterations_reached",
+      "runtime_sec": 56.84162510000169,
+      "agent_wall_sec": 60.95300000000134,
+      "metrics": {
+        "image.rmse": 0.00048425060321682033,
+        "image.relative_l2": 0.11092220805368296,
+        "image.psnr": 32.31919650569111,
+        "image.ssim": 0.8860325359184524
+      },
+      "dtype": "float32"
+    },
+    {
+      "name": "gaussian_admm_tikhonov",
+      "group": "gaussian",
+      "solver": "admm",
+      "fidelity": "gaussian_nll",
+      "regularizer": "tikhonov",
+      "case_id": "parallel_2d__ellipses_sparse_gaussian",
+      "device": "cuda",
+      "strength": 0.01,
+      "status": "success",
+      "convergence_status": "max_iterations",
+      "converged": false,
+      "iterations": 20,
+      "reason_code": "maximum_iterations_reached",
+      "stopping_reason": "maximum_iterations_reached",
+      "runtime_sec": 391.08243819999916,
+      "agent_wall_sec": 397.4060000000027,
+      "metrics": {
+        "image.rmse": 0.0019867958155029342,
+        "image.relative_l2": 0.4550944848461625,
+        "image.psnr": 20.057535180613968,
+        "image.ssim": 0.4674111907541893
+      },
+      "dtype": "float32"
+    },
+    {
+      "name": "gaussian_pdhg_tikhonov",
+      "group": "gaussian",
+      "solver": "pdhg",
+      "fidelity": "gaussian_nll",
+      "regularizer": "tikhonov",
+      "case_id": "parallel_2d__ellipses_sparse_gaussian",
+      "device": "cuda",
+      "strength": 0.01,
+      "status": "success",
+      "convergence_status": "max_iterations",
+      "converged": false,
+      "iterations": 200,
+      "reason_code": "maximum_iterations_reached",
+      "stopping_reason": "maximum_iterations_reached",
+      "runtime_sec": 48.51836660000117,
+      "agent_wall_sec": 52.82800000000134,
+      "metrics": {
+        "image.rmse": 0.001146023160360372,
+        "image.relative_l2": 0.2625075086812332,
+        "image.psnr": 24.836732022867366,
+        "image.ssim": 0.7703584295406865
+      },
+      "dtype": "float32"
+    },
+    {
+      "name": "gaussian_fista_tv",
+      "group": "gaussian",
+      "solver": "fista",
+      "fidelity": "gaussian_nll",
+      "regularizer": "tv",
+      "case_id": "parallel_2d__ellipses_sparse_gaussian",
+      "device": "cuda",
+      "strength": 0.01,
+      "status": "success",
+      "convergence_status": "stalled",
+      "converged": false,
+      "iterations": 66,
+      "reason_code": "joint_prox_returned_precision",
+      "stopping_reason": "joint_prox_returned_precision",
+      "runtime_sec": 80.44221480000124,
+      "agent_wall_sec": 87.86000000000058,
+      "metrics": {
+        "image.rmse": 0.0003135410281029128,
+        "image.relative_l2": 0.07181955566305197,
+        "image.psnr": 36.09471235202782,
+        "image.ssim": 0.9332660382004376
+      },
+      "dtype": "float32"
+    },
+    {
+      "name": "gaussian_fista_haar",
+      "group": "gaussian",
+      "solver": "fista",
+      "fidelity": "gaussian_nll",
+      "regularizer": "haar_l1",
+      "case_id": "parallel_2d__ellipses_sparse_gaussian",
+      "device": "cuda",
+      "strength": 0.01,
+      "status": "success",
+      "convergence_status": "max_iterations",
+      "converged": false,
+      "iterations": 68,
+      "reason_code": "joint_prox_inner_max_iterations",
+      "stopping_reason": "joint_prox_inner_max_iterations",
+      "runtime_sec": 98.91352819999884,
+      "agent_wall_sec": 105.81300000000192,
+      "metrics": {
+        "image.rmse": 0.00031450996494651395,
+        "image.relative_l2": 0.07204149986599746,
+        "image.psnr": 36.067911709213625,
+        "image.ssim": 0.9330205580332184
+      },
+      "dtype": "float32"
+    },
+    {
+      "name": "poisson_pdhg_wls_tv",
+      "group": "poisson",
+      "solver": "pdhg",
+      "fidelity": "wls",
+      "regularizer": "tv",
+      "case_id": "parallel_2d__ellipses_sparse_poisson",
+      "device": "cuda",
+      "strength": 0.01,
+      "status": "success",
+      "convergence_status": "max_iterations",
+      "converged": false,
+      "iterations": 200,
+      "reason_code": "maximum_iterations_reached",
+      "stopping_reason": "maximum_iterations_reached",
+      "runtime_sec": 53.64426529999764,
+      "agent_wall_sec": 57.75,
+      "metrics": {
+        "image.rmse": 0.0005020910348034154,
+        "image.relative_l2": 0.11500872865080806,
+        "image.psnr": 32.004950577215375,
+        "image.ssim": 0.8869397454886845
+      },
+      "dtype": "float32"
+    },
+    {
+      "name": "poisson_pdhg_nll_tv",
+      "group": "poisson",
+      "solver": "pdhg",
+      "fidelity": "transmission_poisson_nll",
+      "regularizer": "tv",
+      "case_id": "parallel_2d__ellipses_sparse_poisson",
+      "device": "cuda",
+      "strength": 0.01,
+      "status": "success",
+      "convergence_status": "max_iterations",
+      "converged": false,
+      "iterations": 200,
+      "reason_code": "maximum_iterations_reached",
+      "stopping_reason": "maximum_iterations_reached",
+      "runtime_sec": 77.76669599999877,
+      "agent_wall_sec": 82.51499999999942,
+      "metrics": {
+        "image.rmse": 0.000502091699776323,
+        "image.relative_l2": 0.11500888096917948,
+        "image.psnr": 32.004939073569496,
+        "image.ssim": 0.886939562380336
+      },
+      "dtype": "float32"
+    },
+    {
+      "name": "cone_fdk",
+      "group": "cone_fdk",
+      "solver": "fdk",
+      "fidelity": null,
+      "regularizer": null,
+      "case_id": "cone_3d/tissue_volume_clean_64",
+      "device": "cuda",
+      "strength": null,
+      "status": "success",
+      "convergence_status": "completed_valid",
+      "converged": false,
+      "iterations": 0,
+      "reason_code": "direct_reconstruction_valid",
+      "stopping_reason": "direct_reconstruction_valid",
+      "runtime_sec": 27.414355799999612,
+      "agent_wall_sec": 34.07800000000134,
+      "metrics": {
+        "image.rmse": 0.00011694891505360057,
+        "image.relative_l2": 0.10628658772121478,
+        "image.psnr": 30.68127588312055,
+        "image.ssim": 0.8175359787448093
+      },
+      "dtype": "float32",
+      "orthogonal_metrics": {
+        "axial": {
+          "image.rmse": 0.00016837459078170773,
+          "image.relative_l2": 0.11275606801483919,
+          "image.psnr": 27.51566876213436,
+          "image.ssim": 0.8165617590819338
+        },
+        "coronal": {
+          "image.rmse": 9.357348418222957e-05,
+          "image.relative_l2": 0.06447370860702593,
+          "image.psnr": 32.618143814356706,
+          "image.ssim": 0.9417624083107791
+        },
+        "sagittal": {
+          "image.rmse": 9.351111518600369e-05,
+          "image.relative_l2": 0.062415850749118366,
+          "image.psnr": 32.62393510065128,
+          "image.ssim": 0.945595664781716
+        }
+      }
+    }
   ]
 }

@@ -1,0 +1,90 @@
+{
+  "schema_version": "1.0",
+  "cases": [
+    {
+      "capability_tags": [
+        "3d",
+        "cone",
+        "astra",
+        "clean",
+        "ground_truth",
+        "fdk"
+      ],
+      "case_id": "cone_3d/spheres_astra_12",
+      "dimension": 3,
+      "geometry_type": "cone_3d",
+      "measurement_kind": "line_integral",
+      "noise_model": "none",
+      "path": "cases/cone_3d__spheres_astra_12",
+      "reference_kind": "backend_reference"
+    },
+    {
+      "case_id": "parallel_2d__ellipses_dense_clean",
+      "path": "cases/parallel_2d__ellipses_dense_clean",
+      "dimension": 2,
+      "geometry_type": "parallel_2d",
+      "observation_domain": "line_integral",
+      "observation_model": null,
+      "measurement_kind": "line_integral",
+      "noise_model": "none",
+      "reference_kind": "model_matched",
+      "capability_tags": [
+        "2d",
+        "parallel",
+        "ground_truth",
+        "dense_clean"
+      ]
+    },
+    {
+      "case_id": "parallel_2d__ellipses_sparse_gaussian",
+      "path": "cases/parallel_2d__ellipses_sparse_gaussian",
+      "dimension": 2,
+      "geometry_type": "parallel_2d",
+      "observation_domain": "line_integral",
+      "observation_model": "gaussian",
+      "measurement_kind": "line_integral",
+      "noise_model": "gaussian",
+      "reference_kind": "model_matched",
+      "capability_tags": [
+        "2d",
+        "parallel",
+        "ground_truth",
+        "sparse_gaussian"
+      ]
+    },
+    {
+      "case_id": "parallel_2d__ellipses_sparse_poisson",
+      "path": "cases/parallel_2d__ellipses_sparse_poisson",
+      "dimension": 2,
+      "geometry_type": "parallel_2d",
+      "observation_domain": "log_projection",
+      "observation_model": "transmission_poisson",
+      "measurement_kind": "line_integral",
+      "noise_model": "poisson",
+      "reference_kind": "model_matched",
+      "capability_tags": [
+        "2d",
+        "parallel",
+        "ground_truth",
+        "sparse_poisson"
+      ]
+    },
+    {
+      "case_id": "parallel_2d__ellipses_limited_angle",
+      "path": "cases/parallel_2d__ellipses_limited_angle",
+      "dimension": 2,
+      "geometry_type": "parallel_2d",
+      "observation_domain": "line_integral",
+      "observation_model": null,
+      "measurement_kind": "line_integral",
+      "noise_model": "none",
+      "reference_kind": "model_matched",
+      "capability_tags": [
+        "2d",
+        "parallel",
+        "ground_truth",
+        "limited_angle"
+      ]
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 """Autograd wiring and dense-view FBP regression.
 
-Independent discrete-transpose checks live in test_p0_operators.py.
+Independent discrete-transpose checks live in test_operator_references.py.
 """
 
 import math
@@ -10,8 +10,8 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from inv_framework.operators.ct.radon_torch import ParallelBeamRadon2D
-from inv_framework.solvers.classical import fbp
+from inv_framework.ct.backends.radon_torch import ParallelBeamRadon2D
+from inv_framework.solvers.analytic import fbp
 
 
 def test_autograd_matches_adjoint(image_size=32, num_angles=24, tol=1e-5,

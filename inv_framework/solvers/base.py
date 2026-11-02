@@ -9,23 +9,14 @@ know the old API continue to use :meth:`solve` unchanged.
 """
 
 from __future__ import annotations
-
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, replace
+from typing import Any, Callable, Iterable, Mapping
+from inv_framework.solvers.convergence import ConvergenceStatus, _json_safe, canonicalize_status, status_reason_class
+from inv_framework.core.operator import ForwardOperator
 import math
 import time
-from typing import Any, Callable, Iterable, Mapping
-
 import torch
-
-from ..convergence import (
-    ConvergenceStatus,
-    _json_safe,
-    canonicalize_status,
-    sample_trajectory,
-    status_reason_class,
-)
-from ..operators.base import ForwardOperator
 
 
 @dataclass(frozen=True)
@@ -106,8 +97,6 @@ class IterationRecord:
     objective: float | None = None
     relative_iterate_change: float | None = None
     algorithm_residual: float | None = None
-    forward_calls: int | None = None
-    adjoint_calls: int | None = None
     elapsed_seconds: float = 0.0
     step_size: float | None = None
     relaxation: float | None = None
@@ -139,8 +128,6 @@ class IterationRecord:
             "relative_iterate_change": self.relative_iterate_change,
             "algorithm_residual": self.algorithm_residual,
             "normal_residual": self.algorithm_residual,
-            "forward_calls": self.forward_calls,
-            "adjoint_calls": self.adjoint_calls,
             "elapsed_seconds": float(self.elapsed_seconds),
             "step_size": self.step_size,
             "relaxation": self.relaxation,
@@ -282,14 +269,6 @@ class IterationRecorder:
         self.previous: torch.Tensor | None = None
         self.completed_iteration=0
         self.last_completed_objective=None
-        owner=operator
-        while not hasattr(owner,'counters') and hasattr(owner,'operator'):
-            owner=owner.operator
-        counters=getattr(owner,'counters',None)
-        if counters is not None:
-            # The runtime can retain the last complete checkpoint when a
-            # legacy detailed loop propagates a cooperative budget exception.
-            counters.last_solver_recorder=self
         self.terminal_previous: torch.Tensor | None = None
         # Keep the old attribute as a compatibility alias.  New result
         # payloads use the canonical ``numerical_error`` status.
@@ -312,13 +291,6 @@ class IterationRecorder:
         self.numerical_failure = True
         if self.numerical_error_reason is None:
             self.numerical_error_reason = str(reason)
-
-    def _counter_values(self) -> tuple[int | None, int | None]:
-        stats = getattr(self.operator, "stats", None)
-        if not callable(stats):
-            return None, None
-        payload = stats() or {}
-        return payload.get("forward_calls"), payload.get("adjoint_calls")
 
     def record(
         self,
@@ -364,7 +336,6 @@ class IterationRecorder:
             denominator = max(_tensor_norm(self.previous) or 0.0, 1e-12)
             change = (_tensor_norm(value - self.previous) or 0.0) / denominator
         normalized = None if residual_norm is None else residual_norm / self.measurement_norm
-        forward_calls, adjoint_calls = self._counter_values()
         row = IterationRecord(
             iteration=int(iteration),
             epoch=epoch,
@@ -373,8 +344,6 @@ class IterationRecorder:
             objective=None if objective is None else float(objective),
             relative_iterate_change=change,
             algorithm_residual=None if algorithm_residual is None else float(algorithm_residual),
-            forward_calls=forward_calls,
-            adjoint_calls=adjoint_calls,
             elapsed_seconds=time.perf_counter() - self.started,
             step_size=step_size,
             relaxation=relaxation,
@@ -461,7 +430,7 @@ class IterationRecorder:
             and not bool((metadata or {}).get("native_termination_managed", False))
         ):
             try:
-                from ..convergence import classify_trajectory
+                from inv_framework.solvers.convergence import classify_trajectory
 
                 rows = [
                     {

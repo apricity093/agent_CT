@@ -1,7 +1,10 @@
+> CT 接口与验收：见 [公开 API](docs/agent_algorithm_api.md) 和 [实际验收记录](docs/ct_acceptance.md)。
+> 八项固定参数展示见[最新 Agent 端到端结果](#最新-agent-端到端结果)：二维使用新椭圆数据，三维使用 tissue_volume_clean_64；spheres 用于回归。
+
 # inv_framework
 
 `inv_framework` 是一个面向 X-ray CT 重建与评测的轻量 Python 框架。它将 CT
-前向/伴随算子、经典重建算法、版本化测试数据、参数验证、收敛诊断和公平比较协议
+前向/伴随算子、经典重建算法、版本化测试数据、参数验证、收敛诊断和固定参数评测
 组织为统一接口，并提供 `invct` 命令行工具。
 
 当前源码提供 17 个 ordinary-CT solver、纯 PyTorch 2D parallel-beam Radon、ASTRA
@@ -30,7 +33,7 @@ min_x  0.5 * ||A x - y||_2^2 + lambda * R(x)
 
 ## 支持的算法
 
-| CLI 名称 | 算法 | 几何 | 主要配置 | 后端 |
+| CLI 名称 | 算法 | 几何 | 主要配置 | `invct run` 后端 |
 | --- | --- | --- | --- | --- |
 | `fbp` | Filtered Backprojection | 2D parallel | `scale` | PyTorch CPU/CUDA |
 | `sirt` | SIRT | 2D parallel | `num_iterations`、上下界 | PyTorch CPU/CUDA |
@@ -70,6 +73,24 @@ tikhonov, tv_fista, fista, admm, pdhg, constrained_pdhg, asd_pocs_tv, fdk
 `log_projection` 当成计数数据。FDK 要求 `cone_3d`、cubic volume、PyTorch CUDA 和
 ASTRA CUDA。
 
+### 公开任务 API 的后端支持
+
+上表列出 `invct run` 使用的后端。通过 `run_ct_task()` 或 `invct task` 提交请求时，
+可用 `CTTaskRequest.backend` 选择后端，用 `device` 选择 CPU/CUDA；二维默认使用
+`backend="torch"`、`device="cpu"`。`invct run` 没有 `--backend` 参数。
+
+| `backend` | 任务几何 | 设备与依赖 | 验证状态 |
+| --- | --- | --- | --- |
+| `torch` | `parallel_2d` | PyTorch CPU/CUDA | 已执行二维重建与伴随检查 |
+| `astra` | `parallel_2d` | ASTRA；CUDA 路径还需 PyTorch CUDA 与 ASTRA CUDA | CPU/CUDA 伴随检查及资源释放检查已通过 |
+| `astra` | `cone_3d`，FDK | PyTorch CUDA 与 ASTRA CUDA | spheres 回归与 tissue FDK 展示已执行 |
+| `leap` | `parallel_2d` | 可导入的 LLNL LEAP `leapctype`；设备取决于其安装配置 | 任务接口已接入，尚未完成真实 LEAP 后端验收 |
+
+ASTRA 二维 CUDA 路径在 GPU 上应用 ASTRA 线性投影矩阵及其转置。
+`list_capabilities()` 返回各后端的依赖、设备与可运行信息，以及算法的默认参数和兼容性要求；
+依赖可用不等于完成数值验收。后端切换仍需满足算法、几何与观测域约束。
+完整验证范围与未通过的回归见[验收记录](docs/ct_acceptance.md)。
+
 ## 安装
 
 要求 Python 3.10 或更高版本。
@@ -106,20 +127,23 @@ CUDA 上运行；FDK 不会回退到语义不同的 CPU 实现。
 
 ## 数据查询与校验
 
-默认数据根目录为 `test/data`。查询 catalog：
+默认数据根目录为 `tests/data`。查询 catalog：
 
 ```bash
 invct data list
 invct data list --dimension 2
-invct data list --geometry parallel_2d --tag quality
-invct data show parallel_2d/tissue_breast_dense_clean_128
+invct data list --geometry parallel_2d --tag dense_clean
+invct data show parallel_2d__ellipses_dense_clean
 ```
 
-校验 manifest、HDF5 shape 和 SHA256：
+新二维案例的场景标签为 `dense_clean`、`sparse_gaussian`、`sparse_poisson` 和
+`limited_angle`。过滤后没有匹配案例时，表格仅显示表头，`--json` 返回 `[]`，退出码为 `0`。
+
+检查案例元数据与 HDF5 数组形状：
 
 ```bash
 invct data validate
-invct data validate parallel_2d/tissue_breast_dense_clean_128
+invct data validate parallel_2d__ellipses_dense_clean
 ```
 
 外部 catalog 可通过 `--root PATH`（数据子命令）或 `--data-root PATH`（`run`）传入。
@@ -127,7 +151,7 @@ invct data validate parallel_2d/tissue_breast_dense_clean_128
 
 ```bash
 invct data list --root /path/to/ct-data --json
-invct data show parallel_2d/disk_analytic_32 --root /path/to/ct-data
+invct data show parallel_2d__ellipses_dense_clean --root /path/to/ct-data
 ```
 
 每个 case 的 HDF5 使用以下统一键：
@@ -149,7 +173,7 @@ CPU 示例：
 
 ```bash
 invct run cgls \
-  --case parallel_2d/tissue_breast_dense_clean_128 \
+  --case parallel_2d__ellipses_dense_clean \
   --config configs/algorithms/cgls.yaml \
   --out artifacts/cgls_dense_cpu \
   --device cpu
@@ -159,7 +183,7 @@ CUDA 示例：
 
 ```bash
 invct run tv_fista \
-  --case parallel_2d/tissue_breast_sparse_poisson_128 \
+  --case parallel_2d__ellipses_sparse_poisson \
   --config configs/algorithms/tv_fista.yaml \
   --out artifacts/tv_fista_sparse_cuda \
   --device cuda
@@ -179,7 +203,7 @@ MLEM/OSEM 必须使用明确声明 `nonnegative_counts` 或 `intensity` 的 emis
 不要将上面的 transmission case 替换进统计重建命令。SART/OS-SART 的
 `block_size`/`subset_count` 还必须与公开 view 数形成合法 partition。
 
-输出目录非空时命令默认拒绝运行，防止新旧 manifest 混合。只有确认替换该次 run
+输出目录非空时命令默认拒绝运行，防止混合不同运行的输出。只有确认替换该次 run
 产物时才显式添加 `--overwrite`。
 
 ### 选择 solver 与正则项
@@ -188,8 +212,8 @@ MLEM/OSEM 必须使用明确声明 `nonnegative_counts` 或 `intensity` 的 emis
 正则项；当前 CLI 没有 `--regularizer` 或 `--operator` 参数。已有组合示例：
 
 ```bash
-invct run fista --case parallel_2d/disk_analytic_32 --config configs/examples/fista_haar_l1.yaml --out artifacts/fista_haar_cpu --device cpu
-invct run tikhonov --case parallel_2d/disk_analytic_32 --config configs/examples/tikhonov_h1.yaml --out artifacts/tikhonov_h1_cpu --device cpu
+invct run fista --case parallel_2d__ellipses_dense_clean --config configs/examples/fista_haar_l1.yaml --out artifacts/fista_haar_cpu --device cpu
+invct run tikhonov --case parallel_2d__ellipses_dense_clean --config configs/examples/tikhonov_h1.yaml --out artifacts/tikhonov_h1_cpu --device cpu
 ```
 
 直接重建不要求迭代 solver，无正则算法不要求 regularizer。CLI/runtime 的 CT operator
@@ -199,21 +223,19 @@ invct run tikhonov --case parallel_2d/disk_analytic_32 --config configs/examples
 ### 运行预算与停止策略
 
 ```bash
-invct run fista --case parallel_2d/disk_analytic_32 --config configs/algorithms/fista.yaml --out artifacts/fista_budget_cpu --device cpu --max-iterations 50 --max-forward-calls 1500 --max-adjoint-calls 1500 --max-wall-seconds 60
+invct run fista --case parallel_2d__ellipses_dense_clean --config configs/algorithms/fista.yaml --out artifacts/fista_budget_cpu --device cpu --max-iterations 50
 ```
 
 | 选项 | 含义 |
 | --- | --- |
 | `--max-iterations N` | 外层迭代预算；算法迭代数仍由配置指定并受预算限制 |
-| `--max-forward-calls N` / `--max-adjoint-calls N` | A/A* 调用上限，包含初始化、参数估计和终点工作 |
-| `--max-wall-seconds S` | 协作式 runtime 时间预算；单次算子调用不能被抢占 |
 | `--stopping-policy PATH` | schema `1.0`、mode `solver_native_and_endpoint` 的 JSON 停止策略 |
 | `--parameter-sources PATH` | 参数名到来源标签的 JSON mapping |
 | `--observation-domain DOMAIN` | 选择 case 中已提供的观测域，不生成新的观测数据 |
 | `--fixed-compute` | 关闭 solver 提前停止，用于声明了固定计算预算的实验 |
 
-`--fixed-compute` 不取消预算或数值异常检查。`--max-wall-seconds` 不等于进程硬超时；
-硬超时由上层 Agent 的 `budget.timeout_s` 控制。达到迭代上限或预算耗尽不表示收敛。
+`--fixed-compute` 不取消预算或数值异常检查。Agent 取 `budget.max_wall_seconds` 与
+`budget.timeout_s` 中已指定的最小值作为 worker 的进程期限。达到迭代上限或预算耗尽不表示收敛。
 CLI 返回码为：成功执行 `0`，无效参数/配置 `2`，运行失败或资源中断等 `1`；
 优化收敛状态需要继续读取 diagnostics。
 
@@ -241,16 +263,7 @@ truth 时可报告 RMSE、PSNR、SSIM 和 relative error；Agent public staging 
 invct bench --suite configs/benchmarks/traditional_quality.yaml
 ```
 
-公平比较协议可在不执行重建的情况下校验：
-
-```bash
-invct protocol-check \
-  --protocol configs/fair_protocols/equal_operator_calls_v1.yaml
-```
-
-支持固定默认值、等 trial、等调参时间、等 operator calls、公共验证集，以及单独标记的
-离线 oracle upper bound。在线选择不得使用测试 truth。结果按图像质量、数据一致性、
-优化行为、计算效率和鲁棒性分别报告，不合成为无依据的总分。
+当前 suite 使用固定默认参数，记录质量、数据一致性和运行时间。数据与输出格式见 [数据集说明](docs/datasets.md)。
 
 ## 在 inverse-problem Agent 中使用
 
@@ -327,14 +340,14 @@ inverse-agent run-experiment \
 RunRequest
   -> Agent candidate selection and compatibility filtering
   -> Agent parameter/budget validation
-  -> CTAdapter
-  -> invct subprocess
-  -> CT solver and diagnostics
-  -> Agent convergence gate and independent evaluation
+  -> CTBackend / CTAdapter
+  -> CT worker / inv_framework.api.run_ct_task
+  -> CT solver and native diagnostics
+  -> Independent evaluator
 ```
 
 Agent 负责问题解释、候选选择、参数来源、尝试谱系和跨运行比较；CT backend 负责数值
-合法性、solver-native 停止判据、operator-call 记账及低层诊断。达到最大迭代数或预算
+合法性、solver-native 停止判据及数值诊断。达到最大迭代数或预算
 耗尽不会被 Agent 改写为 `converged`。
 
 ## 输出与诊断
@@ -346,14 +359,11 @@ run-directory/
 ├── reconstruction.pt
 ├── metrics.json
 ├── diagnostics.json
-├── manifest.json
-├── comparison.png
-└── artifacts.sha256
+└── comparison.png
 ```
 
 `reconstruction.pt` 保存 CPU tensor bundle，便于在没有原运行 GPU 的机器上离线复评。
-manifest 记录 Python、PyTorch、平台、CUDA、Git revision、dirty patch hash、输入来源、
-参数和参数来源。失败运行写入结构化 failure 文件，不会从 benchmark 中静默删除。
+`diagnostics.json` 记录算法参数、参数来源、停止原因和运行时间。失败运行写入结构化 failure 文件。
 
 常见 convergence status 包括：
 
@@ -371,16 +381,12 @@ unavailable
 
 直接算法在输出有限、shape 正确且参数有效时报告 `completed_valid`，不是数学意义上的
 `converged`。诊断同时记录 stopping reason、objective/residual、最终残差、
-forward/adjoint calls、运行时间和资源信息。
-
-预算中断统一为 `resource_exhausted`；算子次数与 runtime wall 的区别通过
-`operator_call_budget_exhausted` / `wall_time_budget_exhausted` 停止原因表达。
+运行时间。
 
 L2 数据项下，Landweber 的固定步长条件为 `0 < step_size < 2 / ||A||^2`，
 FISTA 的标准固定步长条件为 `0 < step_size <= 1 / ||A||^2`。省略步长时使用
 确定性有限 power iteration 估计；该估计不是谱范数上界。当前 FISTA/TV-FISTA
-对试探步长检查实际光滑项 majorization，失败时减半回溯。参数估计、回溯与
-solver 迭代的 operator calls 分别记账；有限 TV proximal 的限制见组合算法文档。
+对试探步长检查实际光滑项 majorization，失败时减半回溯。有限 TV proximal 的限制见组合算法文档。
 
 ## 可组合算法与 Agent
 
@@ -393,7 +399,7 @@ Agent 先发现候选，再校验物理域、数据字段和数学兼容性，�
 FISTA/ADMM/PDHG 还提供纯透射 Poisson NLL 路径。正则包括无正则、恒等
 Tikhonov、H1、两种 TV、梯度 Huber 与 Haar detail-L1。
 这表示受兼容性约束的组件组合，并不表示任意 solver、prior 与几何均可互换；
-执行完成、优化收敛和重建质量分别记录。下方用固定种子的真实图像展示部分路径。
+执行完成、优化收敛和重建质量分别记录。下方以固定参数的合成数据实验展示部分路径。
 
 FISTA/H1/Haar 的参数和兼容性见 [用法](docs/composable_reconstruction.md)，
 ADMM/PDHG/Huber 见 [分裂算法](docs/splitting_solvers.md)，
@@ -403,7 +409,7 @@ ASD 变体及参考许可见 [来源](docs/constrained_tv_sources.md)。
 
 主项目提供 17 项精确能力检查和真实 Agent 路径；安装、请求参数、runtime wall
 与硬超时语义见 [Agent 用法](docs/agent_usage.md)。主项目通过 `pyproject.toml`
-固定本库提交；固定来源安装检查与数值精度验收分别记录。P7/P8 未启动。
+固定本库提交；固定来源安装检查与数值精度验收分别记录。
 
 有限预算结果不构成最佳质量排名。独立 pilot 与冻结配置示例见
 [质量示例](docs/quality_example.md)。
@@ -417,87 +423,155 @@ ASD 变体及参考许可见 [来源](docs/constrained_tv_sources.md)。
 
 ## 最新 Agent 端到端结果
 
-以下选取少量真实 Agent 结果，展示 **solver 切换、正则切换、保真项切换及
-3D 几何入口**。
+2026-11-02 的八项固定参数实验均通过主项目 Agent 的公开 API 链路执行成功，
+保存了重建、原生诊断和独立图像指标，展示 **solver 切换、正则切换、保真项切换及
+3D 几何入口**。执行成功不等于优化收敛：七项二维实验均未报告 `converged`，
+FDK 为直接重建 `completed_valid`。
+
+全部任务使用 NVIDIA GeForce GTX 1650 和 float32；二维采用 PyTorch CUDA，
+三维 FDK 采用 ASTRA CUDA。下表时间为 CT API 运行时间，完整 Agent 时间另存于结果文件。
 
 ### 2D Gaussian：切换 solver 与 regularizer
 
-128×128 组织 phantom，48 views 覆盖 180°，匹配的
-`ParallelBeamRadon2D` 生成观测并重建。Gaussian σ=0.002，使用已知方差 NLL、
-非负约束及零初始化。FISTA/ADMM/PDHG 的恒等 Tikhonov 对照共用
-λ=7499.99953125；FISTA 的 TV 与 Haar-L1 是另行记录参数的不同目标。
-参数通过独立种子 `271828` 的测量域双折验证选择，truth 只用于生成与最终评价。
+采用 `ct-ellipses-new-20261101` 的 test split、sample 0，已注册案例为
+`parallel_2d__ellipses_sparse_gaussian`：64×64、32 views 覆盖 180°、衰减缩放 0.02。
+观测噪声 σ=0.0020266722422093153，使用已知方差 Gaussian NLL、非负约束、
+零初始化和完整图像评价区域。五项正则强度均为 `strength=0.01`；Tikhonov 为恒等算子，
+TV 为 isotropic，Haar 为 level=2 的 detail-L1。
 
-![固定种子Gaussian观测下的solver和正则组合重建](docs/assets/component-showcase/gaussian_components.png)
+![新椭圆Gaussian观测下的solver与正则组合重建](docs/assets/component-showcase/gaussian_components.png)
 
-| Solver + regularizer | Data fidelity | λ | PSNR (dB) | SSIM | RMSE | 优化状态 |
-| --- | --- | ---: | ---: | ---: | ---: | --- |
-| FISTA + 恒等 Tikhonov | Gaussian NLL | 7499.99953125 | 21.70 | 0.476 | 3.29036e-4 | resource_exhausted |
-| ADMM + 恒等 Tikhonov | Gaussian NLL | 7499.99953125 | 25.07 | 0.340 | 2.23034e-4 | resource_exhausted |
-| PDHG + 恒等 Tikhonov | Gaussian NLL | 7499.99953125 | 23.51 | 0.505 | 2.67076e-4 | resource_exhausted |
-| FISTA + isotropic TV | Gaussian NLL | 0.0749999953125 | 22.91 | 0.497 | 2.86273e-4 | resource_exhausted |
-| FISTA + Haar detail-L1，level=2 | Gaussian NLL | 14.9999990625 | 23.36 | 0.507 | 2.71626e-4 | resource_exhausted |
+| Solver + regularizer | Data fidelity | λ | 实际迭代 | PSNR (dB) | SSIM | RMSE | CT 时间 (s) | 优化状态 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| FISTA + 恒等 Tikhonov | Gaussian NLL | 0.01 | 200 | 32.32 | 0.8860 | 0.000484251 | 56.84 | `max_iterations` |
+| ADMM + 恒等 Tikhonov | Gaussian NLL | 0.01 | 20 | 20.06 | 0.4674 | 0.0019868 | 391.08 | `max_iterations` |
+| PDHG + 恒等 Tikhonov | Gaussian NLL | 0.01 | 200 | 24.84 | 0.7704 | 0.00114602 | 48.52 | `max_iterations` |
+| FISTA + isotropic TV | Gaussian NLL | 0.01 | 66 | 36.09 | 0.9333 | 0.000313541 | 80.44 | `stalled` |
+| FISTA + Haar detail-L1，level=2 | Gaussian NLL | 0.01 | 68 | 36.07 | 0.9330 | 0.00031451 | 98.91 | `max_iterations` |
 
-
-这些案例说明组合能够通过 Agent 链路执行并保存结果，不表示已经收敛或质量最优。
+ADMM 的外层上限为 20，其他四项为 200。FISTA/PDHG + Tikhonov 和 ADMM 均以
+`maximum_iterations_reached` 停止。TV 的原因码为 `joint_prox_returned_precision`：
+联合近端的双精度解达到误差证书要求，但转回 float32 后的舍入误差超过目标，状态为 `stalled`。
+Haar 的原因码为 `joint_prox_inner_max_iterations`，表示联合近端内层预算用尽，
+并非外层达到 200 次。两者均保留有效重建，不标为收敛。
 
 ### 2D Poisson：同一 counts 切换 data fidelity
 
-保持 128×128、48 views、同一非负 TV 和零初始化，使用同一份纯透射计数：
-`counts ~ Poisson(1000 * exp(-Ax))`，s=1，无电子噪声或背景。
-post-log WLS 采用固定 1 个计数的 log-floor；pre-log NLL 直接读取原始 counts。
-两者 λ 均为 0.000261538623046875，原始 counts 不被修改。
+采用同一椭圆样本的 `parallel_2d__ellipses_sparse_poisson` 案例：64×64、32 views、
+非负约束、零初始化、isotropic TV，`strength=0.01`。两条路径共享案例保存的原始
+counts 和 I0，使用纯透射模型 `counts ~ Poisson(I0 * exp(-Ax))`，无背景。
+post-log WLS 使用 log-floor=1 和由公开 counts 派生的固定权重；
+pre-log Poisson NLL 直接使用 counts/I0。
 
 ![同一Poisson计数下PDHG与TV的两种保真项重建](docs/assets/component-showcase/poisson_fidelity.png)
 
-| Solver + regularizer | Data fidelity | PSNR (dB) | SSIM | RMSE | 优化状态 |
-| --- | --- | ---: | ---: | ---: | --- |
-| PDHG + isotropic TV | post-log WLS，近似模型 | 2.70 | 0.122 | 2.93123e-3 | resource_exhausted |
-| PDHG + isotropic TV | pre-log 透射 Poisson NLL | 2.64 | 0.124 | 2.95284e-3 | resource_exhausted |
+| Solver + regularizer | Data fidelity | λ | 实际迭代 | PSNR (dB) | SSIM | RMSE | CT 时间 (s) | 优化状态 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| PDHG + isotropic TV | post-log WLS，近似模型 | 0.01 | 200 | 32.00 | 0.8869 | 0.000502091 | 53.64 | `max_iterations` |
+| PDHG + isotropic TV | pre-log 透射 Poisson NLL | 0.01 | 200 | 32.00 | 0.8869 | 0.000502092 | 77.77 | `max_iterations` |
 
-该噪声条件下图像质量较差，两条路径都达到时间预算；这里展示保真项接入与输出保存，
-**不将其列为高质量重建成功案例**。
+两项均在外层 200 次上限停止，原因码为 `maximum_iterations_reached`。
+WLS 与 Poisson NLL 的目标函数尺度不同，同数值 λ 不代表同等正则化效果；
+这些结果展示固定参数下的保真项切换，不构成最优质量或算法排名。
 
 ### 3D cone-beam：FDK
 
-直接读取历史 `cone_3d/tissue_volume_clean_64` 的同一份 HDF5 truth、原始投影和几何，
-使用 `ASTRAFDKOperator3D + FDK`、无显式正则、Ram-Lak、
-`short_scan=false`、`voxel_supersampling=1`，经真实 Agent 调用。
-上排为 reference，下排为重建，依次显示中心 axial、coronal 和 sagittal 切面。
+案例为 `cone_3d/tissue_volume_clean_64`：64³ 合成组织体数据、180 个全圆 views、
+128×128 detector，SOD/ODD 均为 320。输入 HDF5 和 catalog 位于主项目的
+`artifacts/ct-agent-tissue-showcase-20261024/data/`，体数据、原始投影与几何均直接读取。
+使用 ASTRA cone-beam FDK、Ram-Lak、`short_scan=false`、`voxel_supersampling=1`，
+无显式正则。上排为 reference，下排为重建，依次为中心 axial、coronal 和 sagittal 切面。
 
-![原README同一3D观测的FDK重建及三个正交切面](docs/assets/component-showcase/cone_fdk.png)
+![tissue三维锥束FDK重建及三个中心正交切面](docs/assets/component-showcase/cone_fdk.png)
 
-| Operator + method | Regularizer | PSNR (dB) | SSIM | RMSE | 状态 |
-| --- | --- | ---: | ---: | ---: | --- |
-| ASTRA cone-beam + FDK | 无 | 30.68 | 0.818 | 1.16949e-4 | completed_valid |
+| Operator + method | Regularizer | PSNR (dB) | SSIM | RMSE | CT 时间 (s) | 状态 |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| ASTRA cone-beam + FDK | 无 | 30.68 | 0.8175 | 0.000116949 | 27.41 | `completed_valid` |
 
-独立切面图已保存：[axial](docs/assets/component-showcase/fdk_axial.png)、
-[coronal](docs/assets/component-showcase/fdk_coronal.png)、
-[sagittal](docs/assets/component-showcase/fdk_sagittal.png)。
-服务器同时保留该次 `fdk/backend/reconstruction.pt`、输入 HDF5、请求、指标及诊断，
-便于后续复用；本仓库包含图版、独立 PNG、PDF/SVG 和
-[精确参数与成本](docs/assets/component-showcase/selected_results.json)。
+FDK 执行一次，原生迭代数记为 0。三个中心切面的指标为：
+
+| 切面 | PSNR (dB) | SSIM | RMSE |
+| --- | ---: | ---: | ---: |
+| axial | 27.52 | 0.8166 | 0.000168375 |
+| coronal | 32.62 | 0.9418 | 9.35735e-05 |
+| sagittal | 32.62 | 0.9456 | 9.35111e-05 |
 
 ### 展示范围与完整实验
 
-- 所有面板统一灰度窗 `[0, 0.004]`，无裁剪、平滑或逐图归一化；显示窗外数值仅在显示时饱和。
-  PSNR/SSIM 使用固定 data range=0.004、完整图像/体数据，RMSE 使用原始数值。
-  3D SSIM 为轴向二维切片均值。
+- 二维统一显示窗为 `[0, 0.02]`，三维为 `[0, 0.004]`；不进行逐图归一化、平滑或数值裁剪。
+  显示窗外数值仅在显示时饱和。指标使用原始重建与完整图像/体数据，固定 data range 分别为 0.02 和 0.004。
+  SSIM 使用 scikit-image 的 7×7 窗；整卷 SSIM 为轴向二维切片均值。
+- truth 只由独立 evaluator 在执行后读取，公开求解输入不含 truth、clean projection 或评价 ROI。
+  参数来自算法默认值与显式固定配置；非 L2 保真项关闭 discrepancy 控制，其他原生停止判据有效。
+- ADMM 外层上限 20、时间预算 900 秒、硬超时参数 1020 秒；其余二维项外层上限 200、
+  时间预算 300 秒、硬超时参数 420 秒。Agent 取两项时间限制的最小值作为实际进程期限。
+  FDK 硬期限为 420 秒。不同预算和不同目标函数的结果不用于同预算性能排名。
+- 八项重建、完整请求、参数来源、原生原因码、指标及图版集中于主项目 `outputs/ct_showcase/`。
+  本仓库保存上述图版和[最终参数与结果 JSON](docs/assets/component-showcase/selected_results.json)、
+  [结果 CSV](docs/assets/component-showcase/selected_results.csv)。
+- 这些是固定参数功能展示；ADMM 仍有明显伪影，二维优化均未确认收敛。
+  展示结果不替代全量数值验收，已知 CT 数值回归失败及 LEAP 实机验收限制见[验收记录](docs/ct_acceptance.md)。
 
 ## Python API
 
-CLI 与 Python API 使用相同的 case 和 operator：
+### 公开任务接口
+
+Agent 和普通重建任务使用 `inv_framework.api`。`list_capabilities()` 返回算法、
+默认参数、保真项、正则项、后端与案例列表；`run_ct_task()` 完成请求校验、观测域适配、
+算子与求解器装配、重建和指标计算，并在结束时释放所持有的 ASTRA 资源。
+
+```python
+from inv_framework.api import CTTaskRequest, list_capabilities, run_ct_task
+
+capabilities = list_capabilities()
+print([item["name"] for item in capabilities["algorithms"]])
+print([item["case_id"] for item in capabilities["cases"]])
+
+request = CTTaskRequest(
+    case_id="parallel_2d__ellipses_sparse_poisson",
+    algorithm="pdhg",
+    backend="torch",
+    device="cpu",
+    fidelity="transmission_poisson_nll",
+    regularizer="tv",
+    params={"num_iterations": 2, "strength": 0.01, "min_value": 0.0},
+)
+result = run_ct_task(request)
+if result.status == "failed":
+    raise RuntimeError(result.error_message)
+print(result.convergence_status, result.iterations, result.metrics)
+reconstruction = result.reconstruction  # NumPy 数组；本例形状为 (1, 1, 64, 64)
+```
+
+未指定的算法参数从 `configs/algorithms/<algorithm>.yaml` 加载；外部数据通过
+`data_root` 指定包含 `catalog.json` 的目录。示例的两次迭代用于验证调用链路，
+不代表优化收敛。应同时读取 `status`、`converged`、`convergence_status` 和 `reason_code`；
+有真值时返回图像质量指标，无真值时仍可重建并报告数据一致性指标。
+
+等价字典请求也可直接传给 `run_ct_task()`，或保存为 JSON 后执行：
+
+```bash
+invct task request.json --out artifacts/ct_task
+```
+
+该命令保存 `reconstruction.npy`（有重建结果时）和 `diagnostics.json`。
+前文的 `reconstruction.pt` 等文件是 `invct run` 的输出格式。
+请求字段、取消机制与结果语义见[公开 API](docs/agent_algorithm_api.md)。
+
+### 底层算子与求解器
+
+需要自行装配数值算法时，可直接使用以下接口；本例与默认 Torch CLI 使用相同的 case 和 operator：
 
 ```python
 import torch
 
 from inv_framework.benchmarks import load_ct_case
-from inv_framework.operators.ct import ParallelBeamRadon2D
+from inv_framework.ct.backends import ParallelBeamRadon2D
 from inv_framework.solvers import CGLSSolver
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 case = load_ct_case(
-    "parallel_2d/tissue_breast_dense_clean_128",
+    "parallel_2d__ellipses_dense_clean",
     device=device,
 )
 angles = torch.tensor(case.geometry["angles_rad"], device=device)
@@ -517,61 +591,44 @@ reconstruction = solver.solve(case.measurement, operator)
 ## 项目结构
 
 ```text
-agent_CT/
+ct-benchlab/
 ├── inv_framework/
-│   ├── cli.py                 # invct 命令解析
-│   ├── ct_runtime.py          # registry、run、eval、bench
-│   ├── benchmarks/            # 版本化 case API
-│   ├── operators/             # forward / adjoint / CT operators
-│   ├── solvers/               # 经典、子集、统计与正则化算法
-│   ├── regularizers/          # Tikhonov、TV、Haar、Huber
-│   └── utils/                 # PSNR、SSIM
-├── configs/
-│   ├── algorithms/            # solver YAML
-│   ├── benchmarks/            # benchmark suite
-│   ├── fair_protocols/        # 公平比较协议
-│   └── protocols/             # 评估阈值
-├── test/                      # CT runtime 与集成测试
-├── tests/                     # 算子和既有回归测试
+│   ├── api/         # schema、dispatcher、execution、CLI 和文件输出
+│   ├── core/        # operator、fidelity、regularizer
+│   ├── ct/          # 案例、测量、registry 与 backends
+│   ├── solvers/     # analytic、algebraic、subset、statistical、splitting、deep
+│   └── utils/       # 原始数值指标与三维正交切片
+├── configs/         # 算法默认值、基准和评价协议
+├── tests/           # 唯一测试目录，含四个 ellipses 和 spheres 3D
+├── docs/
 ├── examples/
-├── tools/
-└── pyproject.toml
+└── tools/
 ```
 
 ## 开发与测试
 
-Windows CUDA 环境需先导入 torch 再启动 pytest，并使用环境的 Library/bin PATH
-和单线程设置。例如快速 registry 检查：
-
-```powershell
-python -c "import torch; import pytest; raise SystemExit(pytest.main(['test/test_invct_cli.py::test_help_and_registry_are_stable', 'test/test_registry_diagnostics.py::test_registry_build_config_bijection_is_json_stable', 'test/test_batch10_fair_protocols.py', '-q']))"
-```
-
-这组命令只检查命令发现、registry/config 对应及公平协议，不执行真实重建。
-下列完整测试和快速数值测试则包含真实 solver 调用。
-
-全部测试包含高成本独立参考与长程高精度 CT 专项，只有明确需要完整范围时运行：
+安装项目声明的开发依赖后，默认回归仅收集 `tests/`：
 
 ```bash
-python -m pytest -q test tests
+python -m pip install -e '.[dev]'
+python -m pytest -q
 ```
 
-运行 CLI、registry、参数和收敛相关的快速验证：
+CI 使用同一入口。CUDA/ASTRA 与真实 LEAP 测试按依赖、硬件和模型配置跳过，
+CPU 环境可以运行基础测试。400 次 DIP 训练不在默认集合中，按需显式运行：
 
 ```bash
-python -m pytest -q \
-  test/test_invct_cli.py \
-  test/test_registry_diagnostics.py \
-  test/test_batch6_parameter_validation.py \
-  test/test_convergence_protocol.py
+python -m pytest -q -m training tests/test_nonlinear_operator.py
 ```
 
-验证公平协议和紧凑 benchmark 证据：
+完整 benchmark 脚本保留在 `tests/ct_all_solvers/run_all_solvers.py`，
+FDK 模拟脚本保留在 `tests/ct_fdk_simulation/run_fdk_simulated_smoke.py`；
+二者通过脚本命令显式运行，不由 pytest 自动执行。
+
+快速验证新数据、存储与重建入口：
 
 ```bash
-python -m pytest -q \
-  test/test_batch10_fair_protocols.py \
-  test/test_batch13_budgeted_benchmark.py
+python -m pytest -q tests/test_ellipses_runtime.py tests/ct_cases
 ```
 
 小规模代码验证与完整 CT benchmark 应分开执行。修改 forward/adjoint operator 时还应
@@ -591,9 +648,8 @@ python -m pip wheel . --no-deps --no-build-isolation --wheel-dir artifacts/wheel
 ```
 
 wheel 携带 Python 数值模块与 17 个 `configs/algorithms/*.yaml`。
-README 中的 `configs/examples`、benchmark/protocol 文件、`test/data` 和 docs
+README 中的 `configs/examples`、benchmark/protocol 文件、`tests/data` 和 docs
 按源码 checkout 使用，不随 wheel 提供；安装包运行时需要显式提供数据目录和配置。
-主项目的组件发现、组合和请求组装代码还需在主项目中单独提交。
 固定版本安装必须使用已推送且可获取的 commit，再同步主项目依赖引用，不能用
 本地 dirty checkout 的结果代替固定来源安装验收。
 
@@ -603,8 +659,8 @@ README 中的 `configs/examples`、benchmark/protocol 文件、`test/data` 和 d
 - `parallel3d`、任意 `cone_vec` 和非等边体素不会被伪装成已支持；
 - ASTRA FDK 使用官方 `FDK_CUDA`，支持 Ram-Lak、Parker short-scan weighting 和
   voxel supersampling；
-- 128×128 tissue case 和 32×32 Shepp-Logan case 是确定性合成 phantom，不是患者数据；
-- 大型或受许可约束的数据集只登记在 `test/data/external_catalog.json`，不会自动下载。
+- 二维 ellipses、三维 tissue 与 spheres 案例均为合成体模，不是患者数据；
+- 大型或受许可约束的数据集只登记在 `tests/data/external_catalog.json`，不会自动下载。
 
 外部数据与可选后端：
 

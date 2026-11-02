@@ -3,15 +3,12 @@ import numpy as np
 import pytest
 import torch
 from scipy.optimize import minimize
-from inv_framework.fidelity import QuadraticFidelity, TransmissionPoissonFidelity
-from inv_framework.regularizers import (
-    ZeroRegularizer, TikhonovRegularizer, TVRegularizer,
-    GradientHuberRegularizer, HaarL1Regularizer,
-)
-from inv_framework.operators.gradient import GradientOperator
+from inv_framework.core.fidelity import QuadraticFidelity, TransmissionPoissonFidelity
+from inv_framework.core.regularizer import ZeroRegularizer, TikhonovRegularizer, TVRegularizer, GradientHuberRegularizer, HaarL1Regularizer
+from inv_framework.core.operator import GradientOperator
 from inv_framework.solvers import FISTASolver, ADMMSolver, PDHGSolver
-from inv_framework.solvers.classical import CGLSSolver, LSQRSolver
-from test_p1_composable import Matrix
+from inv_framework.solvers.algebraic import CGLSSolver, LSQRSolver
+from test_composable_regularizers import Matrix
 
 
 A = np.array([[1.2,.1,.2,.05],[.1,1.4,.05,.1],[.2,.1,1.1,.1],[.05,.2,.1,1.3]])
@@ -91,7 +88,7 @@ def test_augmented_krylov_closed_form(solver,name):
 
 
 def test_joint_prox_box_certificate_and_budget():
-    from inv_framework.regularizers.joint_prox import joint_prox, ProximalAccuracyError
+    from inv_framework.core.regularizer import joint_prox, ProximalAccuracyError
     reg=HaarL1Regularizer(1)
     v=torch.tensor([[[[-.9,.4],[1.2,-.3]]]],dtype=torch.float64)
     x=joint_prox(reg,v,.2,min_value=0.,max_value=.7,tolerance=1e-7,max_iterations=5000)
@@ -111,15 +108,17 @@ def test_poisson_returned_float32_optimality_is_checked():
 
 @pytest.mark.parametrize('algorithm',['admm','pdhg'])
 def test_split_haar_shape_is_rejected_before_execution(algorithm):
-    from inv_framework.solvers.specs import validate_parameter_values
+    from inv_framework.ct.registry import validate_parameter_values
     result=validate_parameter_values(algorithm,{'regularizer':'haar_l1','level':5},domain_shape=(1,16,16))
     assert 'geometry_shape_invalid' in result.reason_codes
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(),reason='ASTRA CUDA required')
 def test_fdk_link_preserves_original_observations():
-    import astra
-    from inv_framework.operators.ct import ASTRAFDKOperator3D
+    astra = pytest.importorskip("astra", reason="astra-toolbox is not installed")
+    if not astra.use_cuda():
+        pytest.skip("ASTRA CUDA required")
+    from inv_framework.ct.backends import ASTRAFDKOperator3D
     size=16
     operator=ASTRAFDKOperator3D(astra.create_vol_geom(size,size,size),
         astra.create_proj_geom('cone',1.,1.,size,size,np.linspace(0,2*np.pi,24,endpoint=False),48.,16.))

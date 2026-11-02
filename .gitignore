@@ -42,3 +42,7 @@ docs\ct_integration_report.md
 artifacts/
 build/
 .pytest_cache/
+
+# Local acceptance run scratch files
+tests/.tmp-*/
+tests/*-output.txt
