@@ -1,3 +1,66 @@
+# Framework-independent experiments
+
+See [domain boundaries](#domain-boundaries), [CT data](ct/data_format.md),
+[MRI tasks and data](mri/tasks.md), and [deconvolution tasks and data](deconvolution/tasks.md).
+Numerical code, configurations and tests install independently of Agent SDKs.
+
+```python
+from inv_framework.ct.api import CTTaskRequest, run_ct_task
+from inv_framework.mri.api import MRITaskRequest, list_capabilities as mri_capabilities
+from inv_framework.deconvolution.api import DeconvolutionTaskRequest
+from inv_framework.runner import run_experiment
+result = run_experiment("experiment.yaml", output_dir="run")
+```
+
+`inv-run --config experiment.yaml --output run` (or
+`python -m inv_framework.runner`) invokes the same function once. Exit codes:
+0 successful execution, 1 structured task failure, 2 invalid file/configuration.
+No search, retries, history loading or implicit algorithm substitution occurs.
+Legacy `invct` and `python -m inv_framework` remain CT commands.
+
+Task keys: `modality`, `algorithm`, `task_type` (default reconstruction), `inputs`,
+`model`, `params`, `device`; CT additionally accepts `backend`, `case_id`,
+`data_root`, `stopping_policy`, `problem_constraints`. Catalog CT tasks omit
+inputs/model and specify case_id; external CT tasks use inputs/model and need no
+catalog. External case_id is only a label and defaults to `external` in the runner.
+`evaluation: {reference: {path: truth.npy}, data_range: 1.0}` is optional for CT
+external tasks. CT evaluation uses PSNR/SSIM/RMSE; missing truth omits them.
+MRI/deconvolution evaluation runs only after successful reconstruction; see their domain documents.
+
+Array input values are NumPy-compatible arrays or `{path: file.npy}` /
+`{path: file.npz, key: array_name}`. Object arrays are disallowed. File-task paths
+resolve relative to the task file; mapping/direct API paths use the working
+directory. No implicit normalization, clipping or complex-to-real conversion is
+performed by the shared loader. CT converts to float32; MRI preserves native
+complex representation in its declared contract. Checkpoints must be supplied
+explicitly; no downloads occur.
+
+Precedence: explicit `run_experiment(..., params={...})` overrides task params,
+which override the algorithm YAML defaults. CT public aliases and conflict rules
+below still apply. CT defaults have one source in `configs/algorithms`; MRI/deconvolution descriptions live under `configs/<domain>/algorithms` and
+are read by discovery directly. Executable defaults are read from these configuration files.
+
+MRI and deconvolution request dataclasses contain `algorithm`, `inputs`, `model`,
+`params`, `task_type`, `device`; they have no case/catalog requirement. Each
+exports a domain TaskResult name for the shared `ExperimentResult` dataclass.
+Discovery returns seven MRI and seven deconvolution executable records. VarNet requires a local matching checkpoint; blind methods require task_type=blind_deconvolution and model.kernel_shape.
+Calling a planned method returns failed/not_implemented with empty outputs,
+metrics and effective_params; an unknown ID returns invalid_parameters. Executable methods validate external inputs and mathematical parameters at the domain API boundary.
+
+The runner returns `ExperimentResult`: `status`, `modality`, `algorithm`,
+`effective_params`, `metrics`, `runtime_sec`, `iterations`, `converged`,
+`stopping_reason`, `outputs`, `diagnostics`, `error` (code/message or null).
+`effective_params` describes resolved solver parameters; it is empty when no
+solver resolved them. CT diagnostics include actual device, dtype, convergence
+trajectory and residuals. Execution success does not imply convergence:
+`max_iterations` and `completed_valid` can be successful. Numerical divergence,
+cancellation, resource exhaustion, unavailable backend and invalid parameters
+are distinct CT reasons. Unexpected programming exceptions propagate.
+The output directory contains `result.json` and one NPY per returned array.
+Direct domain APIs return arrays in memory and do not write files.
+
+Installation uses `python -m pip install .`; development checks use `.[dev]`.
+Install `.[mri]` for non-Cartesian MRI (torchkbnufft 1.5.2). Classical Cartesian MRI and deconvolution use base dependencies.
 # CT public task API
 
 `inv_framework.api` exports `CTTaskRequest`, `CTTaskResult`, `list_capabilities`,
@@ -9,9 +72,7 @@ DIP, INR and DPS remain library solvers under `solvers/deep`, outside this task 
 
 `list_capabilities(data_root=None)` returns algorithms, YAML defaults, parameter
 rules, fidelity requirements, regularizers, backends and catalog records without
-loading projection arrays. Each algorithm lists supported backends. Backend
-availability and numerical verification are distinct: this machine has no LEAP
-installation, so its task adapter has not received a real-backend acceptance run.
+loading projection arrays. Each algorithm lists supported backends. Optional backend dependencies must be installed separately.
 
 `validate_ct_request(request)` returns resolved mathematical parameters or raises
 `ValueError` for invalid fields, incompatible geometry, data or combinations. It
@@ -22,7 +83,7 @@ an operator norm. Device/backend dependencies are checked at execution.
 
 | Field | Type and default | Meaning |
 | --- | --- | --- |
-| case_id | str, required | Exact catalog ID |
+| case_id | str, required | Catalog ID, or arbitrary label when inputs is supplied |
 | algorithm | str, required | One of the 17 discovered IDs |
 | backend | str, `torch` | `torch`, `astra`, `leap`; never silently substituted |
 | device | str or None, None | `cpu`, `cuda`, `cuda:N`; default CPU for 2D, CUDA for cone FDK |
@@ -30,6 +91,7 @@ an operator norm. Device/backend dependencies are checked at execution.
 | fidelity | str or None, None | Overrides the algorithm default |
 | regularizer | str or None, None | Overrides the algorithm default; canonical Haar ID is `haar_l1`, no prior is `none` |
 | params | dict, empty | Flat mathematical parameters merged over `configs/algorithms/<id>.yaml` |
+| inputs | dict or None, None | External observation, geometry and measurement metadata; bypasses catalog |
 | fit_view_indices | list[int] or None, None | Unique, nonempty, in-range view indices used for fitting |
 | heldout_view_indices | list[int] or None, None | Supplied with fit indices, disjoint; evaluated only after fitting |
 | stopping_policy | dict or None, None | Native stopping controls described below |
@@ -126,11 +188,36 @@ CLI: `python -m inv_framework task request.json --out output` calls the same
 public dispatcher and writes `reconstruction.npy` and `diagnostics.json`.
 Callbacks are Python-only. Existing benchmark/file-output commands share the
 in-memory execution implementation under `api/execution.py`; file handling lives
-in `api/outputs.py`. There is no `ct_runtime` compatibility module.
+in `api/outputs.py`.
 
-## Data handoff
+## Dataset selection
 
 The four registered 2D ellipses cases come from `ct-ellipses-new-20261101`.
-`cone_3d/spheres_astra_12` is only a small regression case. Formal 3D presentation
-must use the original `cone_3d/tissue_volume_clean_64` catalog and arrays via
-`data_root`. That historical dataset is not replaced by spheres.
+The small `cone_3d/spheres_astra_12` case supports FDK regression. Other 3D
+catalogs can be supplied through `data_root`; see [CT data](datasets.md).
+
+## Domain boundaries
+
+`inv-framework` / `inv_framework` is the numerical distribution, independently
+usable without an Agent SDK. CT, MRI and deconvolution do not import one another.
+Blind deconvolution belongs to deconvolution, ESPIRiT calibration belongs to MRI.
+
+- `ct.api` exports the existing CT API implementation in `api`. Top-level CT
+  names resolve lazily. `invct` and all existing Python imports retain meaning.
+- `mri.api` and `deconvolution.api` own their request contracts and discovery.
+  MRI and deconvolution each expose seven executable methods. VarNet needs explicit matching weights.
+- `experiments.py` holds only shared file references, result fields and static
+  resource reading; `runner.py` dispatches one explicit request and saves outputs.
+- `core` contains existing tensor operators, fidelities and regularizers. It does
+  not import a domain. Measurement parameter conversion lives with the fidelity
+  constructors that use it; CT observation simulation imports that same code.
+  Existing transmission fidelity remains here to preserve its public import;
+  it is CT physics and is not a proposed MRI or deconvolution fidelity.
+- Existing flat `solvers`, `models`, `operators`, `regularizers`, and CT
+  `configs/algorithms` are retained. In particular the flat solver registry is CT
+  coupled, not a shared-domain entry point. MRI and deconvolution use their own discovery interfaces.
+  Shared mathematical code requires matching definitions and actual use.
+
+Domain-specific tests are grouped under `tests/core`, `tests/ct`, `tests/mri`,
+`tests/deconvolution`. Existing CT tests/data and catalog paths remain unchanged.
+The parent Agent repository owns adapters and request/result conversion only.

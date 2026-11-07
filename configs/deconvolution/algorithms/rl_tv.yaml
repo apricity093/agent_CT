@@ -1,0 +1,55 @@
+name: rl_tv
+modality: deconvolution
+implementation_status: implemented
+task_types:
+- reconstruction
+required_inputs:
+- observation
+- psf
+applicability: Periodic 2D/3D smoothed Dey multiplicative RL-TV; Poisson gain=1; positive
+  denominator required
+parameters:
+  lam: 0.01
+  max_iter: 50
+  tolerance: 1.0e-06
+  epsilon: 1.0e-12
+  tv_epsilon: 0.0001
+  initial_value: 0.5
+parameter_schema:
+  lam:
+    type: float
+    minimum: 0
+    description: Nonnegative weight on unnormalized regularizer sum
+  max_iter:
+    type: int
+    minimum: 1
+    description: Outer iteration cap
+  tolerance:
+    type: float
+    minimum: 0
+    description: Relative stopping tolerance; zero requests exact stopping
+  epsilon:
+    type: float
+    minimum: 1.0e-12
+    description: Positive floor for Poisson mean division
+  tv_epsilon:
+    type: float
+    minimum: 1.0e-12
+    description: Positive smoothing in sqrt(sum gradient squared + tv_epsilon squared)
+  initial_value:
+    type: float
+    minimum: 1.0e-12
+    description: Positive constant object initialization
+parameter_status: validated
+outputs:
+- reconstruction
+reference: docs/deconvolution/algorithms.md
+devices:
+- cpu
+spatial_dimensions:
+- 2
+- 3
+boundaries:
+- periodic
+noise_models:
+- poisson

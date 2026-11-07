@@ -1,0 +1,27 @@
+modality: mri
+algorithm: grappa
+params:
+  kernel_width: 7
+device: cpu
+model:
+  axes:
+  - batch
+  - coil
+  - y
+  - x
+  spatial_shape:
+  - 128
+  - 128
+  sampling: cartesian
+  fft_centered: true
+  fft_norm: ortho
+inputs:
+  kspace:
+    path: ../../../tests/data/mri/cases/standard_mr_dev/public.npz
+    key: kspace
+  sampling_mask:
+    path: ../../../tests/data/mri/cases/standard_mr_dev/public.npz
+    key: sampling_mask
+  calibration_data:
+    path: ../../../tests/data/mri/cases/standard_mr_dev/public.npz
+    key: calibration_data

@@ -1,0 +1,60 @@
+name: hyper_laplacian
+modality: deconvolution
+implementation_status: implemented
+task_types:
+- reconstruction
+required_inputs:
+- observation
+- psf
+applicability: Periodic Gaussian 2D/3D anisotropic sum |Dx|^p; 0<p<1; finite penalty
+  HQS; unconstrained
+parameters:
+  lam: 0.01
+  p: 0.8
+  beta_initial: 1.0
+  beta_max: 256.0
+  beta_factor: 2.0
+  max_iter: 100
+  tolerance: 1.0e-06
+parameter_schema:
+  lam:
+    type: float
+    minimum: 0
+    description: Nonnegative weight on unnormalized regularizer sum
+  p:
+    type: float
+    minimum: 1.0e-12
+    description: Gradient exponent strictly between 0 and 1
+  beta_initial:
+    type: float
+    minimum: 1.0e-12
+    description: Positive initial HQS quadratic penalty
+  beta_max:
+    type: float
+    minimum: 1.0e-12
+    description: Final finite HQS penalty, at least beta_initial
+  beta_factor:
+    type: float
+    minimum: 0
+    description: HQS multiplicative penalty growth strictly greater than 1
+  max_iter:
+    type: int
+    minimum: 1
+    description: Outer iteration cap
+  tolerance:
+    type: float
+    minimum: 0
+    description: Relative stopping tolerance; zero requests exact stopping
+parameter_status: validated
+outputs:
+- reconstruction
+reference: docs/deconvolution/algorithms.md
+devices:
+- cpu
+spatial_dimensions:
+- 2
+- 3
+boundaries:
+- periodic
+noise_models:
+- gaussian

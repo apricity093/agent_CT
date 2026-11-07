@@ -1,0 +1,23 @@
+modality: mri
+algorithm: espirit
+params:
+  crop: 0.8
+  svd_threshold: 0.02
+device: cpu
+model:
+  axes:
+  - batch
+  - coil
+  - y
+  - x
+  spatial_shape:
+  - 128
+  - 128
+  sampling: cartesian
+  fft_centered: true
+  fft_norm: ortho
+task_type: calibration
+inputs:
+  calibration_data:
+    path: ../../../tests/data/mri/cases/standard_mr_dev/public.npz
+    key: calibration_data

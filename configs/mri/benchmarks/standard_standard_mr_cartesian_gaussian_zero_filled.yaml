@@ -1,0 +1,26 @@
+modality: mri
+algorithm: zero_filled
+params: {}
+device: cpu
+model:
+  axes:
+  - batch
+  - coil
+  - y
+  - x
+  spatial_shape:
+  - 256
+  - 256
+  sampling: cartesian
+  fft_centered: true
+  fft_norm: ortho
+inputs:
+  kspace:
+    path: ../../../tests/data/mri/cases/standard_mr_cartesian/public.npz
+    key: kspace
+  sensitivity_maps:
+    path: ../../../tests/data/mri/cases/standard_mr_cartesian/public.npz
+    key: sensitivity_maps
+  sampling_mask:
+    path: ../../../tests/data/mri/cases/standard_mr_cartesian/public.npz
+    key: sampling_mask

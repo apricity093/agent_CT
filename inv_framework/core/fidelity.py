@@ -1,10 +1,25 @@
 """Projection-space fidelities and residual-ball constraints."""
 from __future__ import annotations
 from functools import wraps
-from inv_framework.ct.measurement import _parameter, measurement_setting
 import math
 import torch
 import time
+
+
+def measurement_setting(metadata,name,default=None):
+    parameters=metadata.get('parameters',{}) or {}
+    if name in metadata and name in parameters and metadata[name]!=parameters[name]:
+        raise ValueError('conflicting measurement '+name)
+    return parameters.get(name,metadata.get(name,default))
+
+
+def _parameter(value, reference, name, positive=False):
+    result = torch.as_tensor(value, dtype=reference.dtype, device=reference.device)
+    if result.numel() != 1 and result.shape != reference.shape:
+        raise ValueError(name + ' must be scalar or match observations')
+    if not bool(torch.isfinite(result).all()) or bool((result <= 0 if positive else result < 0).any()):
+        raise ValueError(name + ' outside valid range')
+    return result.expand_as(reference).clone()
 
 
 def _timed_prox(method):

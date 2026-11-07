@@ -1117,6 +1117,7 @@ def execute_case(
     fixed_compute: bool = False,
     callback=None,
     backend: str = "torch",
+    input_case=None,
 ) -> dict[str, Any]:
     destination = None
     operator = heldout_operator = None
@@ -1158,7 +1159,7 @@ def execute_case(
         } if stopping_policy is not None else None)
         for parameter_name in parameters:
             parameter_source_map.setdefault(parameter_name, "repository_config")
-        full_case = load_ct_case(case_id, data_root=data_root, device=device)
+        full_case = input_case if input_case is not None else load_ct_case(case_id, data_root=data_root, device=device)
         if (fit_view_indices is None) != (heldout_view_indices is None):
             raise ConfigError(
                 "fit_view_indices and heldout_view_indices must be supplied together"

@@ -1,0 +1,45 @@
+{
+  "split": "eval",
+  "seed": 13002,
+  "benchmark_group": "public_standard",
+  "object_kind": "standard_mr_shepp_logan",
+  "spatial_shape": [
+    128,
+    128
+  ],
+  "data_range": 1.0,
+  "source": "phantominator 0.7.0 MR Shepp-Logan; Gach et al. 2008",
+  "source_url": "https://github.com/mckib2/phantominator",
+  "image_rights": "MIT generator",
+  "model": {
+    "axes": [
+      "batch",
+      "coil",
+      "y",
+      "x"
+    ],
+    "spatial_shape": [
+      128,
+      128
+    ],
+    "sampling": "noncartesian",
+    "fft_centered": true,
+    "fft_norm": "ortho",
+    "trajectory_units": "radians/voxel"
+  },
+  "coil_count": 4,
+  "complex_noise_sigma": 0.002,
+  "source_z": -0.15,
+  "TR_sec": 2.0,
+  "TE_sec": 0.06,
+  "B0_tesla": 3.0,
+  "signal_model": "M0*(1-exp(-TR/T1))*exp(-TE/T2), spoiled spin-echo-like contrast without scanner simulation",
+  "maps_model": "Biot-Savart sum over 64 segments of 4 circular loops; ring radius1.6, loop radius.55, FOV[-1,1]^2, Bx+iBy, unit RSS",
+  "interpretation": "Standard analytic MR phantom with simulated receive encoding; not BrainWeb or real knee data",
+  "public_inputs": [
+    "sensitivity_maps",
+    "trajectory",
+    "kspace"
+  ],
+  "reference": "reference.npz: complex object, M0, T1, T2"
+}

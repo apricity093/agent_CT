@@ -1,0 +1,39 @@
+name: richardson_lucy
+modality: deconvolution
+implementation_status: implemented
+task_types:
+- reconstruction
+required_inputs:
+- observation
+- psf
+applicability: Nonnegative Poisson model; matched adjoint and boundary sensitivity
+parameters:
+  max_iter: 50
+  tolerance: 1.0e-06
+  epsilon: 1.0e-12
+  initial_value: 0.5
+parameter_schema:
+  max_iter:
+    type: int
+    minimum: 1
+  tolerance:
+    type: float
+    minimum: 0
+  epsilon:
+    type: float
+    minimum: 1.0e-300
+  initial_value:
+    type: float
+    minimum: 1.0e-300
+parameter_status: validated
+outputs:
+- reconstruction
+reference: docs/deconvolution/algorithms.md
+devices:
+- cpu
+spatial_dimensions:
+- 2
+- 3
+boundaries:
+- periodic
+- zero

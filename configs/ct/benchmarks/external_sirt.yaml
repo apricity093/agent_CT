@@ -1,0 +1,30 @@
+# Supply observation.npy of shape (1,1,4,12) beside this file.
+modality: ct
+algorithm: sirt
+backend: torch
+device: cpu
+inputs:
+  observation:
+    path: observation.npy
+model:
+  geometry:
+    type: parallel_2d
+    domain_shape:
+    - 1
+    - 12
+    - 12
+    range_shape:
+    - 1
+    - 4
+    - 12
+    angles_rad:
+    - 0
+    - 0.7853981634
+    - 1.570796327
+    - 2.35619449
+  measurement:
+    noise_model: gaussian
+    observation_model: gaussian
+    observation_domain: line_integral
+params:
+  num_iterations: 5

@@ -43,6 +43,9 @@ artifacts/
 build/
 .pytest_cache/
 
+# Authorized MRI data and derivatives remain local under their source agreement.
+/outputs/fastmri_local/
+
 # Local acceptance run scratch files
 tests/.tmp-*/
 tests/*-output.txt

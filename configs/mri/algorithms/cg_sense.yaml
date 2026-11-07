@@ -1,0 +1,41 @@
+name: cg_sense
+modality: mri
+implementation_status: implemented
+task_types:
+- reconstruction
+required_inputs:
+- kspace
+- sensitivity_maps
+applicability: Cartesian or non-Cartesian; solves weighted complex normal equations
+parameters:
+  lam: 0.0
+  max_iter: 100
+  tolerance: 1.0e-06
+parameter_schema:
+  lam:
+    type: float
+    minimum: 0
+  max_iter:
+    type: int
+    minimum: 1
+  tolerance:
+    type: float
+    minimum: 0
+parameter_status: validated
+outputs:
+- reconstruction
+reference: docs/mri/algorithms.md
+devices:
+- cpu
+spatial_dimensions:
+- 2
+- 3
+sampling:
+- cartesian
+- noncartesian
+input_conditions:
+  cartesian:
+  - sampling_mask
+  noncartesian:
+  - trajectory
+  - model.trajectory_units

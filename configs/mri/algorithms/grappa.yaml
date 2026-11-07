@@ -1,0 +1,35 @@
+name: grappa
+modality: mri
+implementation_status: implemented
+task_types:
+- reconstruction
+required_inputs:
+- kspace
+- sampling_mask
+- calibration_data
+applicability: 2D Cartesian multicoil shared binary mask; explicit fully sampled ACS,
+  acquired local neighbors, zero-padded edges, RSS
+parameters:
+  kernel_width: 5
+  ridge: 0.01
+parameter_schema:
+  kernel_width:
+    type: int
+    minimum: 1
+    description: Odd square calibration kernel width in k-space grid samples
+  ridge:
+    type: float
+    minimum: 0
+    description: Relative ridge scaled by Frobenius norm of S* S divided by column
+      count
+parameter_status: validated
+outputs:
+- reconstruction
+- kspace
+reference: docs/mri/algorithms.md
+devices:
+- cpu
+spatial_dimensions:
+- 2
+sampling:
+- cartesian

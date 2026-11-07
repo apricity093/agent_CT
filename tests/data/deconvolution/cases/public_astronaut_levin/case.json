@@ -1,0 +1,36 @@
+{
+  "split": "eval",
+  "seed": 12001,
+  "benchmark_group": "public_standard",
+  "spatial_shape": [
+    256,
+    256
+  ],
+  "data_range": 1.0,
+  "source": "scikit-image 0.26.0 data.astronaut",
+  "source_url": "https://scikit-image.org/docs/0.26.x/api/skimage.data.html#skimage.data.astronaut",
+  "image_rights": "NASA public domain; no known copyright restrictions",
+  "object_kind": "astronaut",
+  "kernel": "Levin09 kernel 2",
+  "kernel_shape": [
+    17,
+    17
+  ],
+  "psf_origin": [
+    8,
+    8
+  ],
+  "boundary": "periodic",
+  "gaussian_sigma": 0.005,
+  "photon_gain": 40.0,
+  "background": 0.2,
+  "observation": "Synthetic periodic blur and Gaussian/Poisson noise applied to a public image; not an acquired blurred pair",
+  "image_conversion": "anti-aliased resize to 256 square; astronaut RGB to standard luminance; uint8 divided by 255",
+  "interpretation": "Cell is quantitative phase, used only as a nonnegative intensity surrogate; not measured fluorescence",
+  "public_inputs": [
+    "gaussian",
+    "counts",
+    "psf"
+  ],
+  "reference": "reference.npz: object and true_psf; blind tasks never load PSF"
+}

@@ -1,0 +1,22 @@
+modality: deconvolution
+algorithm: wiener_hunt
+params:
+  balance: 0.01
+device: cpu
+inputs:
+  observation:
+    path: ../../../tests/data/deconvolution/cases/public_camera_levin/public.npz
+    key: gaussian
+  psf:
+    path: ../../../tests/data/deconvolution/cases/public_camera_levin/public.npz
+    key: psf
+model:
+  axes:
+  - y
+  - x
+  boundary: periodic
+  noise_model: gaussian
+  background: 0
+  psf_origin:
+  - 9
+  - 9

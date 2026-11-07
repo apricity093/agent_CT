@@ -1,0 +1,46 @@
+name: varnet
+modality: mri
+implementation_status: implemented
+task_types:
+- reconstruction
+required_inputs:
+- kspace
+- sampling_mask
+applicability: 2D Cartesian multicoil; matching architecture and trained checkpoint
+  required
+parameters:
+  checkpoint: null
+  num_cascades: 12
+  chans: 18
+  pools: 4
+  sens_chans: 8
+  sens_pools: 4
+  num_low_frequencies: 24
+parameter_schema:
+  checkpoint:
+    type: str
+    nullable: true
+  num_cascades:
+    type: int
+    minimum: 1
+  chans:
+    type: int
+    minimum: 1
+  pools:
+    type: int
+    minimum: 1
+  sens_chans:
+    type: int
+    minimum: 1
+  sens_pools:
+    type: int
+    minimum: 1
+  num_low_frequencies:
+    type: int
+    minimum: 1
+outputs:
+- reconstruction
+- kspace
+reference: docs/mri/algorithms.md
+required_preparation: Explicit matching local checkpoint; defaults match official
+  knee/brain leaderboard architecture. ACS width must match acquisition.

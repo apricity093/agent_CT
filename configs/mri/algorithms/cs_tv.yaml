@@ -1,0 +1,60 @@
+name: cs_tv
+modality: mri
+implementation_status: implemented
+task_types:
+- reconstruction
+required_inputs:
+- kspace
+- sensitivity_maps
+applicability: Complex 2D/3D weighted SENSE Cartesian/NUFFT; ADMM; periodic isotropic
+  TV or orthogonal analysis Haar-L1
+parameters:
+  lam: 0.01
+  rho: 1.0
+  max_iter: 200
+  tolerance: 1.0e-05
+  cg_max_iter: 100
+  cg_tolerance: 1.0e-06
+parameter_schema:
+  lam:
+    type: float
+    minimum: 0
+    description: Nonnegative weight on unnormalized regularizer sum
+  rho:
+    type: float
+    minimum: 1.0e-12
+    description: Positive ADMM augmented quadratic penalty
+  max_iter:
+    type: int
+    minimum: 1
+    description: Outer iteration cap
+  tolerance:
+    type: float
+    minimum: 0
+    description: Relative stopping tolerance; zero requests exact stopping
+  cg_max_iter:
+    type: int
+    minimum: 1
+    description: Inner complex Hermitian CG iteration cap
+  cg_tolerance:
+    type: float
+    minimum: 1.0e-12
+    description: Initial relative CG tolerance, divided by outer iteration squared
+parameter_status: validated
+outputs:
+- reconstruction
+reference: docs/mri/algorithms.md
+devices:
+- cpu
+spatial_dimensions:
+- 2
+- 3
+sampling:
+- cartesian
+- noncartesian
+input_conditions:
+  cartesian:
+  - sampling_mask
+  noncartesian:
+  - trajectory
+  - model.trajectory_units

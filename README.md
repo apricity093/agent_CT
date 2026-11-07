@@ -1,5 +1,12 @@
-> CT 接口与验收：见 [公开 API](docs/agent_algorithm_api.md) 和 [实际验收记录](docs/ct_acceptance.md)。
-> 八项固定参数展示见[最新 Agent 端到端结果](#最新-agent-端到端结果)：二维使用新椭圆数据，三维使用 tissue_volume_clean_64；spheres 用于回归。
+> MRI / deconvolution：各提供七个可执行算法，包含 VarNet、DCP 与 L0 盲反卷积。VarNet 需要显式匹配权重。见[公开 API](docs/agent_algorithm_api.md)和[外部输入示例](docs/public_benchmarks.md)。
+
+MRI 与反卷积的主展示和质量基准现使用[标准轻量公开数据](docs/public_benchmarks.md)：
+camera、astronaut、cell，Levin09/Airy 核，以及标准 MR Shepp–Logan 组织模体与
+环形线圈编码。运行 `tools/run_public_benchmarks.py`，结果见
+[标准基准实测](outputs/public_benchmarks/)。算法与数据对应关系见[公共基准](docs/public_benchmarks.md)。
+真实 fastMRI 膝关节 VarNet 评价仍需用户提供获授权的本地采集，不包含在模拟模体分数中。
+
+> CT 接口与验收：见 [公开 API](docs/agent_algorithm_api.md) 和 [验证说明](docs/validation.md)。
 
 # inv_framework
 
@@ -89,7 +96,7 @@ ASTRA CUDA。
 ASTRA 二维 CUDA 路径在 GPU 上应用 ASTRA 线性投影矩阵及其转置。
 `list_capabilities()` 返回各后端的依赖、设备与可运行信息，以及算法的默认参数和兼容性要求；
 依赖可用不等于完成数值验收。后端切换仍需满足算法、几何与观测域约束。
-完整验证范围与未通过的回归见[验收记录](docs/ct_acceptance.md)。
+完整验证范围与未通过的回归见[验证说明](docs/validation.md)。
 
 ## 安装
 
@@ -332,7 +339,7 @@ inverse-agent run-experiment \
 `regularizer: null` 要求无正则实现，省略或 null operator 使用 case operator。
 三者无需同时指定。显式 operator 必须与实际 case 一致；每个选中请求应使用
 独立 run_id 和空 output_dir。Python 接口、支持范围及版本要求见
-[Agent 用法](docs/agent_usage.md)。
+[Agent 用法](docs/agent_algorithm_api.md)。
 
 完整执行路径为：
 
@@ -390,7 +397,7 @@ FISTA 的标准固定步长条件为 `0 < step_size <= 1 / ||A||^2`。省略步�
 
 ## 可组合算法与 Agent
 
-当前完整支持矩阵及数学、数据和参数要求见 [已支持的 CT 组件组合](docs/supported_combinations.md)。
+当前完整支持矩阵及数学、数据和参数要求见 [已支持的 CT 组件组合](docs/algorithms.md)。
 
 CT 请求将 `solver`、`operator`、`regularizer`、`data_fidelity`、
 `observation_model`、`constraints` 与公开 `noise_parameters` 分开表达。
@@ -399,20 +406,11 @@ Agent 先发现候选，再校验物理域、数据字段和数学兼容性，�
 FISTA/ADMM/PDHG 还提供纯透射 Poisson NLL 路径。正则包括无正则、恒等
 Tikhonov、H1、两种 TV、梯度 Huber 与 Haar detail-L1。
 这表示受兼容性约束的组件组合，并不表示任意 solver、prior 与几何均可互换；
-执行完成、优化收敛和重建质量分别记录。下方以固定参数的合成数据实验展示部分路径。
+执行完成、优化收敛和重建质量分别记录。
 
-FISTA/H1/Haar 的参数和兼容性见 [用法](docs/composable_reconstruction.md)，
-ADMM/PDHG/Huber 见 [分裂算法](docs/splitting_solvers.md)，
-Gaussian NLL、WLS 与透射 Poisson NLL 见 [保真项](docs/data_fidelity.md)。
-约束 TV 的显式半径、来源、非负性及停止语义见 [库用法](docs/constrained_tv.md)，
-ASD 变体及参考许可见 [来源](docs/constrained_tv_sources.md)。
-
-主项目提供 17 项精确能力检查和真实 Agent 路径；安装、请求参数、runtime wall
-与硬超时语义见 [Agent 用法](docs/agent_usage.md)。主项目通过 `pyproject.toml`
-固定本库提交；固定来源安装检查与数值精度验收分别记录。
-
-有限预算结果不构成最佳质量排名。独立 pilot 与冻结配置示例见
-[质量示例](docs/quality_example.md)。
+参数、数学条件、约束 TV 和来源许可见[CT 算法](docs/algorithms.md)。
+任务字段和停止语义见[公开 API](docs/agent_algorithm_api.md)，测试入口及限制见
+[验证说明](docs/validation.md)。
 
 ## 已知精度与成本限制
 
@@ -420,97 +418,6 @@ ASD 变体及参考许可见 [来源](docs/constrained_tv_sources.md)。
 条件才报告 converged。ASD 为 SART2D feasibility-backtracking 变体，无全局最优保证。
 `tv_fista` 的 TV proximal 为有限 FGP；通用 `fista` 的 TV/受约束 Haar
 使用带 gap 及误差目标的联合近端，内层精度不足不会标为收敛。
-
-## 最新 Agent 端到端结果
-
-2026-11-02 的八项固定参数实验均通过主项目 Agent 的公开 API 链路执行成功，
-保存了重建、原生诊断和独立图像指标，展示 **solver 切换、正则切换、保真项切换及
-3D 几何入口**。执行成功不等于优化收敛：七项二维实验均未报告 `converged`，
-FDK 为直接重建 `completed_valid`。
-
-全部任务使用 NVIDIA GeForce GTX 1650 和 float32；二维采用 PyTorch CUDA，
-三维 FDK 采用 ASTRA CUDA。下表时间为 CT API 运行时间，完整 Agent 时间另存于结果文件。
-
-### 2D Gaussian：切换 solver 与 regularizer
-
-采用 `ct-ellipses-new-20261101` 的 test split、sample 0，已注册案例为
-`parallel_2d__ellipses_sparse_gaussian`：64×64、32 views 覆盖 180°、衰减缩放 0.02。
-观测噪声 σ=0.0020266722422093153，使用已知方差 Gaussian NLL、非负约束、
-零初始化和完整图像评价区域。五项正则强度均为 `strength=0.01`；Tikhonov 为恒等算子，
-TV 为 isotropic，Haar 为 level=2 的 detail-L1。
-
-![新椭圆Gaussian观测下的solver与正则组合重建](docs/assets/component-showcase/gaussian_components.png)
-
-| Solver + regularizer | Data fidelity | λ | 实际迭代 | PSNR (dB) | SSIM | RMSE | CT 时间 (s) | 优化状态 |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| FISTA + 恒等 Tikhonov | Gaussian NLL | 0.01 | 200 | 32.32 | 0.8860 | 0.000484251 | 56.84 | `max_iterations` |
-| ADMM + 恒等 Tikhonov | Gaussian NLL | 0.01 | 20 | 20.06 | 0.4674 | 0.0019868 | 391.08 | `max_iterations` |
-| PDHG + 恒等 Tikhonov | Gaussian NLL | 0.01 | 200 | 24.84 | 0.7704 | 0.00114602 | 48.52 | `max_iterations` |
-| FISTA + isotropic TV | Gaussian NLL | 0.01 | 66 | 36.09 | 0.9333 | 0.000313541 | 80.44 | `stalled` |
-| FISTA + Haar detail-L1，level=2 | Gaussian NLL | 0.01 | 68 | 36.07 | 0.9330 | 0.00031451 | 98.91 | `max_iterations` |
-
-ADMM 的外层上限为 20，其他四项为 200。FISTA/PDHG + Tikhonov 和 ADMM 均以
-`maximum_iterations_reached` 停止。TV 的原因码为 `joint_prox_returned_precision`：
-联合近端的双精度解达到误差证书要求，但转回 float32 后的舍入误差超过目标，状态为 `stalled`。
-Haar 的原因码为 `joint_prox_inner_max_iterations`，表示联合近端内层预算用尽，
-并非外层达到 200 次。两者均保留有效重建，不标为收敛。
-
-### 2D Poisson：同一 counts 切换 data fidelity
-
-采用同一椭圆样本的 `parallel_2d__ellipses_sparse_poisson` 案例：64×64、32 views、
-非负约束、零初始化、isotropic TV，`strength=0.01`。两条路径共享案例保存的原始
-counts 和 I0，使用纯透射模型 `counts ~ Poisson(I0 * exp(-Ax))`，无背景。
-post-log WLS 使用 log-floor=1 和由公开 counts 派生的固定权重；
-pre-log Poisson NLL 直接使用 counts/I0。
-
-![同一Poisson计数下PDHG与TV的两种保真项重建](docs/assets/component-showcase/poisson_fidelity.png)
-
-| Solver + regularizer | Data fidelity | λ | 实际迭代 | PSNR (dB) | SSIM | RMSE | CT 时间 (s) | 优化状态 |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| PDHG + isotropic TV | post-log WLS，近似模型 | 0.01 | 200 | 32.00 | 0.8869 | 0.000502091 | 53.64 | `max_iterations` |
-| PDHG + isotropic TV | pre-log 透射 Poisson NLL | 0.01 | 200 | 32.00 | 0.8869 | 0.000502092 | 77.77 | `max_iterations` |
-
-两项均在外层 200 次上限停止，原因码为 `maximum_iterations_reached`。
-WLS 与 Poisson NLL 的目标函数尺度不同，同数值 λ 不代表同等正则化效果；
-这些结果展示固定参数下的保真项切换，不构成最优质量或算法排名。
-
-### 3D cone-beam：FDK
-
-案例为 `cone_3d/tissue_volume_clean_64`：64³ 合成组织体数据、180 个全圆 views、
-128×128 detector，SOD/ODD 均为 320。输入 HDF5 和 catalog 位于主项目的
-`artifacts/ct-agent-tissue-showcase-20261024/data/`，体数据、原始投影与几何均直接读取。
-使用 ASTRA cone-beam FDK、Ram-Lak、`short_scan=false`、`voxel_supersampling=1`，
-无显式正则。上排为 reference，下排为重建，依次为中心 axial、coronal 和 sagittal 切面。
-
-![tissue三维锥束FDK重建及三个中心正交切面](docs/assets/component-showcase/cone_fdk.png)
-
-| Operator + method | Regularizer | PSNR (dB) | SSIM | RMSE | CT 时间 (s) | 状态 |
-| --- | --- | ---: | ---: | ---: | ---: | --- |
-| ASTRA cone-beam + FDK | 无 | 30.68 | 0.8175 | 0.000116949 | 27.41 | `completed_valid` |
-
-FDK 执行一次，原生迭代数记为 0。三个中心切面的指标为：
-
-| 切面 | PSNR (dB) | SSIM | RMSE |
-| --- | ---: | ---: | ---: |
-| axial | 27.52 | 0.8166 | 0.000168375 |
-| coronal | 32.62 | 0.9418 | 9.35735e-05 |
-| sagittal | 32.62 | 0.9456 | 9.35111e-05 |
-
-### 展示范围与完整实验
-
-- 二维统一显示窗为 `[0, 0.02]`，三维为 `[0, 0.004]`；不进行逐图归一化、平滑或数值裁剪。
-  显示窗外数值仅在显示时饱和。指标使用原始重建与完整图像/体数据，固定 data range 分别为 0.02 和 0.004。
-  SSIM 使用 scikit-image 的 7×7 窗；整卷 SSIM 为轴向二维切片均值。
-- truth 只由独立 evaluator 在执行后读取，公开求解输入不含 truth、clean projection 或评价 ROI。
-  参数来自算法默认值与显式固定配置；非 L2 保真项关闭 discrepancy 控制，其他原生停止判据有效。
-- ADMM 外层上限 20、时间预算 900 秒、硬超时参数 1020 秒；其余二维项外层上限 200、
-  时间预算 300 秒、硬超时参数 420 秒。Agent 取两项时间限制的最小值作为实际进程期限。
-  FDK 硬期限为 420 秒。不同预算和不同目标函数的结果不用于同预算性能排名。
-- 八项重建、完整请求、参数来源、原生原因码、指标及图版集中于主项目 `outputs/ct_showcase/`。
-  本仓库保存上述图版和[最终参数与结果 JSON](docs/assets/component-showcase/selected_results.json)、
-  [结果 CSV](docs/assets/component-showcase/selected_results.csv)。
-- 这些是固定参数功能展示；ADMM 仍有明显伪影，二维优化均未确认收敛。
-  展示结果不替代全量数值验收，已知 CT 数值回归失败及 LEAP 实机验收限制见[验收记录](docs/ct_acceptance.md)。
 
 ## Python API
 
@@ -672,3 +579,5 @@ README 中的 `configs/examples`、benchmark/protocol 文件、`tests/data` 和 
 ## 许可证
 
 项目元数据声明为 MIT。外部后端和数据集保持各自许可证与使用条款。
+
+MRI 与反卷积的完整算法、数据和任务入口见[公共基准](docs/public_benchmarks.md)。

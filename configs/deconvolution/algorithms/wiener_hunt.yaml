@@ -1,0 +1,26 @@
+name: wiener_hunt
+modality: deconvolution
+implementation_status: implemented
+task_types:
+- reconstruction
+required_inputs:
+- observation
+- psf
+applicability: Periodic convolution; quadratic Gaussian model
+parameters:
+  balance: 0.01
+parameter_schema:
+  balance:
+    type: float
+    minimum: 0
+parameter_status: validated
+outputs:
+- reconstruction
+reference: docs/deconvolution/algorithms.md
+devices:
+- cpu
+spatial_dimensions:
+- 2
+- 3
+boundaries:
+- periodic

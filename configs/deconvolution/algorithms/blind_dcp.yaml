@@ -1,0 +1,75 @@
+name: blind_dcp
+modality: deconvolution
+implementation_status: implemented
+task_types:
+- blind_deconvolution
+required_inputs:
+- observation
+applicability: 2D grayscale or channel-last, shared spatially invariant PSF; periodic
+  Gaussian model; explicit odd model.kernel_shape; final Hyper-Laplacian p=0.5 HQS
+parameters:
+  max_iter: 5
+  scale_factor: 0.70710678
+  coarse_kernel_size: 5
+  kernel_ridge: 2.0
+  kernel_max_iter: 100
+  final_lam: 0.001
+  final_max_iter: 100
+  dark_weight: 0.004
+  gradient_weight: 0.004
+  patch_size: 35
+  penalty_initial: 0.01
+  penalty_factor: 2.0
+  latent_iter: 10
+  cg_max_iter: 100
+  cg_tolerance: 1.0e-06
+parameter_schema:
+  max_iter:
+    type: int
+    minimum: 1
+  scale_factor:
+    type: float
+    minimum: 1.0e-12
+  coarse_kernel_size:
+    type: int
+    minimum: 1
+  kernel_ridge:
+    type: float
+    minimum: 1.0e-12
+  kernel_max_iter:
+    type: int
+    minimum: 1
+  final_lam:
+    type: float
+    minimum: 0
+  final_max_iter:
+    type: int
+    minimum: 1
+  dark_weight:
+    type: float
+    minimum: 0
+  gradient_weight:
+    type: float
+    minimum: 0
+  patch_size:
+    type: int
+    minimum: 1
+  penalty_initial:
+    type: float
+    minimum: 1.0e-12
+  penalty_factor:
+    type: float
+    minimum: 1.0e-12
+  latent_iter:
+    type: int
+    minimum: 1
+  cg_max_iter:
+    type: int
+    minimum: 1
+  cg_tolerance:
+    type: float
+    minimum: 1.0e-12
+outputs:
+- reconstruction
+- psf
+reference: docs/deconvolution/algorithms.md

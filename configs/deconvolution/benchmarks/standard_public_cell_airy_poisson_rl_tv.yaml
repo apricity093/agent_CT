@@ -1,0 +1,23 @@
+modality: deconvolution
+algorithm: rl_tv
+params:
+  lam: 0.05
+  max_iter: 50
+device: cpu
+inputs:
+  observation:
+    path: ../../../tests/data/deconvolution/cases/public_cell_airy/public.npz
+    key: counts
+  psf:
+    path: ../../../tests/data/deconvolution/cases/public_cell_airy/public.npz
+    key: psf
+model:
+  axes:
+  - y
+  - x
+  boundary: periodic
+  noise_model: poisson
+  background: 0.2
+  psf_origin:
+  - 7
+  - 7

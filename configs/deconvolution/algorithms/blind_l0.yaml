@@ -1,0 +1,55 @@
+name: blind_l0
+modality: deconvolution
+implementation_status: implemented
+task_types:
+- blind_deconvolution
+required_inputs:
+- observation
+applicability: 2D grayscale or channel-last, shared spatially invariant PSF; periodic
+  Gaussian model; explicit odd model.kernel_shape; final Hyper-Laplacian p=0.5 HQS
+parameters:
+  max_iter: 5
+  scale_factor: 0.70710678
+  coarse_kernel_size: 5
+  kernel_ridge: 2.0
+  kernel_max_iter: 100
+  final_lam: 0.001
+  final_max_iter: 100
+  lam: 0.001
+  epsilon_initial: 1.0
+  epsilon_levels: 4
+parameter_schema:
+  max_iter:
+    type: int
+    minimum: 1
+  scale_factor:
+    type: float
+    minimum: 1.0e-12
+  coarse_kernel_size:
+    type: int
+    minimum: 1
+  kernel_ridge:
+    type: float
+    minimum: 1.0e-12
+  kernel_max_iter:
+    type: int
+    minimum: 1
+  final_lam:
+    type: float
+    minimum: 0
+  final_max_iter:
+    type: int
+    minimum: 1
+  lam:
+    type: float
+    minimum: 1.0e-12
+  epsilon_initial:
+    type: float
+    minimum: 1.0e-12
+  epsilon_levels:
+    type: int
+    minimum: 1
+outputs:
+- reconstruction
+- psf
+reference: docs/deconvolution/algorithms.md

@@ -1,0 +1,37 @@
+name: espirit
+modality: mri
+implementation_status: implemented
+task_types:
+- calibration
+required_inputs:
+- calibration_data
+applicability: 2D Cartesian fully sampled ACS; one map set; dense Hermitian eigendecomposition
+parameters:
+  kernel_width: 5
+  svd_threshold: 0.02
+  crop: 0.95
+parameter_schema:
+  kernel_width:
+    type: int
+    minimum: 1
+    description: Odd square calibration kernel width in k-space grid samples
+  svd_threshold:
+    type: float
+    minimum: 1.0e-12
+    description: Singular cutoff relative to largest ACS singular value; strictly
+      between 0 and 1
+  crop:
+    type: float
+    minimum: 0
+    description: Dominant image eigenvalue crop threshold in [0,1]
+parameter_status: validated
+outputs:
+- sensitivity_maps
+- eigenvalues
+reference: docs/mri/algorithms.md
+devices:
+- cpu
+spatial_dimensions:
+- 2
+sampling:
+- cartesian

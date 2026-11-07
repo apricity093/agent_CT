@@ -1,0 +1,24 @@
+modality: deconvolution
+algorithm: hyper_laplacian
+params:
+  lam: 0.001
+  p: 0.5
+  max_iter: 60
+device: cpu
+inputs:
+  observation:
+    path: ../../../tests/data/deconvolution/cases/public_camera_levin/public.npz
+    key: gaussian
+  psf:
+    path: ../../../tests/data/deconvolution/cases/public_camera_levin/public.npz
+    key: psf
+model:
+  axes:
+  - y
+  - x
+  boundary: periodic
+  noise_model: gaussian
+  background: 0
+  psf_origin:
+  - 9
+  - 9

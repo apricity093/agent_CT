@@ -7,7 +7,7 @@ import torch
 from inv_framework.api import execution
 from inv_framework.ct.cases import list_ct_cases
 from inv_framework.ct.registry import ALGORITHM_ALIASES, regularizer_records
-from .schema import CTTaskRequest, CTTaskResult, normalize_request
+from .schema import CTTaskRequest, CTTaskResult, normalize_request, load_request_case
 
 
 def list_capabilities(data_root=None):
@@ -56,10 +56,15 @@ def run_ct_task(request: CTTaskRequest | dict) -> CTTaskResult:
         summary = name
         if "data_fidelity" in parameters or "regularizer" in parameters:
             summary += f"(fidelity={parameters.get('data_fidelity', 'l2')}, reg={parameters.get('regularizer', 'none')})"
-        cases = {row["case_id"]: row for row in list_ct_cases(data_root=request.data_root)}
-        if request.case_id not in cases:
-            raise execution.ConfigError(f"unknown CT case: {request.case_id}")
-        geometry = cases[request.case_id]["geometry_type"]
+        device = request.device or ("cuda" if name == "fdk" else "cpu")
+        input_case = load_request_case(request, device) if request.inputs is not None else None
+        if input_case is not None:
+            geometry = input_case.geometry["type"]
+        else:
+            cases = {row["case_id"]: row for row in list_ct_cases(data_root=request.data_root)}
+            if request.case_id not in cases:
+                raise execution.ConfigError(f"unknown CT case: {request.case_id}")
+            geometry = cases[request.case_id]["geometry_type"]
         if request.backend == "leap" and importlib.util.find_spec("leapctype") is None:
             raise execution.BackendUnavailable("LLNL LEAP is not installed")
         if geometry == "cone_3d" and request.backend != "astra":
@@ -76,7 +81,7 @@ def run_ct_task(request: CTTaskRequest | dict) -> CTTaskResult:
             device=device, data_root=request.data_root, backend=request.backend,
             fit_view_indices=request.fit_view_indices, heldout_view_indices=request.heldout_view_indices,
             stopping_policy=request.stopping_policy, problem_constraints=request.problem_constraints,
-            callback=request.callback)
+            callback=request.callback, input_case=input_case)
         diagnostics = result.get("diagnostics", {})
         status = result.get("convergence_status")
         success = result["status"] == "success" and status not in {"cancelled", "resource_exhausted", "diverged", "numerical_error", "invalid_parameters"}
@@ -91,7 +96,9 @@ def run_ct_task(request: CTTaskRequest | dict) -> CTTaskResult:
                             convergence_status=status,
                             stopping_reason=diagnostics.get("stopping_reason", result.get("stopping_reason", status)),
                             reason_code=diagnostics.get("reason_code", status),
-                            history=diagnostics.get("convergence", {}).get("trajectory", []))
+                            history=diagnostics.get("convergence", {}).get("trajectory", []),
+                            effective_params=diagnostics.get("parameters", parameters),
+                            diagnostics=diagnostics)
     except (execution.ConfigError, execution.BackendUnavailable, execution.NumericalFailure, FileNotFoundError, ValueError, torch.cuda.OutOfMemoryError) as error:
         status = "unavailable" if isinstance(error, execution.BackendUnavailable) else "resource_exhausted" if isinstance(error, torch.cuda.OutOfMemoryError) else "numerical_error" if isinstance(error, execution.NumericalFailure) else "invalid_parameters"
         return CTTaskResult("failed", str(case_id), str(summary), {}, time.perf_counter() - started, 0, False,

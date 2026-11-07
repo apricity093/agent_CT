@@ -1,0 +1,29 @@
+name: zero_filled
+modality: mri
+implementation_status: implemented
+task_types:
+- reconstruction
+required_inputs:
+- kspace
+- sampling_mask
+applicability: Cartesian 2D/3D; explicit maps for sense combination, optional maps
+  for magnitude RSS
+parameters:
+  coil_combination: sense
+parameter_schema:
+  coil_combination:
+    type: str
+    choices:
+    - sense
+    - rss
+parameter_status: validated
+outputs:
+- reconstruction
+reference: docs/mri/algorithms.md
+devices:
+- cpu
+spatial_dimensions:
+- 2
+- 3
+sampling:
+- cartesian

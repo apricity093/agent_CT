@@ -1,0 +1,29 @@
+modality: mri
+algorithm: cg_sense
+params:
+  lam: 0.001
+  max_iter: 100
+device: cpu
+model:
+  axes:
+  - batch
+  - coil
+  - y
+  - x
+  spatial_shape:
+  - 128
+  - 128
+  sampling: noncartesian
+  fft_centered: true
+  fft_norm: ortho
+  trajectory_units: radians/voxel
+inputs:
+  kspace:
+    path: ../../../tests/data/mri/cases/standard_mr_radial/public.npz
+    key: kspace
+  sensitivity_maps:
+    path: ../../../tests/data/mri/cases/standard_mr_radial/public.npz
+    key: sensitivity_maps
+  trajectory:
+    path: ../../../tests/data/mri/cases/standard_mr_radial/public.npz
+    key: trajectory

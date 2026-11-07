@@ -8,20 +8,7 @@ import torch
 PUBLIC_FIELDS = ('counts', 'c_obs', 'I0', 'sigma', 'sigma_e', 'weights')
 
 
-def measurement_setting(metadata,name,default=None):
-    parameters=metadata.get('parameters',{}) or {}
-    if name in metadata and name in parameters and metadata[name]!=parameters[name]:
-        raise ValueError('conflicting measurement '+name)
-    return parameters.get(name,metadata.get(name,default))
-
-
-def _parameter(value, reference, name, positive=False):
-    result = torch.as_tensor(value, dtype=reference.dtype, device=reference.device)
-    if result.numel() != 1 and result.shape != reference.shape:
-        raise ValueError(name + ' must be scalar or match observations')
-    if not bool(torch.isfinite(result).all()) or bool((result <= 0 if positive else result < 0).any()):
-        raise ValueError(name + ' outside valid range')
-    return result.expand_as(reference).clone()
+from inv_framework.core.fidelity import _parameter, measurement_setting
 
 
 def simulate_observation(projection, *, model, seed, sigma=None, I0=None,

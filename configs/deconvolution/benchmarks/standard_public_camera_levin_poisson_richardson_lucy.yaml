@@ -1,0 +1,22 @@
+modality: deconvolution
+algorithm: richardson_lucy
+params:
+  max_iter: 20
+device: cpu
+inputs:
+  observation:
+    path: ../../../tests/data/deconvolution/cases/public_camera_levin/public.npz
+    key: counts
+  psf:
+    path: ../../../tests/data/deconvolution/cases/public_camera_levin/public.npz
+    key: psf
+model:
+  axes:
+  - y
+  - x
+  boundary: periodic
+  noise_model: poisson
+  background: 0.2
+  psf_origin:
+  - 9
+  - 9

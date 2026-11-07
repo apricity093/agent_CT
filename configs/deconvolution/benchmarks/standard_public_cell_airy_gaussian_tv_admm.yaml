@@ -1,0 +1,23 @@
+modality: deconvolution
+algorithm: tv_admm
+params:
+  lam: 0.005
+  max_iter: 200
+device: cpu
+inputs:
+  observation:
+    path: ../../../tests/data/deconvolution/cases/public_cell_airy/public.npz
+    key: gaussian
+  psf:
+    path: ../../../tests/data/deconvolution/cases/public_cell_airy/public.npz
+    key: psf
+model:
+  axes:
+  - y
+  - x
+  boundary: periodic
+  noise_model: gaussian
+  background: 0
+  psf_origin:
+  - 7
+  - 7

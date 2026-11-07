@@ -1,5 +1,7 @@
 # CT 案例与运行输出
 
+MRI 与反卷积数据见[公共基准](public_benchmarks.md)。
+
 默认目录为 `tests/data/`，可用 `INVFRAMEWORK_CT_CASE_ROOT` 或 CLI
 `--data-root` 指定其他目录。`catalog.json` 供 Agent 发现案例。
 
@@ -40,19 +42,14 @@ python -m inv_framework.cli data validate
 
 ## 三维案例
 
-`cone_3d/spheres_astra_12` 的原始数组保留在
-`cases/cone_3d__spheres_astra_12/`，几何和原有 case_id 不变。
-FDK 仍使用 ASTRA CUDA，资源释放逻辑与三切片评估保留。
+`cone_3d/spheres_astra_12` 的数组位于
+`cases/cone_3d__spheres_astra_12/`，case_id 为 `cone_3d/spheres_astra_12`。
+FDK 仍使用 ASTRA CUDA，执行后释放资源，并提供三切片评估。
 
 ## 执行与输出
 
 公开任务入口为 `inv_framework.api.run_ct_task`；文件输出入口为 `invct`。成功的文件输出运行保存
 `reconstruction.pt`、`metrics.json`、`diagnostics.json`、`comparison.png`。
 诊断保留参数来源、迭代数、停止原因、收敛状态和 wall-clock runtime。
-算子调用计费、内容摘要、环境快照和额外运行清单不再生成。
-
-suite 使用固定参数配置。调用次数预算和计费协议已移除；旧 Python 参数
-`max_forward_calls`、`max_adjoint_calls`、`max_wall_seconds` 非空时明确报错，
-不会静默忽略。迭代上限和数学停止判据继续有效。
 MLEM/OSEM 的发射计数模型不适用于本数据集的透射计数；透射泊松任务使用
 支持 `transmission_poisson_nll` 的可组合求解器。

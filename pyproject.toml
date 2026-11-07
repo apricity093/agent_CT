@@ -9,9 +9,11 @@ description = "Inverse-problem framework with CT reconstruction operators and so
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 dependencies = [
   "torch>=1.12",
   "numpy>=1.21",
+  "scipy>=1.8",
   "h5py>=3.7",
   "PyYAML>=6.0",
   "matplotlib>=3.5",
@@ -19,16 +21,19 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "scipy"]
+mri = ["torchkbnufft==1.5.2"]
+benchmark-data = ["scikit-image==0.26.0", "phantominator==0.7.0"]
 diffusion = ["diffusers>=0.30"]
 
 [project.scripts]
 invct = "inv_framework.api.cli:main"
+inv-run = "inv_framework.runner:main"
 
 [tool.setuptools.packages.find]
 include = ["inv_framework*", "configs*"]
 
 [tool.setuptools.package-data]
-configs = ["algorithms/*.yaml"]
+configs = ["algorithms/*.yaml", "mri/algorithms/*.yaml", "deconvolution/algorithms/*.yaml", "ct/benchmarks/*.yaml", "mri/benchmarks/*.yaml", "deconvolution/benchmarks/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

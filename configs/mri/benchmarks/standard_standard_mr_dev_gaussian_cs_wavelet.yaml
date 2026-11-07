@@ -1,0 +1,29 @@
+modality: mri
+algorithm: cs_wavelet
+params:
+  lam: 0.005
+  max_iter: 60
+  cg_max_iter: 30
+device: cpu
+model:
+  axes:
+  - batch
+  - coil
+  - y
+  - x
+  spatial_shape:
+  - 128
+  - 128
+  sampling: cartesian
+  fft_centered: true
+  fft_norm: ortho
+inputs:
+  kspace:
+    path: ../../../tests/data/mri/cases/standard_mr_dev/public.npz
+    key: kspace
+  sensitivity_maps:
+    path: ../../../tests/data/mri/cases/standard_mr_dev/public.npz
+    key: sensitivity_maps
+  sampling_mask:
+    path: ../../../tests/data/mri/cases/standard_mr_dev/public.npz
+    key: sampling_mask

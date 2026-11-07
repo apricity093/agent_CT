@@ -1,0 +1,21 @@
+modality: deconvolution
+algorithm: blind_l0
+params:
+  max_iter: 3
+  final_max_iter: 60
+device: cpu
+inputs:
+  observation:
+    path: ../../../tests/data/deconvolution/cases/public_camera_levin/public.npz
+    key: gaussian
+model:
+  axes:
+  - y
+  - x
+  boundary: periodic
+  noise_model: gaussian
+  background: 0
+  kernel_shape:
+  - 19
+  - 19
+task_type: blind_deconvolution

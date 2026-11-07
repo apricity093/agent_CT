@@ -1,0 +1,46 @@
+name: tv_admm
+modality: deconvolution
+task_types:
+- reconstruction
+required_inputs:
+- observation
+- psf
+implementation_status: implemented
+parameters:
+  lam: 0.01
+  rho: 1.0
+  max_iter: 200
+  tolerance: 1.0e-05
+parameter_schema:
+  lam:
+    type: float
+    minimum: 0
+    description: Nonnegative weight on unnormalized regularizer sum
+  rho:
+    type: float
+    minimum: 1.0e-12
+    description: Positive ADMM augmented quadratic penalty
+  max_iter:
+    type: int
+    minimum: 1
+    description: Outer iteration cap
+  tolerance:
+    type: float
+    minimum: 0
+    description: Relative stopping tolerance; zero requests exact stopping
+parameter_status: validated
+applicability: Periodic 2D/3D Gaussian or emission Poisson Hx+b; isotropic TV; independent
+  channels
+outputs:
+- reconstruction
+devices:
+- cpu
+spatial_dimensions:
+- 2
+- 3
+boundaries:
+- periodic
+noise_models:
+- gaussian
+- poisson
+reference: docs/deconvolution/algorithms.md

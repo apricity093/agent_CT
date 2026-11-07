@@ -22,6 +22,7 @@ class CTTaskRequest:
     fidelity: str | None = None
     regularizer: str | None = None
     params: dict[str, Any] = field(default_factory=dict)
+    inputs: dict[str, Any] | None = None
 
 
 @dataclass
@@ -39,6 +40,8 @@ class CTTaskResult:
     stopping_reason: str = "parameter_validation_failed"
     reason_code: str = "parameter_validation_failed"
     history: list[dict[str, Any]] = field(default_factory=list)
+    effective_params: dict[str, Any] = field(default_factory=dict)
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 def normalize_request(request):
@@ -155,7 +158,7 @@ def validate_ct_request(request):
     from . import execution
     request, name, parameters = normalize_request(request)
     device = request.device or ("cuda" if name == "fdk" else "cpu")
-    case = execution.load_ct_case(request.case_id, data_root=request.data_root, device=device)
+    case = load_request_case(request, device)
     if request.fit_view_indices is not None:
         if set(request.fit_view_indices) & set(request.heldout_view_indices):
             raise ConfigError("fit and heldout views must be disjoint")
@@ -167,3 +170,43 @@ def validate_ct_request(request):
     if validation.errors:
         raise ConfigError("; ".join(validation.errors))
     return validation.parameters
+
+
+def load_request_case(request, device):
+    if request.inputs is None:
+        from .execution import load_ct_case
+        return load_ct_case(request.case_id, data_root=request.data_root, device=device)
+    import torch
+    from inv_framework.ct.cases import CTTestCase
+    from inv_framework.experiments import read_array
+    inputs = request.inputs
+    allowed = {"observation", "geometry", "measurement", "public_measurement", "truth", "data_range", "valid_measurement_mask"}
+    if not isinstance(inputs, dict) or set(inputs) - allowed:
+        raise ValueError("unsupported CT inputs; see docs/ct/data_format.md")
+    if not {"observation", "geometry", "measurement"} <= inputs.keys():
+        raise ValueError("CT inputs require observation, geometry and measurement metadata")
+    def tensor(value):
+        array = read_array(value)
+        if array.dtype.kind == "c":
+            raise ValueError("CT inputs must be real-valued")
+        return torch.as_tensor(array, dtype=torch.float32, device=device)
+    observed = tensor(inputs["observation"])
+    geometry = inputs["geometry"]
+    if not isinstance(geometry, dict) or not {"type", "domain_shape", "range_shape", "angles_rad"} <= geometry.keys():
+        raise ValueError("geometry requires type, domain_shape, range_shape and angles_rad")
+    if geometry["type"] not in {"parallel_2d", "cone_3d"}:
+        raise ValueError("unsupported CT geometry type")
+    metadata = {"dimension": 3 if geometry["type"] == "cone_3d" else 2,
+                "measurement": inputs["measurement"]}
+    if "truth" in inputs:
+        if inputs.get("data_range", 0) <= 0:
+            raise ValueError("truth evaluation requires positive data_range")
+        truth = tensor(inputs["truth"])
+        metadata["ground_truth"] = {"data_range": inputs["data_range"]}
+    else:
+        # The established CT execution uses this only for output shape allocation.
+        truth = torch.zeros((observed.shape[0], *geometry["domain_shape"]), device=device)
+    mask = inputs.get("valid_measurement_mask")
+    return CTTestCase(request.case_id, truth, observed, observed, geometry, metadata,
+        valid_measurement_mask=None if mask is None else tensor(mask).bool(),
+        public_measurement={key: tensor(value) for key, value in inputs.get("public_measurement", {}).items()})
