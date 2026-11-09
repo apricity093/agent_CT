@@ -1,11 +1,12 @@
 # Numerical sources
 
-These are equation-based project implementations, not wrappers around complete
-upstream reconstructions. No upstream source text has been copied or vendored.
+Classical reconstruction methods are equation-based project implementations.
+VarNet network components are adapted from fastMRI under MIT; see
+[third-party notices](../THIRD_PARTY_NOTICES.md).
 Upstream authors retain copyright; package distributions retain their licenses.
 
 - MRI SENSE: Pruessmann et al., MRM 42 (1999), 952–962, and MRM 46 (2001),
-  638–651. Read [SigPy v0.1.27 mri/linop.py Sense](https://github.com/mikgroup/sigpy/blob/v0.1.27/sigpy/mri/linop.py),
+  638–651. References: [SigPy v0.1.27 mri/linop.py Sense](https://github.com/mikgroup/sigpy/blob/v0.1.27/sigpy/mri/linop.py),
   [mri/app.py SenseRecon](https://github.com/mikgroup/sigpy/blob/v0.1.27/sigpy/mri/app.py)
   and [alg.py ConjugateGradient](https://github.com/mikgroup/sigpy/blob/v0.1.27/sigpy/alg.py)
   (BSD-3-Clause). Same weighted quadratic model; this project explicitly requires
@@ -26,7 +27,7 @@ Upstream authors retain copyright; package distributions retain their licenses.
   unit-spacing Laplacian eigenvalues. Unlike its image pipeline defaults, no
   output clipping. Null unpenalized modes use the minimum-norm solution.
 - Richardson (1972), JOSA 62, 55–59; Lucy (1974), Astron. J. 79, 745–754.
-  Read scikit-image v0.25.2 richardson_lucy in the same source. Project EM retains
+  Reference: scikit-image v0.25.2 richardson_lucy in the same source. Project EM retains
   H*1 sensitivity, handles explicit gain/background and periodic or cropped zero
   boundaries. It does not assume unit PSF sum or symmetric kernels. Default
   constant .5 initialization is explicit; no clipping. Epsilon stabilizes the
@@ -38,15 +39,15 @@ spatial convolution sums, dense quadratic systems and EM formulas.
 
 ## Calibration and regularization
 
-Equation-based Python implementations; no reference repository or upstream solver
-is vendored or used by production. Inspected sources on 2026-11-06:
+Calibration and regularization use equation-based Python implementations.
+The references below describe their models and implementation differences.
 
 - Griswold et al., MRM 47 (2002), 1202-1210, GRAPPA;
   [pygrappa grappa.py, master](https://github.com/mckib2/pygrappa/blob/master/pygrappa/grappa.py)
   (MIT): sampling-pattern grouping and relative ridge equations. This project
   requires a separate acquired mask, uses valid ACS rows without padded fake
   calibration samples, augmented least squares and zero-padded outer-grid sources.
-  The viewed master source is a reading reference, not a pinned runtime dependency.
+  The master source is a reading reference, not a pinned runtime dependency.
 - Uecker et al., MRM 71 (2014), 990-1001, ESPIRiT;
   [SigPy v0.1.27 EspiritCalib](https://github.com/mikgroup/sigpy/blob/v0.1.27/sigpy/mri/app.py)
   (BSD-3-Clause): kernel SVD, Fourier covariance and crop. Local code uses dense
@@ -65,8 +66,7 @@ is vendored or used by production. Inspected sources on 2026-11-06:
   [author publication record](https://www-sop.inria.fr/ariana/en/publications.php?name=Dey).
   Local RL-TV uses the multiplicative denominator with minus divergence, a declared
   smooth discrete isotropic TV, sensitivity H*1 and constant background extension.
-  The author's linked report could not be retrieved in this session; no claim of
-  source-code or voxelwise reproduction is made. The update and derivative are
+  Source-code or voxelwise equivalence is not established. The update and derivative are
   independently checked numerically; no third-party Torch reconstruction is used.
 - Krishnan & Fergus, NeurIPS 2009, Fast Image Deconvolution using Hyper-Laplacian
   Priors; [author project](https://dilipkay.wordpress.com/fast-deconvolution/),
@@ -75,16 +75,16 @@ is vendored or used by production. Inspected sources on 2026-11-06:
   comparison instead of MATLAB LUT; FFT periodic image update and explicit finite
   continuation schedule. MATLAB execution/trajectory equivalence is not claimed.
 
-No new dependencies were needed: NumPy FFT, SVD/eigh and the existing NUFFT extra
-suffice. Numerical tests use independent scalar optimization, closed-form full
+These methods use NumPy FFT, SVD/eigh and the NUFFT extra.
+Numerical tests use independent scalar optimization, closed-form full
 sampling solutions, discrete optimality equations and phase-invariant projectors.
 
-## Learned MRI and blind deconvolution (2026-11-06)
+## Learned MRI and blind deconvolution
 
 - Sriram et al., End-to-End Variational Networks for Accelerated MRI
   Reconstruction (MICCAI 2020); facebookresearch/fastMRI archived main,
   fastmri/models/varnet.py and unet.py, retrieved 2026-11-06. Only those necessary
-  network files are adapted under MIT (THIRD_PARTY_NOTICES.md). Local complex
+  network files are adapted under MIT ([third-party notices](../THIRD_PARTY_NOTICES.md)). Local complex
   arithmetic/centered FFT replaces fastmri imports; normalization/power zero
   floors and pooling-dependent padding are explicit numerical changes.
   Strict state layout and all four named network classes are retained.
@@ -93,7 +93,6 @@ sampling solutions, discrete optimality equations and phase-invariant projectors
   points to https://dl.fbaipublicfiles.com/fastMRI/trained_models/varnet/ and
   knee_leaderboard_state_dict.pt / brain_leaderboard_state_dict.pt. Official
   structure: 12 cascades, chans=18, pools=4, sens_chans=8, sens_pools=4.
-  Knee weights were explicitly prepared in outputs/weights; brain not downloaded.
 - Pan, Sun, Pfister, Yang, Blind Image Deblurring Using Dark Channel Prior,
   CVPR 2016, equations 10--16:
   https://www.cv-foundation.org/openaccess/content_cvpr_2016/papers/Pan_Blind_Image_Deblurring_CVPR_2016_paper.pdf
@@ -116,8 +115,8 @@ sampling solutions, discrete optimality equations and phase-invariant projectors
 
 ## Standard lightweight benchmark inputs
 
-Prepared 2026-11-07. See docs/public_benchmarks.md for provenance, units,
-licenses and limitations; outputs/public_benchmarks/ for measured outputs.
+See [public benchmarks](public_benchmarks.md) for provenance, units,
+licenses and limitations.
 scikit-image 0.26.0 camera/astronaut/cell are public source images, while their
 blur/noise observations are synthesized locally. Levin09.mat is obtained from
 https://github.com/cszn/DPIR/tree/master/kernels, preserving eight measured PSFs.

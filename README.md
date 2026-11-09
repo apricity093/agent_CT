@@ -313,6 +313,8 @@ python -m pytest -q
 具体测试入口和数值适用说明见[验证说明](docs/validation.md)。
 
 - [算法索引](docs/algorithms/README.md)
+- [架构与术语](docs/architecture.md)
+- [算法来源与实现差异](docs/source_references.md)
 - [CT 数据与几何](docs/datasets.md)
 - [MRI／反卷积数据来源](docs/public_benchmarks.md)
 - [组合求解器](docs/composable_solvers.md)
