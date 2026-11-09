@@ -1,7 +1,8 @@
 # 数值与接口验证
 
 测试从本仓库根目录运行，开发依赖使用 `python -m pip install ".[dev]"`。
-ASTRA CUDA、LEAP、非 Cartesian MRI 与 VarNet 分别需要对应后端或权重。
+ASTRA CUDA、LEAP、非 Cartesian MRI 与 VarNet 分别需要对应后端、扩展包或权重；
+完整安装要求见[依赖与安装](../DEPENDENCIES.md)。
 
 ## 测试入口
 
@@ -33,6 +34,9 @@ ASD 的可行停滞没有全局最优保证。有限内层 TV/Haar 近端达到�
 返回精度限制时，应读取原生停止原因。高精度约束 CT 参考测试对收敛与
 TV gap 有独立要求，不能用短任务成功替代；这些严格回归存在未解决的
 精度失败，不能声称全套测试通过。LEAP 的真实后端验证尚未完成。
+
+CT 保真项的严格数学参考使用 float64，以满足 ADMM 逐次收紧的真实内层残差
+目标；float32 请求仍按其实际停止状态返回，有限输出不代表通过这些精度要求。
 
 ASTRA FDK 使用独立工作缓冲，避免原地滤波改变调用者观测；GPU-link 与
 CPU-copy 路径不保证数值相同。ASTRA 对象由所属执行路径在 finally 中释放。

@@ -14,7 +14,7 @@ def measurement_setting(metadata,name,default=None):
 
 
 def _parameter(value, reference, name, positive=False):
-    result = torch.as_tensor(value, dtype=reference.dtype, device=reference.device)
+    result = torch.as_tensor(value, dtype=reference.real.dtype, device=reference.device)
     if result.numel() != 1 and result.shape != reference.shape:
         raise ValueError(name + ' must be scalar or match observations')
     if not bool(torch.isfinite(result).all()) or bool((result <= 0 if positive else result < 0).any()):
@@ -154,7 +154,7 @@ class QuadraticFidelity:
 
     def value(self, prediction):
         _check(prediction, self.observed)
-        return .5*(self._multiply((prediction-self.observed).square())).sum()
+        return .5*(self._multiply((prediction-self.observed).abs().square())).sum()
 
     def measurement_diagnostics(self,prediction):
         _check(prediction,self.observed)
@@ -163,7 +163,7 @@ class QuadraticFidelity:
 
     def value_per_batch(self, prediction):
         _check(prediction, self.observed)
-        return .5*(self._multiply((prediction-self.observed).square())).flatten(1).sum(1)
+        return .5*(self._multiply((prediction-self.observed).abs().square())).flatten(1).sum(1)
 
     def gradient(self, prediction):
         _check(prediction, self.observed)

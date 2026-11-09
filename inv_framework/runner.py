@@ -21,38 +21,62 @@ def run_experiment(config, output_dir=None, *, params=None):
     """Run a mapping or YAML/JSON file. Explicit params override file params."""
     if isinstance(config, (str, Path)):
         path = Path(config).resolve()
-        config = _resolve_paths(yaml.safe_load(path.read_text(encoding="utf-8")), path.parent)
-    allowed = {"modality", "algorithm", "task_type", "inputs", "model", "params", "device", "backend", "case_id", "data_root", "evaluation", "stopping_policy", "problem_constraints"}
+        content = path.read_text(encoding="utf-8")
+        config = _resolve_paths(json.loads(content) if path.suffix == ".json" else yaml.safe_load(content), path.parent)
+    allowed = {"modality", "algorithm", "task_type", "inputs", "model", "params", "device", "backend", "case_id", "data_root", "evaluation", "stopping_policy", "problem_constraints", "fidelity"}
     if not isinstance(config, dict) or set(config) - allowed:
         raise ValueError("unsupported experiment fields")
     domain = config["modality"]
-    effective = {**config.get("params", {}), **(params or {})}
+    file_params, explicit_params = config.get("params", {}), params or {}
+    if domain == "ct":
+        from inv_framework.experiments import normalize_ct_parameters
+        file_params = normalize_ct_parameters(file_params, config["algorithm"])
+        if config.get("fidelity") is not None:
+            if "data_fidelity" in file_params and file_params["data_fidelity"] != config["fidelity"]:
+                raise ValueError("experiment fidelity conflicts with params.data_fidelity")
+            file_params["data_fidelity"] = config["fidelity"]
+        explicit_params = normalize_ct_parameters(explicit_params, config["algorithm"])
+    effective = {**file_params, **explicit_params}
     if domain == "ct":
         if config.get("task_type", "reconstruction") != "reconstruction":
             raise ValueError("CT task_type must be reconstruction")
         from inv_framework.ct.api import CTTaskRequest, run_ct_task
         inputs = {**config["inputs"], **config["model"]} if "inputs" in config else None
         evaluation = config.get("evaluation")
-        if evaluation:
-            if inputs is None:
-                raise ValueError("evaluation references require external CT inputs")
-            inputs.update(truth=evaluation["reference"], data_range=evaluation["data_range"])
+        if evaluation and inputs is None:
+            raise ValueError("evaluation references require external CT inputs")
         request = CTTaskRequest(config.get("case_id", "external"), config["algorithm"],
             params=effective, inputs=inputs, **{key: config[key] for key in
             ("backend", "device", "data_root", "stopping_policy", "problem_constraints") if key in config})
         ct = run_ct_task(request)
         result = ExperimentResult(ct.status, domain, config["algorithm"], ct.effective_params,
-            ct.metrics, ct.runtime_sec, ct.iterations, ct.converged, ct.convergence_status,
+            ct.metrics, ct.runtime_sec, ct.iterations, ct.converged, ct.stopping_reason,
             {} if ct.reconstruction is None else {"reconstruction": ct.reconstruction},
             ct.diagnostics, None if ct.error_message is None else
             {"code": ct.reason_code, "message": ct.error_message})
+        if result.status == "success" and evaluation:
+            import torch
+            from inv_framework.experiments import read_array
+            from inv_framework.utils.metrics import ct_image_metrics
+            image = torch.as_tensor(result.outputs["reconstruction"])
+            reference = torch.as_tensor(read_array(evaluation["reference"]))
+            data_range = float(evaluation["data_range"])
+            if reference.shape != image.shape or reference.is_complex() or not torch.isfinite(reference).all():
+                raise ValueError("CT evaluation reference must be finite, real and match reconstruction")
+            if not np.isfinite(data_range) or data_range <= 0:
+                raise ValueError("evaluation.data_range must be positive")
+            dimension = 3 if inputs['geometry']['type'] == 'cone_3d' else 2
+            result.metrics.update(ct_image_metrics(image, reference, data_range, dimension))
+            result.diagnostics['evaluation'] = dict(reference_provided=True,
+                stage='post_reconstruction', data_range=data_range,
+                ssim_definition=result.metrics['ssim_definition'])
     elif domain in {"mri", "deconvolution"}:
         if domain == "mri":
             from inv_framework.mri.api import MRITaskRequest as Request, run_mri_task as run
         else:
             from inv_framework.deconvolution.api import DeconvolutionTaskRequest as Request, run_deconvolution_task as run
         result = run(Request(config["algorithm"], config.get("inputs", {}), config.get("model", {}),
-            params=effective, task_type=config.get("task_type", "reconstruction"), device=config.get("device", "cpu")))
+            params=effective, task_type=config.get("task_type", "reconstruction"), device=config.get("device", "cpu"), fidelity=config.get("fidelity")))
         if config.get("evaluation") and config.get("task_type") == "calibration":
             raise ValueError("Image-reference evaluation applies to reconstruction, not calibration maps")
         if result.status == "success" and config.get("evaluation"):

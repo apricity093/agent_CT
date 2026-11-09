@@ -59,6 +59,8 @@ fastMRI GitHub 的测试 fixture 会生成随机 mock 数据，不能标成真�
 ## 复现和独立任务
 
 数据生成依赖可通过 `python -m pip install ".[benchmark-data]"` 安装。
+运行包含非笛卡尔 MRI 的基准还需 `.[mri]`；可合并安装为
+`python -m pip install ".[mri,benchmark-data]"`。完整依赖见[依赖与安装](../DEPENDENCIES.md)。
 部分 scikit-image 图像在首次准备时按需获取。领域数据位于 `tests/data/`；
 运行已有 NPY/NPZ 任务不需要模体生成器。以下命令从本仓库根目录执行：
 

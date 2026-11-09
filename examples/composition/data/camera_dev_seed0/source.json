@@ -1,0 +1,57 @@
+{
+  "domain": "deconvolution",
+  "split": "development",
+  "source": {
+    "split": "dev",
+    "seed": 12000,
+    "benchmark_group": "public_standard",
+    "spatial_shape": [
+      256,
+      256
+    ],
+    "data_range": 1.0,
+    "source": "scikit-image 0.26.0 data.camera",
+    "source_url": "https://scikit-image.org/docs/0.26.x/api/skimage.data.html#skimage.data.camera",
+    "image_rights": "CC0",
+    "object_kind": "camera",
+    "kernel": "Levin09 kernel 1",
+    "kernel_shape": [
+      19,
+      19
+    ],
+    "psf_origin": [
+      9,
+      9
+    ],
+    "boundary": "periodic",
+    "gaussian_sigma": 0.005,
+    "photon_gain": 40.0,
+    "background": 0.2,
+    "observation": "Synthetic periodic blur and Gaussian/Poisson noise applied to a public image; not an acquired blurred pair",
+    "image_conversion": "anti-aliased resize to 256 square; astronaut RGB to standard luminance; uint8 divided by 255",
+    "interpretation": "Cell is quantitative phase, used only as a nonnegative intensity surrogate; not measured fluorescence",
+    "public_inputs": [
+      "gaussian",
+      "counts",
+      "psf"
+    ],
+    "reference": "reference.npz: object and true_psf; blind tasks never load PSF"
+  },
+  "sigma": 0.005,
+  "sigma_multiplier": 1.0,
+  "complex_sigma_definition": "E|noise|^2=sigma^2",
+  "generation": "matched forward then noise; reference only used after reconstruction",
+  "display_window": [
+    0,
+    1
+  ],
+  "crop_fraction": [
+    0.25,
+    0.75,
+    0.25,
+    0.75
+  ],
+  "noise_seed": 0,
+  "role": "development",
+  "data_range": 1.0
+}

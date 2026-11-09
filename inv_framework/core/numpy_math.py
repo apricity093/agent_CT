@@ -2,44 +2,27 @@
 import numpy as np
 
 
+from inv_framework.core.array_math import Differences, shrink as _shrink
+from inv_framework.core.krylov import solve_cg
+
+
 def conjugate_gradient(normal, rhs, initial, max_iter, tolerance):
-    x = initial.copy()
-    r = rhs - normal(x)
-    p = r.copy()
-    rr = np.vdot(r, r).real
+    result = solve_cg(normal, rhs, initial, max_iter, rtol=tolerance)
     scale = max(float(np.linalg.norm(rhs)), np.finfo(float).tiny)
-    history = [float(np.sqrt(rr) / scale)]
-    iteration = 0
-    reason = "converged" if history[-1] <= tolerance else "max_iterations"
-    for iteration in range(1, max_iter + 1) if reason != "converged" else ():
-        ap = normal(p)
-        curvature = np.vdot(p, ap).real
-        if curvature <= 0 or not np.isfinite(curvature):
-            return x, iteration - 1, "numerical_error", history
-        alpha = rr / curvature
-        x += alpha * p
-        r -= alpha * ap
-        next_rr = np.vdot(r, r).real
-        history.append(float(np.sqrt(next_rr) / scale))
-        if history[-1] <= tolerance:
-            reason = "converged"
-            break
-        p = r + (next_rr / rr) * p
-        rr = next_rr
-    return x, iteration, reason, history
+    return result.reconstruction, result.iterations, ('converged' if result.converged else
+        'numerical_error' if result.stopping_reason in ('nonpositive_curvature', 'precision_limit') else 'max_iterations'), [r/scale for r in result.residual_history]
 
 
 def gradient(x, axes):
-    return np.stack([np.roll(x, -1, a)-x for a in axes])
+    return Differences(axes, boundary='periodic').forward(x)
 
 
 def gradient_adjoint(g, axes):
-    return sum(np.roll(v, 1, a)-v for v, a in zip(g, axes))
+    return Differences(axes, boundary='periodic').adjoint(g)
 
 
 def shrink(z, threshold, grouped=False):
-    magnitude = np.sqrt(np.sum(abs(z)**2, axis=0, keepdims=True)) if grouped else abs(z)
-    return z * np.maximum(1-threshold/np.maximum(magnitude, np.finfo(float).tiny), 0)
+    return _shrink(z, threshold, axis=0 if grouped else None)
 
 
 def laplacian_spectrum(shape, axes):

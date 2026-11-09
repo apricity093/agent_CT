@@ -16,9 +16,10 @@ CUDA_DEVICE = pytest.param('cuda', marks=pytest.mark.skipif(not torch.cuda.is_av
 def test_ct_reference(tmp_path,device,algorithm,model):
     angles=torch.linspace(0,np.pi,13,device=device)[:-1]
     op=ParallelBeamRadon2D(8,angles=angles,device=device)
-    eye=torch.eye(64,device=device).reshape(64,1,8,8)
+    # Shrinking certified ADMM residual targets require double precision.
+    eye=torch.eye(64,device=device,dtype=torch.float64).reshape(64,1,8,8)
     a=op.forward(eye).flatten(1).T.double().cpu().numpy()
-    truth=torch.zeros(1,1,8,8,device=device);truth[...,2:6,2:6]=.3
+    truth=torch.zeros(1,1,8,8,device=device,dtype=torch.float64);truth[...,2:6,2:6]=.3
     clean=op.forward(truth)
     lam=10.
     if model=='transmission_poisson_nll':

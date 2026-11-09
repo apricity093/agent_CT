@@ -1,0 +1,54 @@
+name: cg
+modality: deconvolution
+implementation_status: implemented
+task_types:
+- reconstruction
+required_inputs:
+- observation
+- psf
+parameters:
+  num_iterations: 200
+  min_value: null
+  max_value: null
+  regularizer: tikhonov
+  strength: 0.01
+  tolerance: 1.0e-06
+  boundary: neumann
+parameter_schema:
+  num_iterations:
+    type: int
+    minimum: 1
+    exclusive_minimum: false
+  min_value:
+    type: float
+    nullable: true
+  max_value:
+    type: float
+    nullable: true
+  regularizer:
+    type: str
+    choices:
+    - tikhonov
+  strength:
+    type: float
+    minimum: 0.0
+    exclusive_minimum: true
+  tolerance:
+    type: float
+    minimum: 0.0
+    exclusive_minimum: false
+  boundary:
+    type: str
+    choices:
+    - neumann
+    - periodic
+devices:
+- cpu
+spatial_dimensions:
+- 2
+outputs:
+- reconstruction
+objective: 0.5 sum Q |Ax-y|^2 + 0.5 strength ||Lx||^2; unconstrained
+unsupported: Only diagonal quadratic data; none/identity/H1 priors. CG requires positive
+  identity Tikhonov. LSQR damping contributes damping^2 and cannot duplicate strength.
+applicability: Real scalar 2D known PSF; periodic or zero convolution boundary

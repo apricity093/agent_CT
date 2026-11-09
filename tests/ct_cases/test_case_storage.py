@@ -10,7 +10,7 @@ from inv_framework.benchmarks import CTTestCase, load_ct_case, write_ct_case
 
 
 DATA_ROOT = Path(__file__).resolve().parents[2] / "tests" / "data"
-REQUIRED_MANIFEST_FIELDS = {
+REQUIRED_CASE_FIELDS = {
     "schema_version",
     "case_id",
     "modality",

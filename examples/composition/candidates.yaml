@@ -1,0 +1,9 @@
+# Positive defaults of the shared composable ADMM path, at the discretization
+# and unnormalized L2 objective fixed in the six example requests.
+references:
+  ct: {tv: 0.01, haar_l1: 0.01, tikhonov: 0.01, h1: 0.01, gradient_huber: 0.01}
+  mri: {tv: 0.01, haar_l1: 0.01, tikhonov: 0.01, h1: 0.01, gradient_huber: 0.01}
+  deconvolution: {tv: 0.01, haar_l1: 0.01, tikhonov: 0.01, h1: 0.01, gradient_huber: 0.01}
+single_exponents: [-2, -1.2, -0.4, 0.4, 1.2, 2]
+joint_q: [0.1, 1, 10]
+joint_a: [0.25, 0.75]

@@ -1,0 +1,44 @@
+modality: deconvolution
+algorithm: admm
+fidelity: l2
+device: cpu
+model:
+  axes:
+  - y
+  - x
+  boundary: periodic
+  noise_model: gaussian
+  gain: 1
+  background: 0
+  psf_origin:
+  - 9
+  - 9
+inputs:
+  observation:
+    path: data/camera_dev_seed0/public.npz
+    key: observation
+  psf:
+    path: data/camera_dev_seed0/public.npz
+    key: psf
+evaluation:
+  reference:
+    path: data/camera_dev_seed0/reference.npz
+    key: object
+  data_range: 1.0
+params:
+  regularizer: tv_haar
+  strength: 0.01
+  haar_strength: 0.01
+  num_iterations: 2000
+  tolerance: 1.0e-05
+  boundary: periodic
+  level: 2
+  penalize_lowpass: false
+  tv_mode: isotropic
+  rho: 1.0
+  rho_data: 1.0
+  rho_regularizer: 1.0
+  rho_haar: 1.0
+  rho_constraint: 1.0
+  cg_max_iterations: 300
+  cg_tolerance: 1.0e-06

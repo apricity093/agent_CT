@@ -17,13 +17,18 @@ parameter_schema:
     description: Odd square calibration kernel width in k-space grid samples
   svd_threshold:
     type: float
-    minimum: 1.0e-12
+    minimum: 0
     description: Singular cutoff relative to largest ACS singular value; strictly
       between 0 and 1
+    exclusive_minimum: true
+    maximum: 1
+    exclusive_maximum: true
   crop:
     type: float
     minimum: 0
     description: Dominant image eigenvalue crop threshold in [0,1]
+    maximum: 1
+    exclusive_maximum: false
 parameter_status: validated
 outputs:
 - sensitivity_maps

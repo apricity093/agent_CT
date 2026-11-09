@@ -30,16 +30,19 @@ parameter_schema:
     description: Relative stopping tolerance; zero requests exact stopping
   epsilon:
     type: float
-    minimum: 1.0e-12
+    minimum: 0
     description: Positive floor for Poisson mean division
+    exclusive_minimum: true
   tv_epsilon:
     type: float
-    minimum: 1.0e-12
+    minimum: 0
     description: Positive smoothing in sqrt(sum gradient squared + tv_epsilon squared)
+    exclusive_minimum: true
   initial_value:
     type: float
-    minimum: 1.0e-12
+    minimum: 0
     description: Positive constant object initialization
+    exclusive_minimum: true
 parameter_status: validated
 outputs:
 - reconstruction

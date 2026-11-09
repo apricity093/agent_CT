@@ -11,15 +11,21 @@ parameters:
   rho: 1.0
   max_iter: 200
   tolerance: 1.0e-05
+  nonnegative: null
 parameter_schema:
+  nonnegative:
+    type: bool
+    nullable: true
+    description: Nonnegative image constraint; null uses the Poisson or Gaussian default
   lam:
     type: float
     minimum: 0
     description: Nonnegative weight on unnormalized regularizer sum
   rho:
     type: float
-    minimum: 1.0e-12
+    minimum: 0
     description: Positive ADMM augmented quadratic penalty
+    exclusive_minimum: true
   max_iter:
     type: int
     minimum: 1

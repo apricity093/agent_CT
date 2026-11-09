@@ -1,0 +1,38 @@
+modality: mri
+algorithm: cg
+fidelity: l2
+device: cpu
+model:
+  axes:
+  - batch
+  - coil
+  - y
+  - x
+  spatial_shape:
+  - 128
+  - 128
+  sampling: cartesian
+  fft_centered: true
+  fft_norm: ortho
+inputs:
+  kspace:
+    path: ../../tests/data/mri/cases/standard_mr_dev/public.npz
+    key: kspace
+  sensitivity_maps:
+    path: ../../tests/data/mri/cases/standard_mr_dev/public.npz
+    key: sensitivity_maps
+  sampling_mask:
+    path: ../../tests/data/mri/cases/standard_mr_dev/public.npz
+    key: sampling_mask
+evaluation:
+  reference:
+    path: ../../tests/data/mri/cases/standard_mr_dev/reference.npz
+    key: object
+  data_range: 1.0
+  mode: magnitude
+params:
+  regularizer: tikhonov
+  strength: 0.01
+  num_iterations: 200
+  tolerance: 1.0e-05
+  boundary: neumann

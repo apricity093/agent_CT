@@ -33,7 +33,7 @@ def execute(request, p, result):
     x,k,iterations,diagnostics = reconstruct(y.astype(float),support,initial,p,request.algorithm)
     result.outputs = dict(reconstruction=x,psf=k)
     result.effective_params = p
-    result.diagnostics = dict(device='cpu',boundary='periodic',**diagnostics)
+    result.diagnostics.update(device='cpu',boundary='periodic',**diagnostics)
     result.iterations = iterations
     result.stopping_reason = 'max_iterations'
     result.status = 'success' if np.isfinite(x).all() and np.isfinite(k).all() else 'failed'

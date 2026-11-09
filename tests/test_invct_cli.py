@@ -39,6 +39,7 @@ def test_help_and_registry_are_stable(capsys):
         "landweber",
         "cgls",
         "lsqr",
+        "cg",
         "sart",
         "os_sart",
         "mlem",

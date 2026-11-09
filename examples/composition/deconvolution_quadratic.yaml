@@ -1,0 +1,33 @@
+modality: deconvolution
+algorithm: cg
+fidelity: l2
+device: cpu
+model:
+  axes:
+  - y
+  - x
+  boundary: periodic
+  noise_model: gaussian
+  gain: 1
+  background: 0
+  psf_origin:
+  - 9
+  - 9
+inputs:
+  observation:
+    path: ../../tests/data/deconvolution/cases/public_camera_levin/public.npz
+    key: gaussian
+  psf:
+    path: ../../tests/data/deconvolution/cases/public_camera_levin/public.npz
+    key: psf
+evaluation:
+  reference:
+    path: ../../tests/data/deconvolution/cases/public_camera_levin/reference.npz
+    key: object
+  data_range: 1.0
+params:
+  regularizer: tikhonov
+  strength: 0.01
+  num_iterations: 200
+  tolerance: 1.0e-05
+  boundary: periodic

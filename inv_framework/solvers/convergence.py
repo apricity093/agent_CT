@@ -1490,27 +1490,9 @@ def confirm_endpoint(
             tolerance=float(parameters.get("tv_tolerance", 1e-05)),
         )
         if algorithm == "fista":
-            from inv_framework.api.execution import _build_fista
-
-            options = {
-                k: v
-                for k, v in parameters.items()
-                if k
-                not in {
-                    "data_fidelity",
-                    "weight_source",
-                    "nll_tolerance",
-                    "nll_max_iterations",
-                }
-            }
-            if options.get("regularizer") == "h1":
-                from inv_framework.core.operator import GradientOperator
-                from inv_framework.core.regularizer import TikhonovRegularizer
-
-                options["smooth_regularizer"] = TikhonovRegularizer(
-                    GradientOperator(reconstruction.shape[1:])
-                )
-            tv = _build_fista(**options).parameters["regularizer"]
+            from inv_framework.solvers.composition import make_regularizer
+            tv=make_regularizer(parameters.get('regularizer','tikhonov'),
+                                reconstruction.shape[1:],parameters)
         strength = float(
             parameters.get("strength")
             if parameters.get("strength") is not None
@@ -1644,7 +1626,24 @@ def confirm_endpoint(
         result["relative_composite_objective_change"] = objective_change
     if algorithm in {"admm", "pdhg"}:
         native_name = "returned_point_primal_dual_fixed_point"
-        if split_state:
+        if split_state and 'branches' in split_state:
+            state=split_state
+            p=state['p'];f=state['fidelity'];g=operator.adjoint(p)
+            rp=p-f.dual_prox(p+prediction,1.)
+            residual_sq=float(rp.abs().square().sum())
+            composite_objective=float(f.value(prediction))
+            for penalty,weight,dual in state['branches']:
+                tx=penalty.apply(reconstruction)
+                g=g+penalty.apply(dual,True)
+                rd=dual-penalty.dual_prox(dual+tx,1.,weight)
+                residual_sq+=float(rd.abs().square().sum())
+                composite_objective+=weight*float(penalty.value(tx))
+            rx=reconstruction-_endpoint_box_constraints(reconstruction-g,state)
+            native_value=(residual_sq+float(rx.abs().square().sum()))**.5/max(1.,float(reconstruction.norm()),float(p.norm()))
+            native_ok=isfinite(native_value) and native_value<=float(parameters.get('tolerance',1e-5))
+            objective_endpoint_consistent=bool(rows) and abs(float(rows[-1]['objective'])-composite_objective)<=absolute_tolerance+relative_tolerance*abs(composite_objective)
+            result['composite_objective']=composite_objective
+        elif split_state:
             state = split_state
             penalty = state["penalty"]
             before = dict(penalty.calls)

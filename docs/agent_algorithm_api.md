@@ -61,6 +61,12 @@ Direct domain APIs return arrays in memory and do not write files.
 
 Installation uses `python -m pip install .`; development checks use `.[dev]`.
 Install `.[mri]` for non-Cartesian MRI (torchkbnufft 1.5.2). Classical Cartesian MRI and deconvolution use base dependencies.
+VarNet additionally needs an explicit matching checkpoint; CUDA is optional for
+VarNet, while the other current MRI methods and all deconvolution tasks use CPU.
+FDK requires both PyTorch CUDA and ASTRA CUDA. ASTRA and LEAP install separately.
+See [dependencies and installation](../DEPENDENCIES.md) for all three domains,
+optional extras, backend setup and verification commands.
+
 # CT public task API
 
 `inv_framework.api` exports `CTTaskRequest`, `CTTaskResult`, `list_capabilities`,
@@ -221,3 +227,5 @@ Blind deconvolution belongs to deconvolution, ESPIRiT calibration belongs to MRI
 Domain-specific tests are grouped under `tests/core`, `tests/ct`, `tests/mri`,
 `tests/deconvolution`. Existing CT tests/data and catalog paths remain unchanged.
 The parent Agent repository owns adapters and request/result conversion only.
+
+Shared ADMM/PDHG/FISTA three-domain calls, five regularizer definitions and fixed-block joint ADMM: [composable solvers](composable_solvers.md). A runnable small example is `python examples/composition_quickstart.py --domain mri --algorithm admm --regularizer tv_haar` (also ct/deconvolution).

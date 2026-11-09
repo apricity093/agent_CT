@@ -14,8 +14,8 @@ sys.meta_path.insert(0, Block())
 from inv_framework.mri.api import list_capabilities as mri
 from inv_framework.deconvolution.api import list_capabilities as deconv
 import inv_framework.core.fidelity
-assert len(mri()['algorithms']) == 7
-assert len(deconv()['algorithms']) == 7
+assert len(mri()['algorithms']) == 14
+assert len(deconv()['algorithms']) == 14
 assert len(mri()['planned_algorithms']) == 0
 assert len(deconv()['planned_algorithms']) == 0
 """

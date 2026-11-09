@@ -34,6 +34,34 @@ def ssim(pred: torch.Tensor, target: torch.Tensor,
     return ssim_map.mean(dim=(-1, -2, -3))
 
 
+def ct_image_metrics(reconstruction: torch.Tensor, truth: torch.Tensor,
+                     data_range: float, dimension: int) -> dict:
+    """CT image metrics; 3D SSIM averages all axial slices, not center planes."""
+    reconstruction, truth = reconstruction.float(), truth.float()
+    difference = reconstruction - truth
+    rmse = difference.square().mean().sqrt()
+    relative_error = difference.norm() / truth.norm().clamp_min(1e-12)
+    psnr_value = 20.0 * torch.log10(torch.as_tensor(data_range) / rmse.clamp_min(1e-12))
+    if reconstruction.ndim == 4 and dimension == 3:
+        batch, depth, height, width = reconstruction.shape
+        ssim_value = ssim(
+            reconstruction.reshape(batch * depth, 1, height, width),
+            truth.reshape(batch * depth, 1, height, width),
+            data_range=data_range,
+        ).mean()
+        ssim_definition = "axial_mean_ssim"
+    else:
+        ssim_value = ssim(reconstruction, truth, data_range=data_range).mean()
+        ssim_definition = "2d_ssim"
+    return {
+        "relative_error": float(relative_error.item()),
+        "rmse": float(rmse.item()),
+        "psnr": float(psnr_value.item()),
+        "ssim": float(ssim_value.item()),
+        "ssim_definition": ssim_definition,
+    }
+
+
 def orthogonal_slices(volume: torch.Tensor) -> dict[str, torch.Tensor]:
     """Return center axial/coronal/sagittal planes from (B,D,H,W), as (B,1,H,W)."""
     return {

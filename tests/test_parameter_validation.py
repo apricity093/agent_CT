@@ -53,8 +53,8 @@ def test_all_checked_in_algorithm_configs_validate(solver: str) -> None:
         ("sirt", {"num_iterations": 1}, {"num_iterations": 0}, {}, "parameter_out_of_range"),
         (
             "landweber",
-            {"num_iterations": 1, "step_size": 0.499999},
-            {"num_iterations": 1, "step_size": 0.5},
+            {"num_iterations": 1, "step_size": 0.499999, "min_value": 0.0},
+            {"num_iterations": 1, "step_size": 0.5, "min_value": 0.0},
             {"estimated_lipschitz": 4.0},
             "spectral_step_invalid",
         ),
@@ -139,13 +139,13 @@ def test_theory_boundaries_and_request_only_warnings() -> None:
     assert alias.valid and alias.parameters["step_size"] == pytest.approx(0.1)
 
     landweber = validate_parameter_values(
-        "landweber", {"step_size": 0.1}, estimated_lipschitz=4.0
+        "landweber", {"step_size": 0.1, "min_value": 0.0}, estimated_lipschitz=4.0
     )
     assert landweber.valid
     assert landweber.estimates["step_size_source"] == "user_override"
 
     strict_landweber = validate_parameter_values(
-        "landweber", {"step_size": 0.5}, estimated_lipschitz=4.0
+        "landweber", {"step_size": 0.5, "min_value": 0.0}, estimated_lipschitz=4.0
     )
     assert not strict_landweber.valid
 

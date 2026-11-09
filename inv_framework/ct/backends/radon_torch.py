@@ -133,11 +133,44 @@ class ParallelBeamRadon2D(LinearOperator):
         self.device = device
         self.domain_shape = (in_channels, image_size, image_size)
         self.range_shape = (in_channels, self.num_angles, image_size)
+        self._double_matrix = None
+        self._double_transpose = None
+
+    def _apply_double(self, value, adjoint=False):
+        """Reuse the same bilinear stencil for repeated double-precision solves."""
+        if self._double_matrix is None:
+            size = self.image_size
+            rows, columns, weights = [], [], []
+            detector = torch.arange(size, device=value.device).expand(size, size)
+            for i, theta in enumerate(self.angles):
+                grid = _rotation_grid(theta.double(), (1, 1, size, size))[0]
+                ix = ((grid[..., 0]+1)*size-1)/2
+                iy = ((grid[..., 1]+1)*size-1)/2
+                x0, y0 = ix.floor(), iy.floor()
+                for xj, wx in ((x0, x0+1-ix), (x0+1, ix-x0)):
+                    for yj, wy in ((y0, y0+1-iy), (y0+1, iy-y0)):
+                        valid = (xj>=0)&(xj<size)&(yj>=0)&(yj<size)
+                        rows.append((i*size+detector)[valid])
+                        columns.append((yj[valid].long()*size+xj[valid].long()))
+                        weights.append((wx*wy)[valid])
+            indices = torch.stack((torch.cat(rows), torch.cat(columns)))
+            matrix = torch.sparse_coo_tensor(indices, torch.cat(weights),
+                (self.num_angles*size, size*size), device=value.device).coalesce()
+            self._double_matrix = matrix.to_sparse_csr()
+            self._double_transpose = matrix.transpose(0, 1).to_sparse_csr()
+        matrix = self._double_transpose if adjoint else self._double_matrix
+        shape = (self.image_size, self.image_size) if adjoint else (self.num_angles, self.image_size)
+        flat = value.reshape(-1, matrix.shape[1])
+        return torch.sparse.mm(matrix, flat.T).T.reshape(*value.shape[:2], *shape)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.dtype == torch.float64:
+            return self._apply_double(x)
         return _RadonFunction.apply(x, self.angles, self.image_size)
 
     def adjoint(self, y: torch.Tensor) -> torch.Tensor:
+        if y.dtype == torch.float64:
+            return self._apply_double(y, adjoint=True)
         return _RadonAdjointFunction.apply(y, self.angles, self.image_size)
 
     def pseudo_inverse(self, y: torch.Tensor, method: str = 'fbp',

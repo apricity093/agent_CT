@@ -12,6 +12,8 @@ def poisson_prox(v, y, rho):
 
 def tv_admm(op,y,initial,p,poisson,background):
     axes=op.axes; rho=p['rho']; x=initial.copy()
+    nonnegative=p.get('nonnegative')
+    if nonnegative is None:nonnegative=poisson
     z=op.forward(x); d=gradient(x,axes); v=x.copy()
     uz=np.zeros_like(z); ud=np.zeros_like(d); uv=np.zeros_like(x)
     spectrum=abs(op.otf)**2+laplacian_spectrum(x.shape,axes)+1
@@ -23,16 +25,16 @@ def tv_admm(op,y,initial,p,poisson,background):
         oldz,oldd,oldv=z,d,v
         z=poisson_prox(hx+uz+background,y,rho)-background if poisson else (y+rho*(hx+uz))/(1+rho)
         d=shrink(gx+ud,p['lam']/rho,True)
-        projection_count=int(np.count_nonzero(x+uv<0)) if poisson else 0
-        v=np.maximum(x+uv,0) if poisson else x+uv
+        projection_count=int(np.count_nonzero(x+uv<0)) if nonnegative else 0
+        v=np.maximum(x+uv,0) if nonnegative else x+uv
         uz+=hx-z; ud+=gx-d; uv+=x-v
         primal=float(np.sqrt(np.linalg.norm(hx-z)**2+np.linalg.norm(gx-d)**2+np.linalg.norm(x-v)**2))
         dual=float(rho*np.linalg.norm(op.adjoint(z-oldz)+gradient_adjoint(d-oldd,axes)+v-oldv))
         history.append(dict(primal_residual=primal,dual_residual=dual))
         if max(primal,dual)<=p['tolerance']*max(1,np.linalg.norm(x)):
             reason='converged';break
-    # v is the feasible nonnegative object; report splitting error separately.
-    return v,iteration,reason,dict(residual_history=history,solver='admm',nonnegative_projection_count=projection_count)
+    # v applies the selected image constraint; splitting errors remain separate.
+    return v,iteration,reason,dict(residual_history=history,solver='admm',nonnegative_projection_count=projection_count,nonnegative=nonnegative)
 
 
 def rl_tv(op,y,initial,p,background):

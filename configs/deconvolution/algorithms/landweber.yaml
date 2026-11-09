@@ -1,0 +1,62 @@
+name: landweber
+modality: deconvolution
+implementation_status: implemented
+task_types:
+- reconstruction
+required_inputs:
+- observation
+- psf
+parameters:
+  num_iterations: 200
+  min_value: null
+  max_value: null
+  step_size: null
+  regularizer: none
+  strength: 0.0
+  tolerance: 1.0e-06
+  boundary: neumann
+parameter_schema:
+  num_iterations:
+    type: int
+    minimum: 1
+    exclusive_minimum: false
+  min_value:
+    type: float
+    nullable: true
+  max_value:
+    type: float
+    nullable: true
+  step_size:
+    type: float
+    nullable: true
+    minimum: 0.0
+    exclusive_minimum: true
+  regularizer:
+    type: str
+    choices:
+    - none
+    - tikhonov
+    - h1
+  strength:
+    type: float
+    minimum: 0.0
+    exclusive_minimum: false
+  tolerance:
+    type: float
+    minimum: 0.0
+    exclusive_minimum: false
+  boundary:
+    type: str
+    choices:
+    - neumann
+    - periodic
+devices:
+- cpu
+spatial_dimensions:
+- 2
+outputs:
+- reconstruction
+objective: 0.5 sum Q |Ax-y|^2 + 0.5 strength ||Lx||^2; unconstrained
+unsupported: Only diagonal quadratic data; none/identity/H1 priors. CG requires positive
+  identity Tikhonov. LSQR damping contributes damping^2 and cannot duplicate strength.
+applicability: Real scalar 2D known PSF; periodic or zero convolution boundary

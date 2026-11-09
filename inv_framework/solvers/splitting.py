@@ -129,6 +129,7 @@ def norm_bound(operator, x):
     return operator.squared_norm_upper_bound(x)
 
 
+@torch.no_grad()
 def solve_split_detailed(
     operator,
     measurement,
@@ -142,6 +143,7 @@ def solve_split_detailed(
     rho=1.0,
     cg_max_iterations=100,
     cg_tolerance=1e-06,
+    cg_fixed_scale=False,
     tau=None,
     sigma=None,
     min_value=None,
@@ -233,6 +235,9 @@ def solve_split_detailed(
             "mask_calls",
         )
     }
+    cg_reports = []
+    cg_reference_scale = None
+    norm_seconds = 0.
     cg_started = None
     actual = 0
     cg_total = 0
@@ -257,7 +262,9 @@ def solve_split_detailed(
         v = torch.zeros_like(x)
         if algorithm == "pdhg":
             try:
+                norm_started = time.perf_counter()
                 bound = norm_bound(operator, x) + penalty.bound
+                norm_seconds = time.perf_counter()-norm_started
             except ValueError as error:
                 return _parameter_failure_result(
                     algorithm,
@@ -268,8 +275,8 @@ def solve_split_detailed(
                     max_iterations=num_iterations,
                     parameters={},
                 )
-            tau = float(tau) if tau is not None else 0.99 / math.sqrt(bound)
-            sigma = float(sigma) if sigma is not None else 0.99 / math.sqrt(bound)
+            tau = float(tau) if tau is not None else 0.99 / math.sqrt(bound) if bound > 0 else 1.
+            sigma = float(sigma) if sigma is not None else 0.99 / math.sqrt(bound) if bound > 0 else 1.
             if tau * sigma * bound >= 1:
                 return _parameter_failure_result(
                     algorithm,
@@ -328,33 +335,20 @@ def solve_split_detailed(
                     )
 
                 cg_started = time.perf_counter()
-                candidate = x.clone()
-                r = rhs - normal(candidate)
-                direction = r.clone()
-                rr = (r * r).sum()
-                target = cg_tolerance / iteration**2 * max(norm(rhs), 1.0)
-                inner = 0
-                while norm(r) > target and inner < cg_max_iterations:
-                    nd = normal(direction)
-                    curvature = (direction * nd).sum()
-                    if not bool(torch.isfinite(curvature)) or float(curvature) <= 0:
-                        raise FloatingPointError(
-                            "cg_nonpositive_curvature_or_breakdown"
-                        )
-                    alpha = rr / curvature
-                    candidate = candidate + alpha * direction
-                    r = r - alpha * nd
-                    newrr = (r * r).sum()
-                    direction = r + newrr / rr * direction
-                    rr = newrr
-                    inner += 1
-                    cg_total += 1
-                cg_seconds += time.perf_counter() - cg_started
+                from inv_framework.core.krylov import solve_cg
+                if cg_reference_scale is None:
+                    cg_reference_scale = max(norm(rhs), 1.)
+                target = cg_tolerance/iteration**2*(cg_reference_scale if cg_fixed_scale else max(norm(rhs), 1.))
+                inner_result = solve_cg(normal, rhs, x, cg_max_iterations, atol=target, rtol=0.)
+                candidate = inner_result.reconstruction
+                cg_reports.append(inner_result.diagnostics())
+                cg_total += inner_result.iterations
+                cg_seconds += time.perf_counter()-cg_started
                 cg_started = None
-                inner_relative = norm(r) / max(norm(rhs), 1.0)
-                if norm(r) > target:
+                inner_relative = inner_result.residual/max(norm(rhs), 1.)
+                if not inner_result.converged:
                     cg_failures += 1
-                    status, reason = ("max_iterations", "cg_inner_max_iterations")
+                    status, reason = ('max_iterations' if inner_result.stopping_reason == 'inner_budget_exhausted' else 'numerical_error', 'cg_inner_max_iterations' if inner_result.stopping_reason == 'inner_budget_exhausted' else 'cg_'+inner_result.stopping_reason)
                     break
                 tx = penalty.apply(candidate)
                 nz = penalty.prox(tx + u, weight / rho)
@@ -551,11 +545,17 @@ def solve_split_detailed(
             "tau": tau,
             "sigma": sigma,
             "norm_bound_squared": bound,
-            "norm_bound_is_upper_bound": True,
+            "norm_bound_is_upper_bound": bound is not None,
             "primal_residual": primal,
             "dual_residual": dual,
             "split_residual": metric if endpoint else None,
             "cg_relative_residual": inner_relative,
+            "cg_subproblems": cg_reports,
+            "cg_schedule": "eta0*s_ref/k^2" if cg_fixed_scale else "eta0*max(1,||b_k||)/k^2",
+            "norm_type": "upper_bound" if bound is not None else None,
+            "norm_source": "operator.squared_norm_upper_bound + regularizer transform bound" if bound is not None else None,
+            "norm_estimation_iterations": 0,
+            "norm_initialization_sec": norm_seconds,
             "fidelity_precision": (
                 fidelity.precision_report()
                 if callable(getattr(fidelity, "precision_report", None))
@@ -579,7 +579,7 @@ def pdhg(operator,y,**kwargs): return PDHGSolver(**kwargs).solve(y,operator)
 
 
 def _batch_inner(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
-    return (left * right).reshape(left.shape[0], -1).sum(dim=1)
+    return (left.conj() * right).real.reshape(left.shape[0], -1).sum(dim=1)
 
 
 def _batch_norm(x: torch.Tensor) -> torch.Tensor:
@@ -683,27 +683,8 @@ def _estimate_lipschitz(
     num_iterations: int,
     eps: float = 1e-12,
 ) -> float:
-    sample_size = 1
-    for value in operator.domain_shape:
-        sample_size *= int(value)
-    seed = torch.linspace(
-        0.5,
-        1.5,
-        steps=sample_size,
-        dtype=reference.dtype,
-        device=reference.device,
-    ).reshape((1, *tuple(operator.domain_shape))).expand(reference.shape[0], *tuple(operator.domain_shape))
-    vector = seed / _batch_view(_batch_norm(seed).clamp_min(eps), seed)
-
-    for _ in range(int(num_iterations)):
-        next_vector = operator.adjoint(operator.forward(vector))
-        norm = _batch_norm(next_vector)
-        if bool(torch.all(norm <= eps)):
-            return 0.0
-        vector = next_vector / _batch_view(norm.clamp_min(eps), next_vector)
-
-    image = operator.adjoint(operator.forward(vector))
-    return float(_batch_inner(vector, image).clamp_min(0.0).max().item())
+    from inv_framework.core.norms import power_norm
+    return power_norm(operator, reference, num_iterations)['value']
 
 
 def tv_fista(
@@ -715,7 +696,7 @@ def tv_fista(
     x_init: Optional[torch.Tensor] = None,
     regularizer: Optional[TVRegularizer] = None,
     tolerance: float = 1e-5,
-    power_iterations: int = 12,
+    power_iterations: int = 20,
     min_value: Optional[float] = None,
     max_value: Optional[float] = None,
 ) -> torch.Tensor:
@@ -825,7 +806,7 @@ class TVFISTASolver(InverseProblemSolver):
         step_size: Optional[float] = None,
         regularizer: Optional[TVRegularizer] = None,
         tolerance: float = 1e-5,
-        power_iterations: int = 12,
+        power_iterations: int = 20,
         min_value: Optional[float] = None,
         max_value: Optional[float] = None,
     ):
@@ -1360,10 +1341,10 @@ def fista_update(operator, y, momentum, gradient, residual, step, regularizer, s
             f_next = f_next+strength*regularizer.value(next_x)
             f_current = f_current+strength*regularizer.value(momentum)
         flat = lambda x: x.reshape(x.shape[0], -1).sum(1)
-        bound = f_current + flat(gradient * delta) + flat(delta.square()) / (2 * step)
+        bound = f_current + flat((gradient.conj() * delta).real) + flat(delta.abs().square()) / (2 * step)
         if not bool(torch.isfinite(next_x).all() and torch.isfinite(f_next).all() and torch.isfinite(bound).all()):
             raise FloatingPointError("non_finite_fista_update")
-        slack = 32 * torch.finfo(y.dtype).eps * torch.maximum(f_current.abs(), bound.abs()).clamp_min(1)
+        slack = 32 * torch.finfo(y.real.dtype).eps * torch.maximum(f_current.abs(), bound.abs()).clamp_min(1)
         if bool(torch.all(f_next <= bound + slack)):
             return next_x, next_residual, step, rejected
         rejected += 1
@@ -1373,6 +1354,7 @@ def fista_update(operator, y, momentum, gradient, residual, step, regularizer, s
     raise FloatingPointError("smooth_majorizer_backtracking_failed")
 
 
+@torch.no_grad()
 def solve_fista_detailed(
     operator,
     measurement,
@@ -1384,7 +1366,7 @@ def solve_fista_detailed(
     step_size=None,
     x_init=None,
     tolerance=1e-05,
-    power_iterations=12,
+    power_iterations=20,
     min_value=None,
     max_value=None,
     control=None,
@@ -1534,6 +1516,8 @@ def solve_fista_detailed(
             raise FloatingPointError("non_finite_endpoint_mapping")
         return value
 
+    norm_started = time.perf_counter()
+    norm_info = dict(type=None, source="explicit_step_with_backtracking", iterations=0)
     try:
         if step_size is None:
             if poisson:
@@ -1545,17 +1529,18 @@ def solve_fista_detailed(
                     * fidelity.scale**2
                 )
             else:
-                estimate = _estimate_lipschitz(
-                    (
-                        fidelity.whiten_operator(operator)
-                        if fidelity is not None
-                        else operator
-                    ),
-                    measurement,
-                    power_iterations,
-                )
+                effective_operator = fidelity.whiten_operator(operator) if fidelity is not None else operator
+                try:
+                    estimate = norm_bound(effective_operator, x)
+                    norm_info.update(type='upper_bound', source='squared_norm_upper_bound')
+                except ValueError:
+                    from inv_framework.core.norms import power_norm
+                    norm_info = power_norm(effective_operator, x, power_iterations)
+                    estimate = norm_info['value']
+            if poisson:
+                norm_info.update(type='upper_bound', source='nonnegative_transmission_curvature')
             if smooth_regularizer and weight:
-                estimate += 8 * weight / getattr(reg, "delta", 1.0)
+                estimate += reg.split_transform(operator.domain_shape)[1] * weight / getattr(reg, "delta", 1.0)
         else:
             estimate = None
         step = (
@@ -1563,6 +1548,7 @@ def solve_fista_detailed(
             if step_size is not None
             else 0.99 / estimate if estimate > 1e-12 else 1.0
         )
+        norm_seconds = time.perf_counter()-norm_started
         if not math.isfinite(step):
             raise FloatingPointError("non_finite_initial_step")
         for iteration in range(1, limit + 1):
@@ -1763,7 +1749,11 @@ def solve_fista_detailed(
         metadata={
             "step_size": locals().get("step"),
             "operator_norm_squared": estimate,
-            "norm_estimate_is_upper_bound": False,
+            "norm_estimate_is_upper_bound": norm_info["type"] == "upper_bound",
+            "norm_type": norm_info["type"],
+            "norm_source": norm_info["source"],
+            "norm_estimation_iterations": norm_info["iterations"],
+            "norm_initialization_sec": locals().get("norm_seconds", time.perf_counter()-norm_started),
             "smooth_majorizer_checked": actual > 0,
             "endpoint_mapping_complete": endpoint_complete,
             "budget_interruption": budget_interruption,
@@ -1802,7 +1792,7 @@ def fista(operator, y, **kwargs):
 
 class FISTASolver(InverseProblemSolver):
     def __init__(self, regularizer=None, strength=None, reg_strength=None, num_iterations=50,
-                 step_size=None, tolerance=1e-5, power_iterations=12, min_value=None, max_value=None, fidelity=None):
+                 step_size=None, tolerance=1e-5, power_iterations=20, min_value=None, max_value=None, fidelity=None):
         self.parameters = dict(regularizer=regularizer, strength=strength, reg_strength=reg_strength,
             num_iterations=num_iterations, step_size=step_size, tolerance=tolerance,
             power_iterations=power_iterations, min_value=min_value, max_value=max_value, fidelity=fidelity)
@@ -2191,7 +2181,7 @@ def solve_tv_fista_detailed(
     x_init: torch.Tensor | None = None,
     regularizer: TVRegularizer | None = None,
     tolerance: float = 1e-5,
-    power_iterations: int = 12,
+    power_iterations: int = 20,
     min_value: float | None = None,
     max_value: float | None = None,
     control: SolveControl | None = None,

@@ -1,0 +1,359 @@
+{
+  "description": "README numerical examples. Metrics use saved reconstructions and established domain definitions, without image rescaling or solver reruns.",
+  "path_base": "Algorithm-library root; ../../ refers to the enclosing Agent workspace. Source runs are local evidence; the PNGs and this index are the portable README assets.",
+  "results": [
+    {
+      "domain": "ct",
+      "algorithm": "FISTA + Tikhonov",
+      "data": "标准椭圆 · 稀疏角高斯观测",
+      "metrics": {
+        "relative_error": 0.11092215776443481,
+        "rmse": 0.00048425060231238604,
+        "psnr": 32.31919860839844,
+        "ssim": 0.893492579460144,
+        "ssim_definition": "2d_ssim"
+      },
+      "data_range": 0.02,
+      "iterations": 200,
+      "converged": false,
+      "stopping_reason": "maximum_iterations_reached",
+      "source_result": "../../outputs/ct_showcase/runs/gaussian_fista_tikhonov/backend/result.json",
+      "reference": "tests/data/cases/parallel_2d__ellipses_sparse_gaussian/arrays.h5:truth/x",
+      "effective_params": {
+        "strength": 0.01,
+        "num_iterations": 200,
+        "min_value": 0.0,
+        "max_value": null,
+        "weight_source": null,
+        "nll_tolerance": null,
+        "nll_max_iterations": 200,
+        "reg_strength": null,
+        "step_size": null,
+        "tolerance": 1e-05,
+        "power_iterations": 12,
+        "level": 2,
+        "tv_mode": "isotropic",
+        "tv_num_iterations": 50,
+        "tv_tolerance": 1e-05,
+        "delta": 0.01
+      }
+    },
+    {
+      "domain": "ct",
+      "algorithm": "PDHG + Tikhonov",
+      "data": "标准椭圆 · 稀疏角高斯观测",
+      "metrics": {
+        "relative_error": 0.2625074088573456,
+        "rmse": 0.0011460231617093086,
+        "psnr": 24.83673095703125,
+        "ssim": 0.7875515222549438,
+        "ssim_definition": "2d_ssim"
+      },
+      "data_range": 0.02,
+      "iterations": 200,
+      "converged": false,
+      "stopping_reason": "maximum_iterations_reached",
+      "source_result": "../../outputs/ct_showcase/runs/gaussian_pdhg_tikhonov/backend/result.json",
+      "reference": "tests/data/cases/parallel_2d__ellipses_sparse_gaussian/arrays.h5:truth/x",
+      "effective_params": {
+        "strength": 0.01,
+        "num_iterations": 200,
+        "min_value": 0.0,
+        "max_value": null,
+        "weight_source": null,
+        "nll_tolerance": null,
+        "nll_max_iterations": 200,
+        "reg_strength": null,
+        "tolerance": 1e-05,
+        "level": 2,
+        "delta": 0.01,
+        "tv_mode": "isotropic",
+        "tau": null,
+        "sigma": null
+      }
+    },
+    {
+      "domain": "mri",
+      "algorithm": "Zero-filled",
+      "data": "MR 标准模体 · 标准噪声观测",
+      "metrics": {
+        "rmse": 0.05346688488060764,
+        "psnr": 25.438302365710758,
+        "ssim": 0.5555343632422504
+      },
+      "data_range": 1.0,
+      "iterations": 0,
+      "converged": false,
+      "stopping_reason": "completed_valid",
+      "source_result": "outputs/public_benchmarks/standard/mri/standard_mr_dev/gaussian_zero_filled/result.json",
+      "reference": "tests/data/mri/cases/standard_mr_dev/reference.npz:object",
+      "effective_params": {
+        "coil_combination": "sense"
+      }
+    },
+    {
+      "domain": "mri",
+      "algorithm": "CS-TV",
+      "data": "MR 标准模体 · 标准噪声观测",
+      "metrics": {
+        "rmse": 0.012723727935462573,
+        "psnr": 37.90771251495043,
+        "ssim": 0.9864271343713172
+      },
+      "data_range": 1.0,
+      "iterations": 60,
+      "converged": false,
+      "stopping_reason": "max_iterations",
+      "source_result": "outputs/public_benchmarks/standard/mri/standard_mr_dev/gaussian_cs_tv/result.json",
+      "reference": "tests/data/mri/cases/standard_mr_dev/reference.npz:object",
+      "effective_params": {
+        "lam": 0.005,
+        "rho": 1.0,
+        "max_iter": 60,
+        "tolerance": 1e-05,
+        "cg_max_iter": 30,
+        "cg_tolerance": 1e-06
+      }
+    },
+    {
+      "domain": "deconvolution",
+      "algorithm": "Wiener-Hunt",
+      "data": "camera / Levin 核 · 标准噪声观测",
+      "metrics": {
+        "rmse": 0.033042462440241206,
+        "psnr": 29.618551899939188,
+        "ssim": 0.844834507956481
+      },
+      "data_range": 1.0,
+      "iterations": 0,
+      "converged": false,
+      "stopping_reason": "completed_valid",
+      "source_result": "outputs/public_benchmarks/standard/deconvolution/public_camera_levin/gaussian_wiener_hunt/result.json",
+      "reference": "tests/data/deconvolution/cases/public_camera_levin/reference.npz:object",
+      "effective_params": {
+        "balance": 0.01
+      }
+    },
+    {
+      "domain": "deconvolution",
+      "algorithm": "TV-ADMM",
+      "data": "camera / Levin 核 · 标准噪声观测",
+      "metrics": {
+        "rmse": 0.036802407875759766,
+        "psnr": 28.682475315146295,
+        "ssim": 0.813884312152287
+      },
+      "data_range": 1.0,
+      "iterations": 200,
+      "converged": false,
+      "stopping_reason": "max_iterations",
+      "source_result": "outputs/public_benchmarks/standard/deconvolution/public_camera_levin/gaussian_tv_admm/result.json",
+      "reference": "tests/data/deconvolution/cases/public_camera_levin/reference.npz:object",
+      "effective_params": {
+        "lam": 0.005,
+        "rho": 1.0,
+        "max_iter": 200,
+        "tolerance": 1e-05
+      }
+    },
+    {
+      "domain": "ct",
+      "algorithm": "ADMM + TV + Haar",
+      "data": "随机椭圆 · 稀疏角高斯观测",
+      "metrics": {
+        "relative_error": 0.061745207756757736,
+        "rmse": 0.00032817150349728763,
+        "psnr": 35.69858169555664,
+        "ssim": 0.9917793869972229,
+        "ssim_definition": "2d_ssim"
+      },
+      "data_range": 0.02,
+      "iterations": 1427,
+      "converged": true,
+      "stopping_reason": "split_residual",
+      "source_result": "outputs/composition_quality_20261108/development/calibration/ct/cholesky_cpu2000/result.json",
+      "reference": "examples/composition/data/ct_seeded_dev/reference.npz:object",
+      "effective_params": {
+        "num_iterations": 2000,
+        "min_value": null,
+        "max_value": null,
+        "boundary": "neumann",
+        "penalize_lowpass": false,
+        "subproblem_solver": "cholesky",
+        "haar_strength": 0.01,
+        "rho_data": 1.0,
+        "rho_regularizer": 1.0,
+        "rho_haar": 1.0,
+        "rho_constraint": 1.0,
+        "data_fidelity": "l2",
+        "weight_source": null,
+        "nll_tolerance": null,
+        "nll_max_iterations": 200,
+        "regularizer": "tv_haar",
+        "strength": 0.01,
+        "reg_strength": null,
+        "tolerance": 1e-05,
+        "level": 2,
+        "delta": 0.01,
+        "tv_mode": "isotropic",
+        "rho": 1.0,
+        "cg_max_iterations": 300,
+        "cg_tolerance": 1e-06
+      }
+    },
+    {
+      "domain": "mri",
+      "algorithm": "ADMM + TV + Haar",
+      "data": "MR 标准模体 · 固定种子观测",
+      "metrics": {
+        "rmse": 0.017619525609229063,
+        "psnr": 35.08011577553684,
+        "ssim": 0.9818445566576216
+      },
+      "data_range": 1.0,
+      "iterations": 386,
+      "converged": true,
+      "stopping_reason": "split_residual",
+      "source_result": "outputs/composition_quality_20261108/development/calibration/mri/budget2000/result.json",
+      "reference": "examples/composition/data/mri_standard_dev_seed0/reference.npz:object",
+      "effective_params": {
+        "num_iterations": 2000,
+        "min_value": null,
+        "max_value": null,
+        "boundary": "neumann",
+        "penalize_lowpass": false,
+        "haar_strength": 0.01,
+        "rho_data": 1.0,
+        "rho_regularizer": 1.0,
+        "rho_haar": 1.0,
+        "rho_constraint": 1.0,
+        "regularizer": "tv_haar",
+        "strength": 0.01,
+        "tolerance": 1e-05,
+        "level": 2,
+        "delta": 0.01,
+        "tv_mode": "isotropic",
+        "rho": 1.0,
+        "cg_max_iterations": 300,
+        "cg_tolerance": 1e-06,
+        "subproblem_solver": "auto"
+      }
+    },
+    {
+      "domain": "deconvolution",
+      "algorithm": "ADMM + TV + Haar",
+      "data": "camera / Levin 核 · 固定种子观测",
+      "metrics": {
+        "rmse": 0.05198080937984241,
+        "psnr": 25.683139249888782,
+        "ssim": 0.7473454561163992
+      },
+      "data_range": 1.0,
+      "iterations": 551,
+      "converged": true,
+      "stopping_reason": "split_residual",
+      "source_result": "outputs/composition_quality_20261108/development/calibration/deconvolution/budget2000/result.json",
+      "reference": "examples/composition/data/camera_dev_seed0/reference.npz:object",
+      "effective_params": {
+        "num_iterations": 2000,
+        "min_value": null,
+        "max_value": null,
+        "boundary": "periodic",
+        "penalize_lowpass": false,
+        "haar_strength": 0.01,
+        "rho_data": 1.0,
+        "rho_regularizer": 1.0,
+        "rho_haar": 1.0,
+        "rho_constraint": 1.0,
+        "regularizer": "tv_haar",
+        "strength": 0.01,
+        "tolerance": 1e-05,
+        "level": 2,
+        "delta": 0.01,
+        "tv_mode": "isotropic",
+        "rho": 1.0,
+        "cg_max_iterations": 300,
+        "cg_tolerance": 1e-06,
+        "subproblem_solver": "auto"
+      }
+    },
+    {
+      "domain": "ct",
+      "algorithm": "FBP",
+      "data": "标准椭圆 · 密集角无噪观测",
+      "metrics": {
+        "relative_error": 0.14395856857299805,
+        "rmse": 0.0006284769624471664,
+        "psnr": 30.054813385009766,
+        "ssim": 0.7408621907234192,
+        "ssim_definition": "2d_ssim"
+      },
+      "data_range": 0.02,
+      "iterations": 0,
+      "converged": false,
+      "stopping_reason": "direct_reconstruction_valid",
+      "source_result": "outputs/composable_ct_regression/test_fixed_parameter_suite_rec0/runs/fbp/parallel_2d__ellipses_dense_clean/diagnostics.json",
+      "reference": "tests/data/cases/parallel_2d__ellipses_dense_clean/arrays.h5:truth/x",
+      "effective_params": {
+        "scale": null
+      }
+    },
+    {
+      "domain": "ct",
+      "algorithm": "SART",
+      "data": "标准椭圆 · 稀疏角高斯观测",
+      "metrics": {
+        "relative_error": 0.3033914268016815,
+        "rmse": 0.0013245097361505032,
+        "psnr": 23.579498291015625,
+        "ssim": 0.4338300824165344,
+        "ssim_definition": "2d_ssim"
+      },
+      "data_range": 0.02,
+      "iterations": 2,
+      "converged": false,
+      "stopping_reason": "maximum_epochs_reached",
+      "source_result": "outputs/composable_ct_regression/test_raw_operator_runtime_sart0/sart/diagnostics.json",
+      "reference": "tests/data/cases/parallel_2d__ellipses_sparse_gaussian/arrays.h5:truth/x",
+      "effective_params": {
+        "block_size": 1,
+        "eps": 1e-08,
+        "max_value": null,
+        "min_value": null,
+        "num_iterations": 2,
+        "order_strategy": "ordered",
+        "relaxation": 0.1,
+        "seed": null
+      }
+    },
+    {
+      "domain": "ct",
+      "algorithm": "OS-SART",
+      "data": "标准椭圆 · 稀疏角高斯观测",
+      "metrics": {
+        "relative_error": 0.5115958452224731,
+        "rmse": 0.00223346333950758,
+        "psnr": 19.04102325439453,
+        "ssim": 0.2827734649181366,
+        "ssim_definition": "2d_ssim"
+      },
+      "data_range": 0.02,
+      "iterations": 2,
+      "converged": false,
+      "stopping_reason": "maximum_epochs_reached",
+      "source_result": "outputs/composable_ct_regression/test_raw_operator_runtime_os_s0/os_sart/diagnostics.json",
+      "reference": "tests/data/cases/parallel_2d__ellipses_sparse_gaussian/arrays.h5:truth/x",
+      "effective_params": {
+        "block_size": null,
+        "eps": 1e-08,
+        "max_value": null,
+        "min_value": null,
+        "num_iterations": 2,
+        "order_strategy": "ordered",
+        "relaxation": 0.1,
+        "seed": null,
+        "subset_count": 10
+      }
+    }
+  ]
+}

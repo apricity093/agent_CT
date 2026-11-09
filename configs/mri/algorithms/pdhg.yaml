@@ -1,0 +1,94 @@
+name: pdhg
+modality: mri
+implementation_status: implemented
+task_types:
+- reconstruction
+required_inputs:
+- kspace
+- sensitivity_maps
+- sampling_mask
+applicability: 2D Cartesian complex SENSE
+parameters:
+  num_iterations: 200
+  min_value: null
+  max_value: null
+  boundary: neumann
+  penalize_lowpass: true
+  regularizer: tikhonov
+  strength: 0.01
+  tolerance: 1.0e-05
+  level: 2
+  delta: 0.01
+  tv_mode: isotropic
+  tau: null
+  sigma: null
+parameter_schema:
+  num_iterations:
+    type: int
+    minimum: 1
+    exclusive_minimum: false
+  min_value:
+    type: float
+    nullable: true
+  max_value:
+    type: float
+    nullable: true
+  boundary:
+    type: str
+    choices:
+    - neumann
+    - periodic
+  penalize_lowpass:
+    type: bool
+  regularizer:
+    type: str
+    choices:
+    - none
+    - tikhonov
+    - tv
+    - h1
+    - huber
+    - gradient_huber
+    - haar_l1
+  strength:
+    type: float
+    minimum: 0.0
+    exclusive_minimum: false
+  tolerance:
+    type: float
+    minimum: 0.0
+    exclusive_minimum: false
+  level:
+    type: int
+    minimum: 1
+    exclusive_minimum: false
+  delta:
+    type: float
+    minimum: 0.0
+    exclusive_minimum: true
+  tv_mode:
+    type: str
+    choices:
+    - isotropic
+    - anisotropic
+  tau:
+    type: float
+    nullable: true
+    minimum: 0.0
+    exclusive_minimum: true
+  sigma:
+    type: float
+    nullable: true
+    minimum: 0.0
+    exclusive_minimum: true
+devices:
+- cpu
+spatial_dimensions:
+- 2
+objective: 0.5 sum W |Ax-y|^2 + strength R(x)
+unsupported: Poisson remains on existing dedicated paths; joint TV+Haar only ADMM;
+  MRI has no real box.
+outputs:
+- reconstruction
+sampling:
+- cartesian

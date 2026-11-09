@@ -112,14 +112,8 @@ def normalize_request(request):
     for indices in (request.fit_view_indices, request.heldout_view_indices):
         if indices is not None and (not indices or any(type(i) is not int for i in indices)):
             raise ConfigError("view indices must be nonempty integer lists")
-    explicit = dict(request.params)
-    # Public spellings map onto the existing registry's constructor parameters.
-    for alias, canonical in {"max_iter": "num_iterations", "num_subsets": "subset_count", "lam": "strength"}.items():
-        if alias in explicit:
-            value = explicit.pop(alias)
-            if canonical in explicit and explicit[canonical] != value:
-                raise ConfigError(f"{alias} and {canonical} conflict")
-            explicit[canonical] = value
+    from inv_framework.experiments import normalize_ct_parameters
+    explicit = normalize_ct_parameters(request.params, name)
     for key, value in (("data_fidelity", request.fidelity), ("regularizer", request.regularizer)):
         if value is not None:
             if not isinstance(value, str):
@@ -134,6 +128,10 @@ def normalize_request(request):
         raise ConfigError(f"unsupported parameters for {name}: {sorted(unknown)}")
     root = Path(__file__).resolve().parents[2]
     _, defaults, _ = load_algorithm_config(root / "configs/algorithms" / f"{name}.yaml", name)
+    if name in {"fista", "admm", "pdhg"}:
+        defaults.pop("reg_strength", None)
+    elif name == "tikhonov":
+        defaults.pop("strength", None)
     parameters = {**defaults, **explicit}
     if request.problem_constraints:
         from .execution import _explicit_problem_bounds
@@ -189,7 +187,8 @@ def load_request_case(request, device):
         array = read_array(value)
         if array.dtype.kind == "c":
             raise ValueError("CT inputs must be real-valued")
-        return torch.as_tensor(array, dtype=torch.float32, device=device)
+        dtype = torch.float64 if request.backend == 'torch' and array.dtype == 'float64' else torch.float32
+        return torch.as_tensor(array, dtype=dtype, device=device)
     observed = tensor(inputs["observation"])
     geometry = inputs["geometry"]
     if not isinstance(geometry, dict) or not {"type", "domain_shape", "range_shape", "angles_rad"} <= geometry.keys():
@@ -205,7 +204,7 @@ def load_request_case(request, device):
         metadata["ground_truth"] = {"data_range": inputs["data_range"]}
     else:
         # The established CT execution uses this only for output shape allocation.
-        truth = torch.zeros((observed.shape[0], *geometry["domain_shape"]), device=device)
+        truth = torch.zeros((observed.shape[0], *geometry["domain_shape"]), device=device, dtype=observed.dtype)
     mask = inputs.get("valid_measurement_mask")
     return CTTestCase(request.case_id, truth, observed, observed, geometry, metadata,
         valid_measurement_mask=None if mask is None else tensor(mask).bool(),

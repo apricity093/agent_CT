@@ -21,10 +21,12 @@ parameter_schema:
     minimum: 0
   epsilon:
     type: float
-    minimum: 1.0e-300
+    minimum: 0
+    exclusive_minimum: true
   initial_value:
     type: float
-    minimum: 1.0e-300
+    minimum: 0
+    exclusive_minimum: true
 parameter_status: validated
 outputs:
 - reconstruction

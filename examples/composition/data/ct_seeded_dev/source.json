@@ -1,0 +1,27 @@
+{
+  "domain": "ct",
+  "split": "development",
+  "source": {
+    "generator": "examples/train_diffusion_for_dps.py:random_ellipse_phantom",
+    "object_seed": 2026110801,
+    "num_ellipses": 6,
+    "scale": 0.02
+  },
+  "sigma": 0.0019662609998659796,
+  "sigma_multiplier": 1.0,
+  "complex_sigma_definition": "E|noise|^2=sigma^2",
+  "generation": "matched forward then noise; reference only used after reconstruction",
+  "display_window": [
+    0,
+    0.02
+  ],
+  "crop_fraction": [
+    0.25,
+    0.75,
+    0.25,
+    0.75
+  ],
+  "noise_seed": 0,
+  "role": "development",
+  "data_range": 0.02
+}

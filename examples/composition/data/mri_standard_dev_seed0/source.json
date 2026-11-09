@@ -1,0 +1,72 @@
+{
+  "domain": "mri",
+  "split": "development",
+  "source": {
+    "split": "dev",
+    "seed": 13000,
+    "benchmark_group": "public_standard",
+    "object_kind": "standard_mr_shepp_logan",
+    "spatial_shape": [
+      128,
+      128
+    ],
+    "data_range": 1.0,
+    "source": "phantominator 0.7.0 MR Shepp-Logan; Gach et al. 2008",
+    "source_url": "https://github.com/mckib2/phantominator",
+    "image_rights": "MIT generator",
+    "model": {
+      "axes": [
+        "batch",
+        "coil",
+        "y",
+        "x"
+      ],
+      "spatial_shape": [
+        128,
+        128
+      ],
+      "sampling": "cartesian",
+      "fft_centered": true,
+      "fft_norm": "ortho"
+    },
+    "coil_count": 4,
+    "complex_noise_sigma": 0.002,
+    "source_z": -0.25,
+    "TR_sec": 1.0,
+    "TE_sec": 0.02,
+    "B0_tesla": 3.0,
+    "signal_model": "M0*(1-exp(-TR/T1))*exp(-TE/T2), spoiled spin-echo-like contrast without scanner simulation",
+    "maps_model": "Biot-Savart sum over 64 segments of 4 circular loops; ring radius1.6, loop radius.55, FOV[-1,1]^2, Bx+iBy, unit RSS",
+    "interpretation": "Standard analytic MR phantom with simulated receive encoding; not BrainWeb or real knee data",
+    "public_inputs": [
+      "sensitivity_maps",
+      "sampling_mask",
+      "calibration_data",
+      "kspace"
+    ],
+    "reference": "reference.npz: complex object, M0, T1, T2",
+    "acs_columns": [
+      48,
+      80
+    ],
+    "num_low_frequencies": 32,
+    "acs_source": "same public noisy acquisition"
+  },
+  "sigma": 0.002,
+  "sigma_multiplier": 1.0,
+  "complex_sigma_definition": "E|noise|^2=sigma^2",
+  "generation": "matched forward then noise; reference only used after reconstruction",
+  "display_window": [
+    0,
+    1
+  ],
+  "crop_fraction": [
+    0.25,
+    0.75,
+    0.25,
+    0.75
+  ],
+  "noise_seed": 0,
+  "role": "development",
+  "data_range": 1.0
+}

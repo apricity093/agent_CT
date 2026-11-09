@@ -12,14 +12,15 @@ class MRITaskRequest:
     params: dict[str, Any] = field(default_factory=dict)
     task_type: str = "reconstruction"
     device: str = "cpu"
+    fidelity: str | None = None
 
 
 MRITaskResult = ExperimentResult
 
 
-def list_capabilities():
-    """Return executable algorithms separately from documented future methods."""
-    return planned_capabilities("mri")
+def list_capabilities(context=None):
+    """Return implemented algorithms and optionally screen recommendations."""
+    return planned_capabilities("mri", context=context)
 
 
 def run_mri_task(request: MRITaskRequest | dict) -> MRITaskResult:
@@ -30,10 +31,19 @@ def run_mri_task(request: MRITaskRequest | dict) -> MRITaskResult:
     from .solvers import conjugate_gradient, cs_reconstruct
     if isinstance(request, dict):
         request = MRITaskRequest(**request)
+    from inv_framework.experiments import COMPOSABLE_METHODS as METHODS
+    if request.algorithm in METHODS:
+        from inv_framework.composition_api import run_composition
+        return run_composition(request, "mri")
     result = MRITaskResult("failed", "mri", request.algorithm)
     started = time.perf_counter()
     try:
         params = resolve_parameters("mri", request.algorithm, request.params)
+        from inv_framework.experiments import resolve_fidelity
+        record = next(r for r in list_capabilities()["algorithms"] if r["name"] == request.algorithm)
+        fidelity = resolve_fidelity(record, request.fidelity, request.model, request.inputs)
+        result.diagnostics["fidelity"] = fidelity
+        result.diagnostics["generation_model"] = request.model.get("noise_model", "unknown")
         if request.algorithm != "varnet" and request.device != "cpu":
             raise ValueError("MRI currently supports device=cpu only")
         if request.task_type != ("calibration" if request.algorithm == "espirit" else "reconstruction"):
@@ -53,7 +63,8 @@ def run_mri_task(request: MRITaskRequest | dict) -> MRITaskResult:
             if request.device != 'cpu' and not request.device.startswith('cuda'):
                 raise ValueError('VarNet device must be cpu or cuda[:index]')
             result.effective_params = params
-            result.outputs, result.diagnostics = infer(arrays, model, params, request.device)
+            result.outputs, diagnostics = infer(arrays, model, params, request.device)
+            result.diagnostics.update(diagnostics)
             result.iterations = params['num_cascades']
             result.status = 'success' if all(np.isfinite(a).all() for a in result.outputs.values()) else 'failed'
             result.stopping_reason = 'completed_valid' if result.status == 'success' else 'numerical_error'
@@ -87,7 +98,7 @@ def run_mri_task(request: MRITaskRequest | dict) -> MRITaskResult:
                     raise ValueError('GRAPPA requires multicoil kspace and shared binary coil masks of matching shape')
                 filled,diagnostics=grappa(y*mask,mask,acs,width,params['ridge'])
                 result.outputs=dict(kspace=filled,reconstruction=np.sqrt(np.sum(abs(SenseEncoding(np.ones_like(filled)).fourier(filled,inverse=True))**2,axis=1)))
-            result.diagnostics=diagnostics
+            result.diagnostics.update(diagnostics)
             result.status='success'; result.stopping_reason='completed_valid'
             result.runtime_sec=time.perf_counter()-started
             return result
@@ -129,6 +140,8 @@ def run_mri_task(request: MRITaskRequest | dict) -> MRITaskResult:
         weights = arrays.get("data_weights", np.ones(y.shape))
         if weights.shape != y.shape or np.iscomplexobj(weights) or not np.isfinite(weights).all() or np.any(weights < 0):
             raise ValueError("data_weights must be finite nonnegative real weights matching kspace")
+        if fidelity == "l2" and "data_weights" in arrays:
+            raise ValueError("l2 is unweighted; use gaussian_nll or wls with data_weights")
         operator = SenseEncoding(maps, mask, trajectory)
         result.effective_params = params
         history = []

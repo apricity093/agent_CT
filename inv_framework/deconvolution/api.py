@@ -12,14 +12,15 @@ class DeconvolutionTaskRequest:
     params: dict[str, Any] = field(default_factory=dict)
     task_type: str = "reconstruction"
     device: str = "cpu"
+    fidelity: str | None = None
 
 
 DeconvolutionTaskResult = ExperimentResult
 
 
-def list_capabilities():
-    """Return executable algorithms separately from documented future methods."""
-    return planned_capabilities("deconvolution")
+def list_capabilities(context=None):
+    """Return implemented algorithms and optionally screen recommendations."""
+    return planned_capabilities("deconvolution", context=context)
 
 
 def run_deconvolution_task(request: DeconvolutionTaskRequest | dict) -> DeconvolutionTaskResult:
@@ -30,13 +31,23 @@ def run_deconvolution_task(request: DeconvolutionTaskRequest | dict) -> Deconvol
     from .solvers import wiener_hunt, richardson_lucy
     if isinstance(request, dict):
         request = DeconvolutionTaskRequest(**request)
+    from inv_framework.experiments import COMPOSABLE_METHODS as METHODS
+    if request.algorithm in METHODS:
+        from inv_framework.composition_api import run_composition
+        return run_composition(request, "deconvolution")
     result = DeconvolutionTaskResult("failed", "deconvolution", request.algorithm)
     started = time.perf_counter()
     try:
         params = resolve_parameters("deconvolution", request.algorithm, request.params)
+        from inv_framework.experiments import resolve_fidelity
+        record = next(r for r in list_capabilities()["algorithms"] if r["name"] == request.algorithm)
+        fidelity = resolve_fidelity(record, request.fidelity, request.model, request.inputs)
+        result.diagnostics["fidelity"] = fidelity
+        result.diagnostics["generation_model"] = request.model.get("noise_model", "unknown")
         if request.algorithm in {'blind_dcp','blind_l0'}:
             from .blind_api import execute
-            execute(request, params, result)
+            from dataclasses import replace
+            execute(replace(request, model={**request.model, "noise_model": "gaussian"}), params, result)
             result.runtime_sec = time.perf_counter()-started
             return result
         if request.device != "cpu" or request.task_type != "reconstruction":
@@ -48,7 +59,9 @@ def run_deconvolution_task(request: DeconvolutionTaskRequest | dict) -> Deconvol
         if any(np.iscomplexobj(a) or not np.isfinite(a).all() for a in (y, psf)):
             raise ValueError("observation and psf must be finite real arrays")
         y, psf = y.astype(float), psf.astype(float)
-        model = request.model
+        model = dict(request.model)
+        # Explicit reconstruction assumption may differ from the data generator.
+        model["noise_model"] = "poisson" if fidelity == "poisson_nll" else "gaussian"
         names = model["axes"]
         if names not in (["y", "x"], ["z", "y", "x"], ["y", "x", "channel"], ["z", "y", "x", "channel"]) or len(names) != y.ndim:
             raise ValueError("axes must declare 2D/3D spatial axes and optional last channel")

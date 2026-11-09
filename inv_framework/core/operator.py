@@ -83,30 +83,49 @@ class LinearOperator(ForwardOperator):
 
 
 class GradientOperator(LinearOperator):
-    """D with stacked vertical/horizontal components at axis 1 (after batch)."""
+    """Spatial differences with component axis 1, independent batch/channels.
+
+    Defaults: final two axes, unit spacing, zero terminal entries. Explicit
+    axes allow 3D differences; periodic boundaries remain a distinct choice.
+    """
 
     transform_kind = 'D'
 
-    def __init__(self, domain_shape):
+    def __init__(self, domain_shape, axes=(-2, -1), spacing=None, boundary='neumann'):
+        from inv_framework.core.array_math import Differences
+        self.differences = Differences(axes, spacing, boundary)
         self.domain_shape = tuple(domain_shape)
         if len(self.domain_shape) < 2 or any(d <= 0 for d in self.domain_shape):
             raise ValueError("GradientOperator requires positive spatial dimensions.")
-        self.range_shape = (2, *self.domain_shape)
+        self.range_shape = (len(axes), *self.domain_shape)
+
+    def squared_norm_upper_bound(self, x):
+        # Exact Cartesian Neumann spectrum; periodic differences use 4 sum h^-2.
+        if self.differences.boundary == 'neumann':
+            return sum(4*math.cos(math.pi/(2*x.shape[a]))**2/h**2
+                       for a, h in zip(self.differences.axes, self.differences.spacing)
+                       if x.shape[a] > 1)
+        return self.differences.bound
 
     def nullspace_basis(self,reference):
-        leading=reference[0].numel()//(reference.shape[-2]*reference.shape[-1])
-        basis=[]
-        for index in range(leading):
-            vector=torch.zeros_like(reference)
-            vector.reshape(reference.shape[0],leading,*reference.shape[-2:])[:,index]=1
+        spatial = {a % reference.ndim for a in self.differences.axes}
+        independent = [a for a in range(1, reference.ndim) if a not in spatial]
+        import itertools
+        basis = []
+        for indices in itertools.product(*(range(reference.shape[a]) for a in independent)):
+            vector = torch.zeros_like(reference)
+            selector = [slice(None)]*reference.ndim
+            for a, i in zip(independent, indices):
+                selector[a] = i
+            vector[tuple(selector)] = 1
             basis.append(vector)
         return basis
 
     def forward(self, x):
-        return torch.stack(gradient(x), dim=1)
+        return self.differences.forward(x).movedim(0, 1)
 
     def adjoint(self, y):
-        return gradient_adjoint(y[:, 0], y[:, 1])
+        return self.differences.adjoint(y.movedim(1, 0))
 
     def pseudo_inverse(self, y, **kwargs):
         raise NotImplementedError("GradientOperator has no configured pseudo-inverse.")
@@ -114,23 +133,14 @@ class GradientOperator(LinearOperator):
 
 def gradient(x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     """Return vertical and horizontal differences with zero terminal entries."""
-    vertical = torch.zeros_like(x)
-    horizontal = torch.zeros_like(x)
-    vertical[..., :-1, :] = x[..., 1:, :] - x[..., :-1, :]
-    horizontal[..., :, :-1] = x[..., :, 1:] - x[..., :, :-1]
-    return vertical, horizontal
+    from inv_framework.core.array_math import Differences
+    return tuple(Differences((-2, -1)).forward(x))
 
 
 def gradient_adjoint(vertical: torch.Tensor, horizontal: torch.Tensor) -> torch.Tensor:
-    """Apply D* to an arbitrary pair of equally shaped dual tensors."""
-    if vertical.shape != horizontal.shape:
-        raise ValueError("Gradient dual components must have the same shape.")
-    out = torch.zeros_like(vertical)
-    out[..., :-1, :] -= vertical[..., :-1, :]
-    out[..., 1:, :] += vertical[..., :-1, :]
-    out[..., :, :-1] -= horizontal[..., :, :-1]
-    out[..., :, 1:] += horizontal[..., :, :-1]
-    return out
+    """Hermitian adjoint of zero-terminal unit-spacing 2D differences."""
+    from inv_framework.core.array_math import Differences
+    return Differences((-2, -1)).adjoint(torch.stack((vertical, horizontal)))
 
 
 class AugmentedLeastSquaresOperator(LinearOperator):
@@ -179,6 +189,8 @@ class WeightedLinearOperator(LinearOperator):
     def forward(self,x):return self.whiten(self.operator.forward(x))
     def adjoint(self,y):return self.operator.adjoint(self.whiten(y))
     def squared_norm_upper_bound(self,x):
+        if self.nonnegative_matrix or math.prod(self.domain_shape) <= 4096:
+            return super().squared_norm_upper_bound(x)
         return float(self.sqrt_weights.square().max())*self.operator.squared_norm_upper_bound(x)
     def subset(self, indices):
         from inv_framework.solvers.subset import make_subset_operator
@@ -204,34 +216,18 @@ class HaarOperator(LinearOperator):
         self.range_shape = self.domain_shape
         self.level = level
 
+    def squared_norm_upper_bound(self, x):
+        return 1.
+
+    def _haar(self, x):
+        from inv_framework.core.array_math import OrthogonalHaar
+        return OrthogonalHaar(x.shape, (-2, -1), self.level)
+
     def forward(self, x):
-        out = x.clone()
-        h, w = x.shape[-2:]
-        s = math.sqrt(2.0)
-        for _ in range(self.level):
-            block = out[..., :h, :w].clone()
-            low = (block[..., 0::2, :] + block[..., 1::2, :]) / s
-            high = (block[..., 0::2, :] - block[..., 1::2, :]) / s
-            out[..., :h//2, :w//2] = (low[..., 0::2] + low[..., 1::2]) / s
-            out[..., :h//2, w//2:w] = (low[..., 0::2] - low[..., 1::2]) / s
-            out[..., h//2:h, :w//2] = (high[..., 0::2] + high[..., 1::2]) / s
-            out[..., h//2:h, w//2:w] = (high[..., 0::2] - high[..., 1::2]) / s
-            h, w = h//2, w//2
-        return out
+        return self._haar(x).forward(x)
 
     def adjoint(self, y):
-        out = y.clone()
-        s = math.sqrt(2.0)
-        for depth in range(self.level - 1, -1, -1):
-            h, w = y.shape[-2] // (2**depth), y.shape[-1] // (2**depth)
-            block = out[..., :h, :w].clone()
-            ll, lh = block[..., :h//2, :w//2], block[..., :h//2, w//2:w]
-            hl, hh = block[..., h//2:h, :w//2], block[..., h//2:h, w//2:w]
-            low, high = torch.empty_like(block[..., :h//2, :]), torch.empty_like(block[..., :h//2, :])
-            low[..., 0::2], low[..., 1::2] = (ll + lh)/s, (ll - lh)/s
-            high[..., 0::2], high[..., 1::2] = (hl + hh)/s, (hl - hh)/s
-            out[..., :h:2, :w], out[..., 1:h:2, :w] = (low + high)/s, (low - high)/s
-        return out
+        return self._haar(y).adjoint(y)
 
     def pseudo_inverse(self, y, **kwargs):
         return self.adjoint(y)

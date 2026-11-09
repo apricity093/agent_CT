@@ -1,0 +1,50 @@
+modality: mri
+algorithm: admm
+fidelity: l2
+device: cpu
+model:
+  axes:
+  - batch
+  - coil
+  - y
+  - x
+  spatial_shape:
+  - 128
+  - 128
+  sampling: cartesian
+  fft_centered: true
+  fft_norm: ortho
+  noise_model: complex_gaussian
+inputs:
+  kspace:
+    path: data/mri_standard_dev_seed0/public.npz
+    key: kspace
+  sensitivity_maps:
+    path: data/mri_standard_dev_seed0/public.npz
+    key: sensitivity_maps
+  sampling_mask:
+    path: data/mri_standard_dev_seed0/public.npz
+    key: sampling_mask
+evaluation:
+  reference:
+    path: data/mri_standard_dev_seed0/reference.npz
+    key: object
+  data_range: 1.0
+  mode: magnitude
+params:
+  regularizer: tv_haar
+  strength: 0.01
+  haar_strength: 0.01
+  num_iterations: 2000
+  tolerance: 1.0e-05
+  boundary: neumann
+  level: 2
+  penalize_lowpass: false
+  tv_mode: isotropic
+  rho: 1.0
+  rho_data: 1.0
+  rho_regularizer: 1.0
+  rho_haar: 1.0
+  rho_constraint: 1.0
+  cg_max_iterations: 300
+  cg_tolerance: 1.0e-06

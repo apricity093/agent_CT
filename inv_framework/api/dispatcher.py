@@ -10,7 +10,8 @@ from inv_framework.ct.registry import ALGORITHM_ALIASES, regularizer_records
 from .schema import CTTaskRequest, CTTaskResult, normalize_request, load_request_case
 
 
-def list_capabilities(data_root=None):
+def list_capabilities(data_root=None, *, context=None):
+    """Discover CT methods; optional context screens recommendations, not requests."""
     cuda = torch.cuda.is_available()
     astra_installed = importlib.util.find_spec("astra") is not None
     astra_cuda = False
@@ -28,8 +29,18 @@ def list_capabilities(data_root=None):
     algorithms = execution.solver_records()
     for record in algorithms:
         name = record["name"]
+        from inv_framework.algorithm_catalog import CT_OBJECTIVES, fidelity_contract, parameter_description, resolve_recommendations
+        record["fidelity"] = fidelity_contract("ct", name, record["parameter_names"])
+        from inv_framework.algorithm_catalog import algorithm_documentation
+        record["documentation"] = algorithm_documentation(name)
+        record["entry_point"] = "inv_framework.ct.api.run_ct_task"
         _, defaults, _ = execution.load_algorithm_config(
             Path(__file__).resolve().parents[2] / "configs/algorithms" / f"{name}.yaml", name)
+        record["objective_definition"] = CT_OBJECTIVES[name]
+        for parameter in record["parameter_specs"]:
+            parameter["default"] = defaults[parameter["name"]]
+            parameter.update(parameter_description(parameter["name"], parameter["default"], parameter))
+        resolve_recommendations("ct", record, context)
         backend = "astra" if name == "fdk" else "torch"
         record.update(backends=["astra"] if name == "fdk" else ["torch", "astra", "leap"], default_parameters=defaults, implemented=record["build_reachable"],
                       execution_backend=backend, dependency_installed=backends[backend]["dependency_installed"],
@@ -83,6 +94,12 @@ def run_ct_task(request: CTTaskRequest | dict) -> CTTaskResult:
             stopping_policy=request.stopping_policy, problem_constraints=request.problem_constraints,
             callback=request.callback, input_case=input_case)
         diagnostics = result.get("diagnostics", {})
+        effective_parameters = dict(diagnostics.get("parameters", parameters))
+        native = diagnostics.get("convergence", {}).get("metadata", {})
+        for key in ("step_size", "tau", "sigma", "rho"):
+            if key in effective_parameters and native.get(key) is not None:
+                effective_parameters[key] = native[key]
+        diagnostics["effective_parameters"] = effective_parameters
         status = result.get("convergence_status")
         success = result["status"] == "success" and status not in {"cancelled", "resource_exhausted", "diverged", "numerical_error", "invalid_parameters"}
         bundle = result.get("bundle")
@@ -97,7 +114,7 @@ def run_ct_task(request: CTTaskRequest | dict) -> CTTaskResult:
                             stopping_reason=diagnostics.get("stopping_reason", result.get("stopping_reason", status)),
                             reason_code=diagnostics.get("reason_code", status),
                             history=diagnostics.get("convergence", {}).get("trajectory", []),
-                            effective_params=diagnostics.get("parameters", parameters),
+                            effective_params=effective_parameters,
                             diagnostics=diagnostics)
     except (execution.ConfigError, execution.BackendUnavailable, execution.NumericalFailure, FileNotFoundError, ValueError, torch.cuda.OutOfMemoryError) as error:
         status = "unavailable" if isinstance(error, execution.BackendUnavailable) else "resource_exhausted" if isinstance(error, torch.cuda.OutOfMemoryError) else "numerical_error" if isinstance(error, execution.NumericalFailure) else "invalid_parameters"

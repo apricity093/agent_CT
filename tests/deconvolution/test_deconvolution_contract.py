@@ -3,7 +3,7 @@ from inv_framework.deconvolution.api import DeconvolutionTaskRequest, run_deconv
 
 def test_discovery_and_incomplete_request():
     caps = list_capabilities()
-    assert len(caps["algorithms"]) == 7
+    assert len(caps["algorithms"]) == 14
     result = run_deconvolution_task(DeconvolutionTaskRequest("blind_dcp", {}, {}))
     assert result.status == "failed"
     assert result.error["code"] == "invalid_parameters"

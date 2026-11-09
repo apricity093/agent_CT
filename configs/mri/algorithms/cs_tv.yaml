@@ -22,8 +22,9 @@ parameter_schema:
     description: Nonnegative weight on unnormalized regularizer sum
   rho:
     type: float
-    minimum: 1.0e-12
+    minimum: 0
     description: Positive ADMM augmented quadratic penalty
+    exclusive_minimum: true
   max_iter:
     type: int
     minimum: 1
@@ -38,8 +39,9 @@ parameter_schema:
     description: Inner complex Hermitian CG iteration cap
   cg_tolerance:
     type: float
-    minimum: 1.0e-12
+    minimum: 0
     description: Initial relative CG tolerance, divided by outer iteration squared
+    exclusive_minimum: true
 parameter_status: validated
 outputs:
 - reconstruction

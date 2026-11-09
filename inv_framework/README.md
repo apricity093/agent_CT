@@ -1,5 +1,8 @@
 # inv_framework
 
+For CT, MRI and deconvolution dependencies and device requirements, see
+[dependencies and installation](../DEPENDENCIES.md).
+
 The public CT entry point is `inv_framework.api`. See
 [the task contract](../docs/agent_algorithm_api.md).
 

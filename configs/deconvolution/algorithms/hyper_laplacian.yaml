@@ -23,20 +23,26 @@ parameter_schema:
     description: Nonnegative weight on unnormalized regularizer sum
   p:
     type: float
-    minimum: 1.0e-12
+    minimum: 0
     description: Gradient exponent strictly between 0 and 1
+    exclusive_minimum: true
+    maximum: 1
+    exclusive_maximum: true
   beta_initial:
     type: float
-    minimum: 1.0e-12
+    minimum: 0
     description: Positive initial HQS quadratic penalty
+    exclusive_minimum: true
   beta_max:
     type: float
-    minimum: 1.0e-12
+    minimum: 0
     description: Final finite HQS penalty, at least beta_initial
+    exclusive_minimum: true
   beta_factor:
     type: float
-    minimum: 0
+    minimum: 1
     description: HQS multiplicative penalty growth strictly greater than 1
+    exclusive_minimum: true
   max_iter:
     type: int
     minimum: 1

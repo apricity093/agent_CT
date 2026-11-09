@@ -23,7 +23,7 @@ from inv_framework.core.regularizer import TVRegularizer, TikhonovRegularizer, H
 from inv_framework.core.operator import GradientOperator
 from inv_framework.solvers import CGLSSolver, FDKSolver, FBPSolver, LSQRSolver, LandweberSolver, MLEMSolver, OSEMSolver, OSSARTSolver, SARTSolver, SIRTSolver, TVFISTASolver, FISTASolver, TikhonovSolver, SolveControl
 from inv_framework.ct.registry import ALGORITHM_ALIASES, CANONICAL_ALGORITHM_IDS, CTAlgorithmSpec, EMISSION_OBSERVATION_MODELS, REGISTRY_SCHEMA_VERSION, SOLVER_SPECS, ParameterValidationResult, regularizer_records, solver_records as _solver_records, validate_registry, validate_compatibility, validate_parameter_values
-from inv_framework.utils.metrics import ssim
+from inv_framework.utils.metrics import ssim, ct_image_metrics
 
 
 SCHEMA_VERSION = 1
@@ -586,32 +586,8 @@ def _build_tv_fista(**parameters: Any):
 
 
 def _build_fista(**parameters):
-    params = dict(parameters)
-    prior = params.pop("regularizer", "tikhonov")
-    level = params.pop("level", 2)
-    tv_mode = params.pop("tv_mode", "isotropic")
-    tv_iterations = params.pop("tv_num_iterations", 50)
-    tv_tolerance = params.pop("tv_tolerance", 1e-5)
-    delta = params.pop('delta', .01)
-    if prior in (None, 'none'):
-        reg = ZeroRegularizer()
-        params['strength'] = 0.
-        params.pop('reg_strength', None)
-    elif prior == 'h1':
-        # The concrete image shape is supplied by build_solver below.
-        reg = params.pop('smooth_regularizer')
-    elif prior == 'huber':
-        reg = GradientHuberRegularizer(delta)
-    elif prior == "tikhonov":
-        reg = TikhonovRegularizer()
-    elif prior == "haar_l1":
-        reg = HaarL1Regularizer(level)
-        reg.num_iterations, reg.tolerance = tv_iterations, tv_tolerance
-    elif prior == "tv":
-        reg = TVRegularizer(mode=tv_mode, num_iterations=tv_iterations, tolerance=tv_tolerance)
-    else:
-        raise ValueError(f"unsupported FISTA regularizer: {prior}")
-    return FISTASolver(regularizer=reg, **params)
+    from inv_framework.solvers.composition import CompositeSolver
+    return CompositeSolver('fista', **parameters)
 
 
 CONSTRAINED_TV_IDS = {"constrained_pdhg", "asd_pocs_tv"}
@@ -647,18 +623,16 @@ def _confirm_constrained_endpoint(solver, result, reconstruction, prediction, me
             'reasons':[] if passed else ['constrained_endpoint_inconsistent']}
 
 
+def _build_quadratic(name, **parameters):
+    from inv_framework.solvers.quadratic import QuadraticSolver, validate_quadratic
+    validate_quadratic(name,parameters)
+    return QuadraticSolver(name,**parameters)
+
+
 def _build_split(name, **parameters):
-    from inv_framework.solvers.splitting import ADMMSolver, PDHGSolver
-    from inv_framework.core.regularizer import GradientHuberRegularizer
-    params = dict(parameters)
-    prior = params.pop("regularizer", "tikhonov")
-    level = params.pop("level", 2)
-    delta = params.pop("delta", .01)
-    mode = params.pop("tv_mode", "isotropic")
-    reg = {"none": lambda: ZeroRegularizer(), "tikhonov": lambda: TikhonovRegularizer(), "h1": lambda: "h1",
-           "tv": lambda: TVRegularizer(mode=mode), "huber": lambda: GradientHuberRegularizer(delta),
-           "haar_l1": lambda: HaarL1Regularizer(level)}[prior]()
-    return (ADMMSolver if name == "admm" else PDHGSolver)(regularizer=reg, **params)
+    from inv_framework.solvers.composition import CompositeSolver
+    return CompositeSolver(name, **parameters)
+
 
 
 # Keep this map at module scope so reachability is inspectable and testable.
@@ -666,9 +640,10 @@ def _build_split(name, **parameters):
 SOLVER_BUILDERS: dict[str, Callable[..., Any]] = {
     "fbp": FBPSolver,
     "sirt": SIRTSolver,
-    "landweber": LandweberSolver,
-    "cgls": CGLSSolver,
-    "lsqr": LSQRSolver,
+    "landweber": lambda **p: LandweberSolver(**{k:v for k,v in p.items() if k in ("num_iterations","step_size","min_value","max_value")}) if (p.get("min_value") is not None or p.get("max_value") is not None) else _build_quadratic("landweber", **p),
+    "cgls": lambda **p: _build_quadratic("cgls", **p),
+    "lsqr": lambda **p: _build_quadratic("lsqr", **p),
+    "cg": lambda **p: _build_quadratic("cg", **p),
     "sart": SARTSolver,
     "os_sart": OSSARTSolver,
     "mlem": MLEMSolver,
@@ -726,8 +701,8 @@ def build_solver(name: str, parameters: Mapping[str, Any], case: Any):
             params["reg_strength"] = strength
         if prior == "h1":
             params["regularization_operator"] = GradientOperator(case.geometry["domain_shape"])
-    if name == 'fista' and params.get('regularizer') == 'h1':
-        params['smooth_regularizer'] = TikhonovRegularizer(GradientOperator(case.geometry['domain_shape']))
+    if name=="landweber" and (params.get("min_value") is not None or params.get("max_value") is not None) and (params.get("strength",0)>0 or fidelity_options["data_fidelity"] not in (None,"l2")):
+        raise ConfigError("Legacy projected Landweber supports unweighted unregularized L2 only")
     builder = SOLVER_BUILDERS[name]
     try:
         solver = builder(**params)
@@ -736,7 +711,7 @@ def build_solver(name: str, parameters: Mapping[str, Any], case: Any):
             public=getattr(case, 'public_measurement', {}) or {}
             if 'sigma' not in public: raise ValueError('gaussian whitening requires public sigma')
             solver.whitening=_parameter(public['sigma'],case.measurement,'sigma',True).reciprocal()
-        if name in {'fista','admm','pdhg','tikhonov','cgls','lsqr'}:
+        if name in {'fista','admm','pdhg','tikhonov','cgls','lsqr','cg','landweber'}:
             from inv_framework.core.fidelity import build_fidelity
             model = fidelity_options['data_fidelity'] or 'l2'
             if model=='transmission_poisson_nll' and params.get('min_value')!=0:
@@ -806,28 +781,7 @@ def _metrics(bundle: Mapping[str, Any], runtime_seconds: float | None = None) ->
     if truth_available:
         truth = bundle["truth"].float()
         data_range = float(bundle["data_range"])
-        difference = reconstruction - truth
-        rmse = difference.square().mean().sqrt()
-        relative_error = difference.norm() / truth.norm().clamp_min(1e-12)
-        psnr_value = 20.0 * torch.log10(torch.as_tensor(data_range) / rmse.clamp_min(1e-12))
-        if reconstruction.ndim == 4 and int(bundle["dimension"]) == 3:
-            batch, depth, height, width = reconstruction.shape
-            ssim_value = ssim(
-                reconstruction.reshape(batch * depth, 1, height, width),
-                truth.reshape(batch * depth, 1, height, width),
-                data_range=data_range,
-            ).mean()
-            ssim_definition = "axial_mean_ssim"
-        else:
-            ssim_value = ssim(reconstruction, truth, data_range=data_range).mean()
-            ssim_definition = "2d_ssim"
-        result.update({
-            "relative_error": float(relative_error.item()),
-            "rmse": float(rmse.item()),
-            "psnr": float(psnr_value.item()),
-            "ssim": float(ssim_value.item()),
-            "ssim_definition": ssim_definition,
-        })
+        result.update(ct_image_metrics(reconstruction, truth, data_range, int(bundle["dimension"])))
     if runtime_seconds is not None:
         result["runtime_seconds"] = float(runtime_seconds)
     if valid_fraction is not None:
@@ -1561,6 +1515,17 @@ def execute_case(
                 endpoint_confirmation["fidelity_precision"] = (
                     endpoint_fidelity.precision_report()
                 )
+        from inv_framework.solvers.quadratic import QuadraticSolver
+        if isinstance(solver, QuadraticSolver):
+            b=solver.quadratic
+            brhs=b.rhs()
+            normal_residual=float(b.adjoint(b.forward(reconstruction)-brhs).norm())/max(1.,float(b.adjoint(brhs).norm()))
+            passed=bool(torch.isfinite(reconstruction).all())
+            if solve_result.status=='converged':
+                passed=passed and normal_residual <= solve_result.metadata['normal_residual_tolerance']
+            endpoint_confirmation=dict(passed=passed,normalized_normal_residual=normal_residual,status='confirmed' if passed else 'unconfirmed')
+            endpoint_report=replace(endpoint_report,status=ConvergenceStatus(solve_result.status),stopping_reason=solve_result.stopping_reason,
+                failure_reason=None if passed else 'quadratic_endpoint_inconsistent',reason_code=solve_result.stopping_reason,reason_class=status_reason_class(solve_result.status))
         if (
             endpoint_report.stopping_reason == "trajectory_ended_before_convergence"
             and solve_result.status in {"converged", "stalled"}
@@ -1588,6 +1553,31 @@ def execute_case(
                 reason_code=solve_result.stopping_reason,
                 reason_class=status_reason_class(solve_result.status),
             )
+        native_fista = (
+            name == 'fista' and requested_stopping_policy is None
+            and solve_result.metadata.get('native_termination_managed', False)
+        )
+        if native_fista and solve_result.status == 'converged':
+            native = solve_result.metadata
+            bound, target = native.get('joint_prox_error_bound'), native.get('joint_prox_target')
+            mapping_tolerance = (control.prox_gradient_mapping_tolerance
+                if control.prox_gradient_mapping_tolerance is not None else control.tolerance)
+            passed = bool(native.get('endpoint_mapping_complete', False)
+                and native.get('normalized_prox_gradient_mapping', math.inf) <= mapping_tolerance
+                and (bound is None or (target is not None and bound <= target)))
+            endpoint_confirmation.update(passed=passed,
+                status='native_endpoint_confirmed' if passed else 'native_endpoint_unconfirmed',
+                native_criterion_value=native.get('normalized_prox_gradient_mapping'),
+                proximal_error_bound=bound, proximal_target=target)
+        if (native_fista and endpoint_report.stopping_reason == 'trajectory_ended_before_convergence'
+                and endpoint_confirmation.get('passed', False)):
+            # Native FISTA certifies the returned composite objective. The
+            # sampled generic trajectory is not a replacement stopping rule.
+            endpoint_report = replace(endpoint_report,
+                status=ConvergenceStatus(solve_result.status),stopping_reason=solve_result.stopping_reason,
+                iterations=solve_result.actual_iterations,
+                failure_reason=None,reason_code=solve_result.stopping_reason,
+                reason_class=status_reason_class(solve_result.status))
         if endpoint_report.status == ConvergenceStatus.NUMERICAL_ERROR:
             raise NumericalFailure(
                 endpoint_report.failure_reason or endpoint_report.stopping_reason

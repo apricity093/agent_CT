@@ -29,13 +29,17 @@ parameter_schema:
     minimum: 1
   scale_factor:
     type: float
-    minimum: 1.0e-12
+    minimum: 0
+    exclusive_minimum: true
+    maximum: 1
+    exclusive_maximum: true
   coarse_kernel_size:
     type: int
-    minimum: 1
+    minimum: 3
   kernel_ridge:
     type: float
-    minimum: 1.0e-12
+    minimum: 0
+    exclusive_minimum: true
   kernel_max_iter:
     type: int
     minimum: 1
@@ -56,10 +60,12 @@ parameter_schema:
     minimum: 1
   penalty_initial:
     type: float
-    minimum: 1.0e-12
+    minimum: 0
+    exclusive_minimum: true
   penalty_factor:
     type: float
-    minimum: 1.0e-12
+    minimum: 1
+    exclusive_minimum: true
   latent_iter:
     type: int
     minimum: 1
@@ -68,7 +74,8 @@ parameter_schema:
     minimum: 1
   cg_tolerance:
     type: float
-    minimum: 1.0e-12
+    minimum: 0
+    exclusive_minimum: true
 outputs:
 - reconstruction
 - psf
