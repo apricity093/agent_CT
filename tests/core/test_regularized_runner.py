@@ -26,5 +26,10 @@ def test_external_classical_tasks_and_cli(tmp_path):
         assert command.returncode==0,(name,command.stderr,command.stdout)
         saved=json.loads((output/'result.json').read_text())
         assert saved['metrics']=={}
+        assert set(saved['output_artifacts']) == set(result.outputs)
+        for output_name, artifact in saved['output_artifacts'].items():
+            array=np.load(output/artifact['path'])
+            assert artifact['shape']==list(array.shape) and artifact['dtype']==str(array.dtype)
+            assert dict(artifact,path=None)==result.output_artifacts[output_name]
         for key,value in result.outputs.items():
             np.testing.assert_allclose(np.load(output/(key+'.npy')),value)

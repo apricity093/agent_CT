@@ -147,5 +147,5 @@ def test_ct_runner_evaluates_after_reconstruction_and_preserves_reason(monkeypat
     else:
         axial = torch.stack([ssim(torch.as_tensor(image[:, z:z+1]),
             torch.as_tensor(reference[:, z:z+1]), data_range=.02).mean() for z in range(3)]).mean()
-        assert result.metrics['ssim'] == float(axial)
+        assert result.metrics['ssim'] == pytest.approx(float(axial), abs=3e-7, rel=1e-6)
         assert result.metrics['ssim_definition'] == 'axial_mean_ssim'

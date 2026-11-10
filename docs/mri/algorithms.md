@@ -119,7 +119,7 @@ the supported array sizes. Synthetic inference is not clinical quality validatio
 Small synthetic inputs can differ substantially from the checkpoint's training
 distribution. Matrix size alone is not an applicability threshold or a guarantee
 of quality. The current MR phantom validates inference and task integration;
-it does not establish clinical image quality. See ../imaging_catalog.md.
+it does not establish clinical image quality. See [public benchmarks](../public_benchmarks.md#fastmri-和-varnet).
 
 ## Calibration parameter interpretation
 

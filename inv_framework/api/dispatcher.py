@@ -10,19 +10,14 @@ from inv_framework.ct.registry import ALGORITHM_ALIASES, regularizer_records
 from .schema import CTTaskRequest, CTTaskResult, normalize_request, load_request_case
 
 
-def list_capabilities(data_root=None, *, context=None):
+def list_capabilities(*, context=None):
     """Discover CT methods; optional context screens recommendations, not requests."""
-    cuda = torch.cuda.is_available()
     astra_installed = importlib.util.find_spec("astra") is not None
-    astra_cuda = False
-    if astra_installed:
-        import astra
-        astra_cuda = bool(astra.use_cuda())
     backends = {
         "torch": {"implemented": True, "dependency_installed": True, "runnable": True,
-                  "geometries": ["parallel_2d"], "device": "cpu", "cuda_available": cuda},
+                  "geometries": ["parallel_2d"], "device": "cpu/cuda", "cuda_available": None},
         "astra": {"implemented": True, "dependency_installed": astra_installed,
-                  "runnable": astra_installed, "geometries": ["parallel_2d", "cone_3d"], "cuda_available": cuda and astra_cuda, "device": "cpu/cuda"},
+                  "runnable": None if astra_installed else False, "geometries": ["parallel_2d", "cone_3d"], "cuda_available": None, "device": "cpu/cuda"},
         "leap": {"implemented": True, "dependency_installed": importlib.util.find_spec("leapctype") is not None,
                  "runnable": importlib.util.find_spec("leapctype") is not None, "geometries": ["parallel_2d"], "reason": "Requires LLNL LEAP"},
     }
@@ -44,14 +39,16 @@ def list_capabilities(data_root=None, *, context=None):
         backend = "astra" if name == "fdk" else "torch"
         record.update(backends=["astra"] if name == "fdk" else ["torch", "astra", "leap"], default_parameters=defaults, implemented=record["build_reachable"],
                       execution_backend=backend, dependency_installed=backends[backend]["dependency_installed"],
-                      runnable=(cuda and astra_cuda) if name == "fdk" else backends[backend]["runnable"])
+                      runnable=None if backends[backend]["dependency_installed"] else False)
+        from inv_framework.algorithm_catalog import describe_execution
+        describe_execution("ct", record, context)
     fidelities = {}
     for record in algorithms:
         for fidelity, requirements in record["metadata"].get("fidelity_requirements", {}).items():
             fidelities.setdefault(fidelity, {})[record["name"]] = requirements
-    return {"fidelities": fidelities, "algorithms": algorithms, "aliases": dict(ALGORITHM_ALIASES),
+    return {"modality": "ct", "fidelities": fidelities, "algorithms": algorithms, "aliases": dict(ALGORITHM_ALIASES),
             "regularizers": regularizer_records(), "backends": backends,
-            "cases": list_ct_cases(data_root=data_root), "default_backend": "torch",
+            "default_backend": "torch",
             "deep_priors": {"dip": "library only; no catalog task builder",
                             "inr": "library only; no catalog task builder",
                             "dps": "library only; requires a configured diffusion model"}}

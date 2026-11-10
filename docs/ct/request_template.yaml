@@ -1,0 +1,27 @@
+# 用户数据配置：二维平行束、线积分输入。与最小 CPU 示例独立。
+# 将本文件复制到自己的任务目录，数据文件放在该目录的 data/ 下。
+# 以下 64 像素、8 角度仅用于展示完整字段；必须按真实采集同步替换。
+modality: ct
+task_type: reconstruction
+algorithm: fbp
+backend: torch
+device: cpu
+inputs:
+  observation:
+    path: data/projections.npy # 有限实数，shape=(B,1,8,64)
+model:
+  geometry:
+    type: parallel_2d
+    domain_shape: [1, 64, 64] # [C,N,N]，不含 batch
+    range_shape: [1, 8, 64]  # [C,V,N]，不含 batch
+    # 弧度；顺序必须与 observation 的 view 轴一致。
+    angles_rad: [0.0, 0.3926990817, 0.7853981634, 1.1780972451, 1.5707963268, 1.9634954085, 2.3561944902, 2.7488935719]
+  measurement:
+    noise_model: gaussian
+    observation_model: gaussian
+    observation_domain: line_integral
+params: {} # 使用所选版本 FBP 的默认参数；该直接法不接受迭代停止策略。
+# 可选参考评价：有匹配真值时整体取消以下注释并填写实际 data_range。
+# evaluation:
+#   reference: {path: data/reference.npy} # shape=(B,1,64,64)，同重建尺度
+#   data_range: 1.0 # 示例值，必须改为评价协议定义的动态范围

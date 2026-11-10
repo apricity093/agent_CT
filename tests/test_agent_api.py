@@ -13,14 +13,14 @@ DENSE = "parallel_2d__ellipses_dense_clean"
 POISSON = "parallel_2d__ellipses_sparse_poisson"
 
 
-def test_discovery_uses_catalog_without_loading_arrays(monkeypatch):
+def test_discovery_without_loading_cases(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("discovery loaded case arrays")
     monkeypatch.setattr(execution, "load_ct_case", forbidden)
     capabilities = list_capabilities()
     json.dumps(capabilities, allow_nan=False)
     assert {r["name"] for r in capabilities["algorithms"]} == set(execution.SOLVER_SPECS)
-    assert "cone_3d/spheres_astra_12" in {r["case_id"] for r in capabilities["cases"]}
+    assert "cases" not in capabilities
     assert capabilities["backends"]["torch"]["geometries"] == ["parallel_2d"]
     assert capabilities["backends"]["leap"]["runnable"] is False
     assert "transmission_poisson_nll" in capabilities["fidelities"]
@@ -95,9 +95,21 @@ def test_fdk_dispatch_uses_backend_gate_without_discovery(monkeypatch):
     assert "PyTorch CUDA" in result.error_message
 
 
-def test_cuda_fdk():
-    if not list_capabilities()["backends"]["astra"]["runnable"]:
-        pytest.skip("ASTRA CUDA and PyTorch CUDA required")
+@pytest.mark.parametrize("cuda_available", ["torch_unavailable", "astra_unavailable", "available"])
+def test_cuda_fdk(monkeypatch, request, cuda_available):
+    import importlib.util
+    # Exercise the installed-but-no-CUDA branch without changing dependencies.
+    if cuda_available == 'torch_unavailable':
+        monkeypatch.setattr(execution.torch.cuda, "is_available", lambda: False)
+    if importlib.util.find_spec("astra") is None:
+        pytest.skip("ASTRA is not installed")
+    if not execution.torch.cuda.is_available():
+        pytest.skip("PyTorch CUDA is unavailable")
+    import astra
+    if cuda_available == "astra_unavailable":
+        monkeypatch.setattr(astra, "use_cuda", lambda: False)
+    if not astra.use_cuda():
+        pytest.skip("ASTRA CUDA is unavailable")
     result = run_ct_task(CTTaskRequest("cone_3d/spheres_astra_12", "fdk", backend="astra"))
     assert result.status == "success", result.error_message
     assert result.reconstruction.shape == (1, 12, 12, 12)

@@ -13,6 +13,8 @@ class MRITaskRequest:
     task_type: str = "reconstruction"
     device: str = "cpu"
     fidelity: str | None = None
+    stopping_policy: dict[str, Any] | None = None
+    problem_constraints: dict[str, Any] | None = None
 
 
 MRITaskResult = ExperimentResult
@@ -23,10 +25,10 @@ def list_capabilities(context=None):
     return planned_capabilities("mri", context=context)
 
 
-def run_mri_task(request: MRITaskRequest | dict) -> MRITaskResult:
+def _run_mri_task(request: MRITaskRequest | dict) -> MRITaskResult:
     import time
     import numpy as np
-    from inv_framework.experiments import read_array, resolve_parameters
+    from inv_framework.experiments import read_array
     from .operators import SenseEncoding
     from .solvers import conjugate_gradient, cs_reconstruct
     if isinstance(request, dict):
@@ -38,7 +40,8 @@ def run_mri_task(request: MRITaskRequest | dict) -> MRITaskResult:
     result = MRITaskResult("failed", "mri", request.algorithm)
     started = time.perf_counter()
     try:
-        params = resolve_parameters("mri", request.algorithm, request.params)
+        from inv_framework.experiments import resolve_execution_parameters
+        params = resolve_execution_parameters("mri", request, result)
         from inv_framework.experiments import resolve_fidelity
         record = next(r for r in list_capabilities()["algorithms"] if r["name"] == request.algorithm)
         fidelity = resolve_fidelity(record, request.fidelity, request.model, request.inputs)
@@ -193,3 +196,10 @@ def run_mri_task(request: MRITaskRequest | dict) -> MRITaskResult:
         result.error = {"code": code, "message": str(error)}
     result.runtime_sec = time.perf_counter()-started
     return result
+
+
+def run_mri_task(request: MRITaskRequest | dict) -> MRITaskResult:
+    from inv_framework.experiments import describe_outputs
+    if isinstance(request, dict):
+        request = MRITaskRequest(**request)
+    return describe_outputs(_run_mri_task(request), request.model)

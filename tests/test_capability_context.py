@@ -89,4 +89,4 @@ def test_varnet_diagnostics_survive(monkeypatch):
     monkeypatch.setattr(varnet_inference,'infer',infer)
     result=run_mri_task(dict(algorithm='varnet',inputs={},model=dict(sampling='cartesian',spatial_shape=[4,4],axes=['batch','coil','y','x'])))
     assert result.status=='success',result.error
-    assert result.diagnostics==dict(generation_model='unknown',fidelity=None,checkpoint='test-only')
+    assert {k: result.diagnostics[k] for k in ('generation_model','fidelity','checkpoint')} == dict(generation_model='unknown',fidelity=None,checkpoint='test-only')

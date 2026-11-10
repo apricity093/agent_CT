@@ -1,5 +1,16 @@
 # Framework-independent experiments
 
+## User data configurations
+
+For your own data, copy an independent annotated configuration and follow its
+field definitions: [CT template](ct/request_template.yaml) / [CT format](ct/data_format.md),
+[MRI template](mri/request_template.yaml) / [MRI format](mri/data_format.md), and
+[deconvolution template](deconvolution/request_template.yaml) / [deconvolution format](deconvolution/data_format.md).
+Supply your own arrays and replace acquisition dimensions and model values together.
+These templates do not depend on the bundled minimal CPU examples. The examples
+provide separate, prefilled small-data instances of the same public request format.
+
+
 See [domain boundaries](#domain-boundaries), [CT data](ct/data_format.md),
 [MRI tasks and data](mri/tasks.md), and [deconvolution tasks and data](deconvolution/tasks.md).
 Numerical code, configurations and tests install independently of Agent SDKs.
@@ -43,7 +54,7 @@ are read by discovery directly. Executable defaults are read from these configur
 MRI and deconvolution request dataclasses contain `algorithm`, `inputs`, `model`,
 `params`, `task_type`, `device`; they have no case/catalog requirement. Each
 exports a domain TaskResult name for the shared `ExperimentResult` dataclass.
-Discovery returns seven MRI and seven deconvolution executable records. VarNet requires a local matching checkpoint; blind methods require task_type=blind_deconvolution and model.kernel_shape.
+Discovery reads every public algorithm from its domain registry/configuration, including shared composition solvers. VarNet requires a local matching checkpoint; blind methods require task_type=blind_deconvolution and model.kernel_shape.
 Calling a planned method returns failed/not_implemented with empty outputs,
 metrics and effective_params; an unknown ID returns invalid_parameters. Executable methods validate external inputs and mathematical parameters at the domain API boundary.
 
@@ -67,6 +78,25 @@ FDK requires both PyTorch CUDA and ASTRA CUDA. ASTRA and LEAP install separately
 See [dependencies and installation](../DEPENDENCIES.md) for all three domains,
 optional extras, backend setup and verification commands.
 
+# Minimal CPU tasks and data contracts
+
+Ready-to-run external inputs, complete configs, commands and measured results:
+[CT FBP](../examples/minimal_cpu/ct/README.md),
+[MRI CG-SENSE](../examples/minimal_cpu/mri/README.md),
+[Poisson RL](../examples/minimal_cpu/deconvolution/README.md).
+Field, axis, unit, precision and evaluation contracts:
+[CT](ct/data_format.md), [MRI](mri/data_format.md),
+[deconvolution](deconvolution/data_format.md).
+
+In unified runner requests, inputs, model, params and evaluation must be mappings
+when present. Explicit null is invalid_request, including fields that may be
+omitted. Omit evaluation to disable reference metrics; omit params or use `{}`
+for defaults. Omitting CT inputs selects the catalog route; external CT requires
+inputs and model. This applies equally to files and mapping requests; it does
+not change nullable fields of direct domain APIs. Writable output directories
+receive failed result.json and CLI exits nonzero for these request errors,
+without an AttributeError traceback.
+
 # CT public task API
 
 `inv_framework.api` exports `CTTaskRequest`, `CTTaskResult`, `list_capabilities`,
@@ -76,9 +106,125 @@ DIP, INR and DPS remain library solvers under `solvers/deep`, outside this task 
 
 ## Discovery and validation
 
-`list_capabilities(data_root=None)` returns algorithms, YAML defaults, parameter
-rules, fidelity requirements, regularizers, backends and catalog records without
-loading projection arrays. Each algorithm lists supported backends. Optional backend dependencies must be installed separately.
+`list_capabilities(context=None)` (keyword-only context for CT) returns algorithms,
+YAML defaults, parameter rules, fidelity requirements, regularizers and backends.
+Algorithm discovery never reads the example case catalog. Each algorithm lists
+supported backends. Optional backend dependencies must be installed separately.
+
+```python
+from inv_framework.capabilities import list_capabilities
+from inv_framework.ct.cases import list_ct_cases
+
+domains = list_capabilities()  # keys: ct, mri, deconvolution
+mri = list_capabilities("mri")  # same result as mri.api.list_capabilities()
+print({domain: len(caps["algorithms"]) for domain, caps in domains.items()})
+cases = list_ct_cases()  # repository example data, explicitly queried
+print([case["case_id"] for case in cases])
+# Custom catalog: list_ct_cases(data_root="/path/to/case-root")
+```
+
+`inv_framework.list_capabilities()` retains its CT meaning. The aggregate entry
+point is explicitly imported from `inv_framework.capabilities`; unknown modalities
+raise `ValueError`. Single-domain queries import only that domain.
+
+**Field change:** CT capability results no longer contain `cases`, and the CT
+algorithm query no longer takes `data_root`. Replace `caps["cases"]` with
+`list_ct_cases(data_root=...)`. Explicit case queries still raise
+`FileNotFoundError` when the catalog is absent. Installed algorithm discovery
+does not require `tests/data`. CT case execution keeps its existing data lookup.
+
+All algorithm records include `modality`, `name`, `task_types`, `input_specs`
+(name, required, axes, dtype and conditional requirements), `outputs`,
+`model_requirements`, `runtime_requirements`, `controls`, `dependencies`, `devices`
+and `weights`. Existing CT `parameter_specs`/`default_parameters` and the other
+domains' `parameter_schema`/`parameters` remain authoritative for parameter types,
+defaults, bounds and choices. Omitted bounds mean no independent bound is declared;
+coupled conditions remain in applicability, objective and runtime requirements.
+MRI calibration exposes sensitivity maps and eigenvalues; GRAPPA and VarNet
+expose reconstruction and k-space. Blind deconvolution exposes reconstruction
+and estimated PSF, with an optional initial PSF and required kernel shape.
+
+`controls.native` describes actual iteration names, threshold names and stopping
+tests. `inner_parameters` describes separate subproblem/final recovery budgets;
+these are not outer iteration aliases. For example CG-SENSE and Richardson–Lucy
+use `max_iter`, while shared FISTA/ADMM/PDHG use `num_iterations`. CG-SENSE tests a
+normal-equation residual; RL tests relative iterate change. Their thresholds are
+not interchangeable.
+
+`controls.unified_entry.field_mappings` is the source for MRI/deconvolution
+execution mapping. `stopping_policy.max_iterations` sets native `max_iter` or
+`num_iterations`; `tolerance` retains the algorithm's criterion described above.
+LSQR/CGLS also expose their named native threshold fields where registered.
+Inner CG, TV prox and final blind recovery budgets remain separate native params.
+Blind budgets apply per pyramid scale; they do not implement threshold stopping.
+Direct methods and fixed VarNet inference reject nonempty stopping policies.
+Unknown fields and unsupported constraints fail explicitly.
+
+MRI complex objects reject real Box constraints. Deconvolution shared
+FISTA/ADMM/PDHG accept `problem_constraints.min_value/max_value` within the solver;
+TV-ADMM accepts `nonnegative`. RL/RL-TV accept only intrinsic `nonnegative=true`.
+Quadratic shared methods, blind methods and direct methods accept no top-level
+physical constraints. Native parameters retain their existing behavior.
+
+MRI/deconvolution precedence is defaults < config params < call-time params <
+explicit top-level policies/constraints. `effective_params` records final values;
+`diagnostics.parameter_overrides` records top-level overrides of explicit native values;
+`call_parameter_overrides` records config values replaced by call-time params.
+`effective_stopping_policy` and `effective_problem_constraints` describe what ran.
+CT retains its existing algorithm-specific control semantics.
+
+`success` means a valid completed execution, independently of `converged`.
+An exhausted budget can return success with converged=false; direct completion
+uses `completed_valid` without claiming threshold convergence. Solver iteration
+counts and stopping reasons are retained.
+
+`output_artifacts` describes every actual output alongside unchanged `outputs`
+keys: path, shape, dtype, axes, representation, units and scale. In-memory paths
+are null. Persisted `outputs` and artifact paths are relative to `result.json`,
+with arrays saved as `.npy`. Output dtype is taken from each array; computation
+precision is separately reported. Unspecified physical units remain unknown or
+arbitrary. RL returns object x in `gain*H(x)+background`, without post-rescaling.
+Nonfinite numerical diagnostics are null in strict JSON failure records.
+
+File-config inputs, evaluation references, `params.checkpoint` and `data_root`
+resolve relative to the configuration file directory, without cwd fallback.
+Mapping-request relative paths and CLI output paths use the calling directory.
+Only declared file fields are resolved; ordinary model strings are unchanged.
+External reference metrics require explicit `evaluation.reference`; the reference
+is used after reconstruction. Catalog CT retains optional dataset evaluation.
+Once a request file has been read, request/execution failures are saved to a
+writable output directory and CLI exits nonzero. Unreadable configs and output
+I/O errors retain their original error.
+
+`implemented` describes implementation status. `dependency_installed` only tests
+module discoverability; conditional dependencies (such as non-Cartesian MRI's
+`torchkbnufft`) are listed separately. `runtime_status.state` is `unavailable`
+when a known prerequisite is false, or `pending` when conditions remain unknown.
+`reasons` lists known blockers and `unresolved_conditions` lists outstanding
+inputs, model, device, weight compatibility and request validation. `runnable`
+is `false` for known blockers and `null` for unverified requests. Discovery does
+not certify runnable array contents. Backend `runnable` describes only backend
+availability, not a complete task; CUDA availability is `null` without probing.
+No query runs a solver, probes hardware or downloads/loads weights.
+
+Domain queries accept optional declared context for cheap prerequisite screening:
+
+```python
+from inv_framework.mri.api import list_capabilities as mri_capabilities
+
+caps = mri_capabilities(context={
+    "available_inputs": ["kspace", "sampling_mask", "sensitivity_maps"],
+    "model": {"sampling": "cartesian", "spatial_shape": [24, 28],
+              "axes": ["batch", "coil", "y", "x"]},
+    "device": "cpu",
+})
+cg = next(r for r in caps["algorithms"] if r["name"] == "cg_sense")
+print(cg["controls"], cg["runtime_status"])
+```
+
+Context is advisory prerequisite screening, not array validation. Absence of
+known blockers still leaves execution-time shape, dtype and coupled-parameter
+checks pending. Recommendations do not change legal execution parameters.
 
 `validate_ct_request(request)` returns resolved mathematical parameters or raises
 `ValueError` for invalid fields, incompatible geometry, data or combinations. It
@@ -146,13 +292,16 @@ solver evidence. History is a list of scalar iteration records, without retained
 images or projection-call accounting. Termination states are `converged`,
 `stalled`, `diverged`, `max_iterations`, `numerical_error`, `invalid_parameters`,
 `completed_valid`, `unavailable`, `cancelled`, `resource_exhausted`.
-An iteration cap is not convergence. Direct FBP/FDK use `completed_valid` with zero
+An iteration cap is not convergence. Direct CT FBP/FDK use `direct_reconstruction_valid` with zero
 iterative steps. Failed solver results preserve actual iterations and available
 partial reconstruction. Failure before a solver returns has no partial image.
 Unexpected implementation exceptions propagate; ordinary request/data errors,
 missing backend, numerical failures and CUDA OOM have structured results.
 
-2D arrays have shape `(B,C,H,W)`; 3D arrays `(B,D,H,W)`, float32. Reconstruction
+2D arrays have shape `(B,C,H,W)`; 3D arrays `(B,D,H,W)`. External torch inputs
+retain float64 when supplied as float64; otherwise CT inputs convert to float32.
+Backend paths and inner computations can differ; read the actual output dtype
+and computation_precision diagnostics. Reconstruction
 values are not display-normalized. New ellipses use data range 0.02. Image metrics
 use original values and the case's declared data range (or explicit constraint).
 3D PSNR/RMSE cover the volume; SSIM averages axial 2D slices. `orthogonal_slices`

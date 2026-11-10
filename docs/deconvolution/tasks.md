@@ -2,7 +2,7 @@
 
 Primary showcase/quality inputs: [standard public-image benchmarks](../public_benchmarks.md)
 with Levin09 and ideal Airy PSFs. Run tools/run_public_benchmarks.py.
-The final algorithm/input mapping is in ../imaging_catalog.md.
+The algorithm/input mapping is in [public benchmarks](../public_benchmarks.md#deconvolution).
 
 DeconvolutionTaskRequest and run_deconvolution_task accept external arrays/files.
 wiener_hunt and richardson_lucy execute reconstruction without a catalog or truth.

@@ -35,10 +35,11 @@ def planned_capabilities(domain, context=None):
     records = [yaml.safe_load(item.read_text(encoding="utf-8"))
                for item in sorted(directory.iterdir(), key=lambda item: item.name)
                if item.name.endswith(".yaml")]
-    from inv_framework.algorithm_catalog import describe_algorithm, resolve_recommendations
+    from inv_framework.algorithm_catalog import describe_algorithm, resolve_recommendations, describe_execution
     for record in records:
         record.update(describe_algorithm(domain, record))
         resolve_recommendations(domain, record, context)
+        describe_execution(domain, record, context)
     return {"modality": domain,
             "algorithms": [r for r in records if r["implementation_status"] == "implemented"],
             "planned_algorithms": [r for r in records if r["implementation_status"] != "implemented"]}
@@ -135,3 +136,103 @@ class ExperimentResult:
     outputs: dict[str, Any] = field(default_factory=dict)
     diagnostics: dict[str, Any] = field(default_factory=dict)
     error: dict[str, str] | None = None
+    output_artifacts: dict[str, Any] = field(default_factory=dict)
+
+
+def execution_controls(domain, algorithm, defaults):
+    """Supported top-level fields mapped to existing outer algorithm parameters."""
+    policy = {}
+    budget = 'num_iterations' if 'num_iterations' in defaults else 'max_iter' if 'max_iter' in defaults else None
+    if budget:
+        policy['max_iterations'] = budget
+    if 'tolerance' in defaults:
+        policy['tolerance'] = 'tolerance'
+    # LSQR's two native thresholds retain their distinct names.
+    for key in ('atol', 'btol', 'tol'):
+        if key in defaults:
+            policy[key] = key
+    constraints = {}
+    if domain == 'deconvolution':
+        if algorithm in ('fista', 'admm', 'pdhg'):
+            constraints = dict(min_value='min_value', max_value='max_value')
+        elif algorithm == 'tv_admm':
+            constraints = dict(nonnegative='nonnegative')
+        elif algorithm in ('richardson_lucy', 'rl_tv'):
+            constraints = dict(nonnegative=None)  # intrinsic, cannot be disabled
+    return dict(stopping_policy=policy, problem_constraints=constraints)
+
+
+def resolve_execution_parameters(domain, request, result):
+    record = next((r for r in planned_capabilities(domain)['algorithms'] if r['name'] == request.algorithm), None)
+    if record is None:
+        return resolve_parameters(domain, request.algorithm, request.params)
+    mappings = execution_controls(domain, request.algorithm, record['parameters'])
+    supplied = dict(request.params)
+    overrides = {}
+    for group, mapping in mappings.items():
+        values = getattr(request, group, None)
+        if values is not None and not isinstance(values, dict):
+            raise ValueError(f'{group} must be a mapping')
+        values = values or {}
+        unknown = set(values) - mapping.keys()
+        if unknown:
+            raise ValueError(f'{request.algorithm}: unsupported {group} fields: {sorted(unknown)}')
+        for key, value in values.items():
+            target = mapping[key]
+            if target is None:
+                if value is not True:
+                    raise ValueError('Multiplicative Poisson updates require nonnegative=true')
+                continue
+            if target in supplied and supplied[target] != value:
+                overrides[target] = dict(previous=supplied[target], effective=value, source=group)
+            supplied[target] = value
+    p = resolve_parameters(domain, request.algorithm, supplied)
+    constraints = {key: p[target] if target else True for key, target in mappings['problem_constraints'].items()}
+    if request.algorithm == 'tv_admm' and constraints.get('nonnegative') is None:
+        constraints['nonnegative'] = (request.fidelity == 'poisson_nll' or
+            (request.fidelity is None and request.model.get('noise_model') == 'poisson'))
+        p['nonnegative'] = constraints['nonnegative']
+    if domain == 'mri' and (p.get('min_value') is not None or p.get('max_value') is not None):
+        raise ValueError('Complex MRI does not accept real Box constraints')
+    result.diagnostics.update(effective_stopping_policy={key: p[target] for key, target in mappings['stopping_policy'].items()},
+                              effective_problem_constraints=constraints, parameter_overrides=overrides)
+    return p
+
+
+def describe_outputs(result, model):
+    """Describe actual arrays, including calibration and blind-task auxiliary outputs."""
+    for name, value in result.outputs.items():
+        array = np.asarray(value)
+        if result.modality == 'mri':
+            spatial = ['z','y','x'][-len(model.get('spatial_shape', [1,1])):]
+            axes = (['batch','coil'] + spatial if name in ('kspace','sensitivity_maps')
+                    else ['batch'] + spatial)
+            if len(axes) != array.ndim:
+                axes = [f'axis_{i}' for i in range(array.ndim)]
+            representation = 'complex' if np.iscomplexobj(array) else 'magnitude' if name == 'reconstruction' else 'real'
+            units = 'dimensionless' if name in ('sensitivity_maps','eigenvalues') else 'arbitrary; physical units unspecified'
+            scale = 'native FFT/model scale; no intensity rescaling'
+        elif result.modality == 'deconvolution':
+            axes = ['kernel_y','kernel_x'] if name == 'psf' else model.get('axes', [])
+            representation = 'real'
+            units = 'dimensionless' if name == 'psf' else 'unknown; object intensity in declared observation model'
+            scale = 'unit-sum PSF' if name == 'psf' else 'object x in gain*H(x)+background; no post-rescaling'
+        else:
+            axes = ['batch','z','y','x'] if array.ndim == 4 and (model.get('geometry',{}).get('type') == 'cone_3d' or result.diagnostics.get('dimension') == 3) else ['batch','channel','y','x']
+            representation, units, scale = 'real', 'unknown; attenuation model units unspecified', 'native reconstruction scale'
+        if len(axes) != array.ndim:
+            axes = [f'axis_{i}' for i in range(array.ndim)]
+        result.output_artifacts[name] = dict(path=None, shape=list(array.shape), dtype=str(array.dtype),
+            axes=axes, representation=representation, units=units, scale=scale)
+    if result.modality != 'ct' and result.outputs:
+        # Native NumPy paths promote to double; shared solvers explicitly use double tensors.
+        result.diagnostics.setdefault('computation_precision',
+            result.diagnostics.get('compute_dtype', 'float32' if result.algorithm == 'varnet' else
+                'complex128' if result.modality == 'mri' else 'float64'))
+    result.diagnostics['output_dtypes'] = {k: v['dtype'] for k,v in result.output_artifacts.items()}
+    if any(not np.isfinite(a).all() for a in result.outputs.values()):
+        result.status = 'failed'
+        result.converged = False
+        result.stopping_reason = 'numerical_error'
+        result.error = dict(code='numerical_error', message='Nonfinite output')
+    return result

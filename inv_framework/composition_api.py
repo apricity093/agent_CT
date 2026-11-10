@@ -2,7 +2,7 @@
 import time
 import numpy as np
 import torch
-from inv_framework.experiments import ExperimentResult, read_array, resolve_parameters, resolve_fidelity
+from inv_framework.experiments import ExperimentResult, read_array, resolve_fidelity
 from inv_framework.solvers.composition import CompositeSolver, make_regularizer
 from inv_framework.core.fidelity import QuadraticFidelity
 from inv_framework.core.imaging_operators import CartesianSense, KnownConvolution
@@ -12,7 +12,8 @@ def run_composition(request, domain):
     started=time.perf_counter(); result=ExperimentResult('failed',domain,request.algorithm)
     try:
         from inv_framework.experiments import planned_capabilities
-        p=resolve_parameters(domain,request.algorithm,request.params)
+        from inv_framework.experiments import resolve_execution_parameters
+        p=resolve_execution_parameters(domain,request,result)
         record=next(r for r in planned_capabilities(domain)['algorithms'] if r['name']==request.algorithm)
         f=resolve_fidelity(record,request.fidelity,request.model,request.inputs)
         if request.device!='cpu' or request.task_type!='reconstruction':
@@ -66,13 +67,18 @@ def run_composition(request, domain):
         solved=solver.solve_detailed(torch.as_tensor(y),operator,x_init=torch.as_tensor(initial,dtype=torch.as_tensor(y).dtype))
         x=solved.reconstruction.cpu().numpy()
         result.outputs={'reconstruction':x if domain=='mri' else x[0]}
+        for key in ('step_size','tau','sigma','rho'):
+            if key in p and solved.metadata.get(key) is not None:
+                p[key] = solved.metadata[key]
         result.effective_params=p;result.iterations=solved.actual_iterations
         result.stopping_reason=solved.stopping_reason;result.converged=solved.status=='converged'
-        result.status='success' if solved.status not in ('numerical_error','invalid_parameters','cancelled') and np.isfinite(x).all() else 'failed'
-        result.diagnostics=dict(solved.metadata,convergence_status=solved.status,objective=solved.final_objective,
+        result.status='success' if solved.status not in ('numerical_error','invalid_parameters','cancelled','diverged','resource_exhausted') and np.isfinite(x).all() else 'failed'
+        result.diagnostics.update(dict(solved.metadata,convergence_status=solved.status,objective=solved.final_objective,
             history=[r.to_dict() for r in solved.trajectory],fidelity=f,weights='inverse variance; 0.5 sum W |Ax-y|^2',
             generation_model=model.get('noise_model','unknown'),reconstruction_assumption='linear quadratic',
-            preprocessing='mask kspace' if domain=='mri' else 'none',constraints=dict(min_value=p['min_value'],max_value=p['max_value']))
+            preprocessing='mask kspace' if domain=='mri' else 'none',constraints=dict(min_value=p['min_value'],max_value=p['max_value'])))
+        if result.status == 'failed':
+            result.error=dict(code='numerical_error',message=solved.stopping_reason)
     except (ValueError,KeyError,OSError) as error:
         result.stopping_reason='invalid_parameters';result.error=dict(code='invalid_parameters',message=str(error))
     result.runtime_sec=time.perf_counter()-started

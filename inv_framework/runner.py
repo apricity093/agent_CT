@@ -8,21 +8,30 @@ import yaml
 from inv_framework.experiments import ExperimentResult
 
 
-def _resolve_paths(value, base):
-    if isinstance(value, dict):
-        return {key: str((base / item).resolve()) if key in {"path", "checkpoint"} and isinstance(item, str) and item
-                else _resolve_paths(item, base) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_resolve_paths(item, base) for item in value]
-    return value
+def _resolve_paths(config, base):
+    """Resolve only declared file references; ordinary model strings are untouched."""
+    from copy import deepcopy
+    config = deepcopy(config)
+    def reference(value):
+        if isinstance(value, dict) and isinstance(value.get('path'), str):
+            value['path'] = str((base / value['path']).resolve())
+    for key, value in config.get('inputs', {}).items():
+        if key == 'public_measurement':
+            for item in value.values():
+                reference(item)
+        elif key not in {'geometry', 'measurement', 'data_range'}:
+            reference(value)
+    reference((config.get('evaluation') or {}).get('reference'))
+    checkpoint = config.get('params', {}).get('checkpoint')
+    if checkpoint:
+        config['params']['checkpoint'] = str((base / checkpoint).resolve())
+    if config.get('data_root'):
+        config['data_root'] = str((base / config['data_root']).resolve())
+    return config
 
 
-def run_experiment(config, output_dir=None, *, params=None):
+def _execute(config, *, params=None):
     """Run a mapping or YAML/JSON file. Explicit params override file params."""
-    if isinstance(config, (str, Path)):
-        path = Path(config).resolve()
-        content = path.read_text(encoding="utf-8")
-        config = _resolve_paths(json.loads(content) if path.suffix == ".json" else yaml.safe_load(content), path.parent)
     allowed = {"modality", "algorithm", "task_type", "inputs", "model", "params", "device", "backend", "case_id", "data_root", "evaluation", "stopping_policy", "problem_constraints", "fidelity"}
     if not isinstance(config, dict) or set(config) - allowed:
         raise ValueError("unsupported experiment fields")
@@ -42,6 +51,9 @@ def run_experiment(config, output_dir=None, *, params=None):
             raise ValueError("CT task_type must be reconstruction")
         from inv_framework.ct.api import CTTaskRequest, run_ct_task
         inputs = {**config["inputs"], **config["model"]} if "inputs" in config else None
+        if inputs is not None:
+            inputs.pop("truth", None)
+            inputs.pop("data_range", None)
         evaluation = config.get("evaluation")
         if evaluation and inputs is None:
             raise ValueError("evaluation references require external CT inputs")
@@ -54,7 +66,7 @@ def run_experiment(config, output_dir=None, *, params=None):
             {} if ct.reconstruction is None else {"reconstruction": ct.reconstruction},
             ct.diagnostics, None if ct.error_message is None else
             {"code": ct.reason_code, "message": ct.error_message})
-        if result.status == "success" and evaluation:
+        if result.status == "success" and evaluation and "reference" in evaluation:
             import torch
             from inv_framework.experiments import read_array
             from inv_framework.utils.metrics import ct_image_metrics
@@ -76,10 +88,11 @@ def run_experiment(config, output_dir=None, *, params=None):
         else:
             from inv_framework.deconvolution.api import DeconvolutionTaskRequest as Request, run_deconvolution_task as run
         result = run(Request(config["algorithm"], config.get("inputs", {}), config.get("model", {}),
-            params=effective, task_type=config.get("task_type", "reconstruction"), device=config.get("device", "cpu"), fidelity=config.get("fidelity")))
+            params=effective, task_type=config.get("task_type", "reconstruction"), device=config.get("device", "cpu"), fidelity=config.get("fidelity"),
+            stopping_policy=config.get("stopping_policy"), problem_constraints=config.get("problem_constraints")))
         if config.get("evaluation") and config.get("task_type") == "calibration":
             raise ValueError("Image-reference evaluation applies to reconstruction, not calibration maps")
-        if result.status == "success" and config.get("evaluation"):
+        if result.status == "success" and (config.get("evaluation") or {}).get("reference") is not None:
             from inv_framework.evaluation.array_metrics import evaluate_array
             image = result.outputs["reconstruction"]
             axes = tuple(range(1, image.ndim)) if domain == "mri" else tuple(
@@ -87,17 +100,65 @@ def run_experiment(config, output_dir=None, *, params=None):
             result.metrics = evaluate_array(image, config["evaluation"], spatial_axes=axes, mri=domain == "mri")
     else:
         raise ValueError(f"Unknown modality: {domain}")
+    result.diagnostics["call_parameter_overrides"] = {
+        key: dict(previous=file_params[key], effective=value, source="call_params")
+        for key, value in explicit_params.items() if key in file_params and file_params[key] != value}
+    return result
+
+
+def run_experiment(config, output_dir=None, *, params=None):
+    """Run a mapping or file; file references are relative to its directory.
+
+    Parameter precedence: defaults < config params < call params < top-level controls.
+    Read/write errors retain their original exception. Execution/request failures
+    are structured results and are persisted when an output directory is supplied.
+    """
+    import time
+    from inv_framework.experiments import describe_outputs
+    base = None
+    if isinstance(config, (str, Path)):
+        path = Path(config).resolve()
+        content = path.read_text(encoding='utf-8')
+        config = json.loads(content) if path.suffix == '.json' else yaml.safe_load(content)
+        base = path.parent
+    started = time.perf_counter()
+    try:
+        if isinstance(config, dict):
+            for section in ('inputs', 'model', 'params', 'evaluation'):
+                if section in config and not isinstance(config[section], dict):
+                    raise ValueError(f'{section} must be a mapping')
+            if base is not None:
+                config = _resolve_paths(config, base)
+        result = _execute(config, params=params)
+    except (ValueError, KeyError, TypeError, OSError, NotImplementedError) as error:
+        info = config if isinstance(config, dict) else {}
+        result = ExperimentResult('failed', info.get('modality', 'unknown'), info.get('algorithm', 'unknown'),
+            stopping_reason='invalid_request', error=dict(code='invalid_request', message=str(error)),
+            runtime_sec=time.perf_counter()-started)
+    describe_outputs(result, config.get('model', {}) if isinstance(config, dict) else {})
     if output_dir is not None:
         destination = Path(output_dir)
         destination.mkdir(parents=True, exist_ok=True)
         payload = asdict(result)
-        payload["outputs"] = {}
+        payload['outputs'] = {}
         for name, value in result.outputs.items():
-            path = destination / f"{name}.npy"
+            path = destination / f'{name}.npy'
             np.save(path, value, allow_pickle=False)
-            payload["outputs"][name] = path.name
-        (destination / "result.json").write_text(json.dumps(payload, indent=2, default=_json_scalar, allow_nan=False), encoding="utf-8")
+            payload['outputs'][name] = path.name
+            payload['output_artifacts'][name]['path'] = path.name
+        (destination / 'result.json').write_text(json.dumps(_finite_json(payload), indent=2, default=_json_scalar, allow_nan=False), encoding='utf-8')
     return result
+
+
+def _finite_json(value):
+    """Unavailable numerical diagnostics are null in strict JSON."""
+    if isinstance(value, dict):
+        return {k: _finite_json(v) for k,v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite_json(v) for v in value]
+    if isinstance(value, (float, np.floating)) and not np.isfinite(value):
+        return None
+    return value
 
 
 def _json_scalar(value):

@@ -1,0 +1,27 @@
+# 用户数据配置：二维 Cartesian CG-SENSE。无需最小 CPU 示例输入。
+# 复制到自己的任务目录，按真实数据修改尺寸与文件引用。
+modality: mri
+task_type: reconstruction
+algorithm: cg_sense
+device: cpu
+inputs:
+  kspace: {path: data/kspace.npy} # 复数，shape=(B,C,64,64)
+  sampling_mask: {path: data/mask.npy} # 二值，与 kspace 同 shape，不能省略 coil 轴
+  sensitivity_maps: {path: data/sensitivity.npy} # 复数，shape=(B,C,64,64)
+model:
+  sampling: cartesian
+  axes: [batch, coil, y, x]
+  spatial_shape: [64, 64] # 不含 batch/coil，必须匹配输入
+  fft_norm: ortho
+  fft_centered: true
+params:
+  lam: 0.001 # 完整配置示意值，按信号尺度和任务选择，不是通用最优值
+stopping_policy:
+  max_iterations: 50
+  tolerance: 1.0e-6 # 相对正规方程残差阈值，不是图像误差
+# MRI 复数对象不设置实数 Box 约束。
+# 可选参考评价：需要时整体取消注释，reference 与输出对象同尺度。
+# evaluation:
+#   reference: {path: data/reference.npy} # shape=(B,64,64)
+#   data_range: 1.0 # 必须按评价协议填写
+#   mode: magnitude # 幅值评价；complex 模式见数据规范

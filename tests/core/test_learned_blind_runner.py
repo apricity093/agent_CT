@@ -30,5 +30,10 @@ def test_external_api_cli_without_truth(tmp_path,method):
     assert run.returncode==0,run.stderr
     saved=json.loads((tmp_path/'cli/result.json').read_text())
     assert saved['metrics']=={}
+    assert set(saved['output_artifacts']) == set(result.outputs)
+    for output_name, artifact in saved['output_artifacts'].items():
+        array=np.load(tmp_path/'cli'/artifact['path'])
+        assert artifact['shape']==list(array.shape) and artifact['dtype']==str(array.dtype)
+        assert dict(artifact,path=None)==result.output_artifacts[output_name]
     for name,value in result.outputs.items():
         np.testing.assert_allclose(np.load(tmp_path/'cli'/saved['outputs'][name]),value)

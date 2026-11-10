@@ -4,11 +4,50 @@
 数据准备和开发验证。以下命令均在本仓库根目录执行；在上层 Agent 项目中，
 应先进入 `external/ct-benchlab`。本包可以独立安装，不需要 Iteris、USCT 或 Agent SDK。
 
-## 基础依赖
+## 推荐安装环境
 
-Python 要求为 `>=3.10`。安装声明以 [pyproject.toml](pyproject.toml) 为准；
-下表是声明的版本范围，不代表所有最低版本组合均已验证。可选包还可能提高
-Python 或其他依赖的最低版本，安装时须同时满足其要求。
+本次交付推荐使用 **Python 3.12**。Windows / Python 3.12 的独立环境已验证
+三域能力查询、默认配置读取、公开 CLI、三个 CPU 示例和用户自有输入；
+模块与配置从 site-packages 加载，pip check 通过。
+
+已验证的主要依赖组合如下：
+
+| 包 | 已验证版本 | 该版本声明的 Python 最低要求 |
+| --- | --- | --- |
+| NumPy | 2.5.2 | 3.12 |
+| SciPy | 1.18.0 | 3.12 |
+| PyTorch | 2.5.1 | 3.8 |
+| h5py | 3.16.0 | 3.10 |
+| PyYAML | 6.0.3 | 3.8 |
+| Matplotlib | 3.11.1 | 3.11 |
+
+其中 NumPy 和 SciPy 决定这组依赖不能安装在 Python 3.10/3.11 上。
+上述要求来自对应版本的包元数据，不代表任意更高 Python 版本均已验证。
+
+在 Windows PowerShell 中，从算法库根目录使用已安装的 Python 3.12 创建新环境：
+
+```powershell
+py -3.12 -m venv .venv
+& ./.venv/Scripts/python.exe -m pip install . "numpy==2.5.2" "scipy==1.18.0" "torch==2.5.1" "h5py==3.16.0" "PyYAML==6.0.3" "matplotlib==3.11.1"
+& ./.venv/Scripts/python.exe -m pip check
+```
+
+若未安装 Windows Python Launcher，将 `py -3.12` 替换为 Python 3.12
+解释器的绝对路径。Linux/macOS 可使用 `python3.12` 创建环境和
+`.venv/bin/python` 安装，但这两个平台未纳入本次验收。
+以上命令固定主要依赖，其他传递依赖仍由 pip 正常解析；它不是完整环境锁定。
+
+示例输入和配置保留在 [examples/minimal_cpu](examples/minimal_cpu/)，
+安装与 CPU 验证不依赖测试案例目录、旧 Agent、ASTRA 或下载权重。
+本次安装验证不代表完整 CT 数值、伴随、3D FDK 或 GPU 显存验收通过。
+
+## 基础依赖范围
+
+[pyproject.toml](pyproject.toml) 中的 `requires-python = ">=3.10"` 是包允许解析安装的最低声明，
+不是 Python 3.10/3.11 已通过验收的承诺。该声明配合下表的宽泛依赖范围，
+允许 pip 为不同 Python 选择相容的依赖版本；这些组合并未逐一验证。
+需要采用本次已验证组合时，请使用上文的 Python 3.12 安装命令。
+可选功能还须满足各自依赖与运行时要求。
 
 | 包 | 声明版本 | 用途 |
 | --- | --- | --- |
@@ -20,6 +59,8 @@ Python 或其他依赖的最低版本，安装时须同时满足其要求。
 | `matplotlib` | `>=3.5` | 结果绘图与展示 |
 
 构建依赖为 `setuptools>=68` 和 `wheel`，由 pip 构建流程处理。
+
+以下通用命令只按声明范围解析依赖，不保证得到上文的已验证版本组合：
 
 ```bash
 python -m pip install .

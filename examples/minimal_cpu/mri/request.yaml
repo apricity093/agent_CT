@@ -1,0 +1,37 @@
+modality: mri
+algorithm: cg_sense
+device: cpu
+task_type: reconstruction
+inputs:
+  kspace:
+    path: input.npz
+    key: kspace
+  sampling_mask:
+    path: input.npz
+    key: sampling_mask
+  sensitivity_maps:
+    path: input.npz
+    key: sensitivity_maps
+model:
+  sampling: cartesian
+  axes:
+  - batch
+  - coil
+  - y
+  - x
+  spatial_shape:
+  - 32
+  - 32
+  fft_norm: ortho
+  fft_centered: true
+params:
+  lam: 0.001
+stopping_policy:
+  max_iterations: 50
+  tolerance: 1.0e-06
+evaluation:
+  reference:
+    path: input.npz
+    key: reference
+  data_range: 0.9
+  mode: magnitude

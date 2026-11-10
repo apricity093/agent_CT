@@ -62,17 +62,6 @@ def _validate_fdk_geometry(volume_geometry, projection_geometry) -> None:
         )
 
 
-def _gpu_link(tensor: torch.Tensor):
-    if tensor.ndim != 3 or not tensor.is_cuda or tensor.dtype != torch.float32:
-        raise ValueError("ASTRA GPU linking requires a contiguous 3D CUDA float32 tensor.")
-    if not tensor.is_contiguous():
-        raise ValueError("ASTRA GPU linking requires contiguous tensor storage.")
-    z, y, x = (int(size) for size in tensor.shape)
-    return _astra_backend.astra.data3d.GPULink(
-        tensor.data_ptr(), x, y, z, x * tensor.element_size()
-    )
-
-
 class _ASTRAFDKForwardFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, volume, operator):
@@ -100,9 +89,8 @@ class ASTRAFDKOperator3D(ASTRAOperator3D):
 
     Only ASTRA's regular circular ``cone`` geometry with cubic voxels is
     accepted.  Each input must be batched as ``(B, detector_rows, angles,
-    detector_cols)``.  CUDA float32 tensors are linked directly to ASTRA;
-    other inputs use ASTRA data objects and are restored to the caller's
-    original device and dtype.
+    detector_cols)``. Projection and adjoint share trilinear ray weights.
+    FDK uses ASTRA-owned data objects and restores the caller's device and dtype.
     """
 
     def close(self):
@@ -123,75 +111,6 @@ class ASTRAFDKOperator3D(ASTRAOperator3D):
         else:
             self.num_angles = len(projection_geometry["Vectors"])
 
-    def _run_projection_one(self, source: torch.Tensor, forward: bool) -> torch.Tensor:
-        astra = _astra_backend.astra
-        volume_id = None
-        projection_id = None
-        algorithm_id = None
-        output = None
-        try:
-            if forward:
-                volume = source
-                projection = torch.zeros(
-                    self.projection_shape, dtype=torch.float32, device=source.device
-                ) if source.is_cuda else None
-            else:
-                projection = source
-                volume = torch.zeros(
-                    self.volume_shape, dtype=torch.float32, device=source.device
-                ) if source.is_cuda else None
-
-            if source.is_cuda:
-                torch.cuda.synchronize(source.device)
-                volume_id = astra.data3d.link(
-                    "-vol", self.volume_geometry, _gpu_link(volume)
-                )
-                projection_id = astra.data3d.link(
-                    "-sino", self.projection_geometry, _gpu_link(projection)
-                )
-                output = projection if forward else volume
-            else:
-                if forward:
-                    volume_id = astra.data3d.create(
-                        "-vol",
-                        self.volume_geometry,
-                        np.ascontiguousarray(source.detach().cpu().numpy(), dtype=np.float32),
-                    )
-                    projection_id = astra.data3d.create(
-                        "-sino", self.projection_geometry, 0.0
-                    )
-                else:
-                    projection_id = astra.data3d.create(
-                        "-sino",
-                        self.projection_geometry,
-                        np.ascontiguousarray(source.detach().cpu().numpy(), dtype=np.float32),
-                    )
-                    volume_id = astra.data3d.create("-vol", self.volume_geometry, 0.0)
-
-            algorithm_type = "FP3D_CUDA" if forward else "BP3D_CUDA"
-            config = astra.astra_dict(algorithm_type)
-            config["ProjectionDataId"] = projection_id
-            if forward:
-                config["VolumeDataId"] = volume_id
-            else:
-                config["ReconstructionDataId"] = volume_id
-            algorithm_id = astra.algorithm.create(config)
-            astra.algorithm.run(algorithm_id)
-
-            if output is not None:
-                torch.cuda.synchronize(source.device)
-                return output
-            output_id = projection_id if forward else volume_id
-            output_array = np.asarray(astra.data3d.get(output_id), dtype=np.float32)
-            return torch.from_numpy(np.ascontiguousarray(output_array))
-        finally:
-            if algorithm_id is not None:
-                astra.algorithm.delete(algorithm_id)
-            if projection_id is not None:
-                astra.data3d.delete(projection_id)
-            if volume_id is not None:
-                astra.data3d.delete(volume_id)
-
     def _apply_projection_algorithm(self, tensor: torch.Tensor, forward: bool) -> torch.Tensor:
         input_shape = self.domain_shape if forward else self.range_shape
         name = "x" if forward else "y"
@@ -205,9 +124,9 @@ class ASTRAFDKOperator3D(ASTRAOperator3D):
         if tensor.shape[0] == 0:
             raise ValueError("ASTRA projection algorithms require a non-empty batch.")
 
-        work = tensor.detach().to(dtype=torch.float32).contiguous()
-        outputs = [self._run_projection_one(work[index], forward) for index in range(tensor.shape[0])]
-        return torch.stack(outputs, dim=0).to(device=tensor.device, dtype=tensor.dtype)
+        from .cone_projector import cone_apply
+        return cone_apply(tensor.detach(), self.volume_geometry,
+                          self.projection_geometry, forward)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return _ASTRAFDKForwardFunction.apply(x, self)
@@ -220,28 +139,12 @@ class ASTRAFDKOperator3D(ASTRAOperator3D):
         projection_id = None
         reconstruction_id = None
         algorithm_id = None
-        reconstruction = None
         try:
-            if projection.is_cuda:
-                reconstruction = torch.zeros(
-                    self.volume_shape, dtype=torch.float32, device=projection.device
-                )
-                projection_id = astra.data3d.link(
-                    "-sino", self.projection_geometry, _gpu_link(projection)
-                )
-                reconstruction_id = astra.data3d.link(
-                    "-vol", self.volume_geometry, _gpu_link(reconstruction)
-                )
-            else:
-                projection_array = np.ascontiguousarray(
-                    projection.detach().cpu().numpy(), dtype=np.float32
-                )
-                projection_id = astra.data3d.create(
-                    "-sino", self.projection_geometry, projection_array
-                )
-                reconstruction_id = astra.data3d.create(
-                    "-vol", self.volume_geometry, 0.0
-                )
+            # ASTRA 2.2 GPU-link FDK can vary across identical small inputs.
+            # ASTRA-owned buffers keep native CUDA filtering storage private.
+            projection_array = np.ascontiguousarray(projection.detach().cpu().numpy(), dtype=np.float32)
+            projection_id = astra.data3d.create("-sino", self.projection_geometry, projection_array)
+            reconstruction_id = astra.data3d.create("-vol", self.volume_geometry, 0.0)
 
             config = astra.astra_dict("FDK_CUDA")
             config["ProjectionDataId"] = projection_id
@@ -252,9 +155,6 @@ class ASTRAFDKOperator3D(ASTRAOperator3D):
                 torch.cuda.synchronize(projection.device)
             astra.algorithm.run(algorithm_id)
 
-            if reconstruction is not None:
-                torch.cuda.synchronize(projection.device)
-                return reconstruction
             reconstruction_array = np.asarray(
                 astra.data3d.get(reconstruction_id), dtype=np.float32
             )
@@ -319,9 +219,8 @@ class ASTRAFDKOperator3D(ASTRAOperator3D):
         }
         original_device = y.device
         original_dtype = y.dtype
-        # FDK_CUDA filters linked projection storage in place. Own the working
-        # buffer so the caller's observations remain valid for evaluation.
-        work = y.detach().to(dtype=torch.float32).contiguous().clone()
+        # ASTRA receives private storage; caller observations remain unchanged.
+        work = y.detach().to(dtype=torch.float32).contiguous()
         reconstructions = [self._run_fdk_one(work[index], options) for index in range(y.shape[0])]
         result = torch.stack(reconstructions, dim=0)
         return result.to(device=original_device, dtype=original_dtype)

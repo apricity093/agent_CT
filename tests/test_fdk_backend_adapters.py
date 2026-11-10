@@ -319,7 +319,11 @@ def test_real_astra_cuda_fdk_reconstructs_small_cone_volume():
     phantom = phantom.to(torch.float32).unsqueeze(0).requires_grad_(True)
 
     projection = operator.forward(phantom)
+    original_projection = projection.detach().clone()
     reconstruction = operator.fdk(projection)
+    repeated = operator.fdk(projection)
+    torch.testing.assert_close(projection, original_projection, rtol=0, atol=0)
+    torch.testing.assert_close(repeated, reconstruction, rtol=0, atol=0)
     weights = torch.ones_like(projection) / projection.numel()
     (projection * weights).sum().backward()
     explicit_adjoint = operator.adjoint(weights)

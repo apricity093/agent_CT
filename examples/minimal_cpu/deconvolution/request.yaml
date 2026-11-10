@@ -1,0 +1,35 @@
+modality: deconvolution
+algorithm: richardson_lucy
+device: cpu
+task_type: reconstruction
+inputs:
+  observation:
+    path: input.npz
+    key: observation
+  psf:
+    path: input.npz
+    key: psf
+model:
+  axes:
+  - y
+  - x
+  boundary: periodic
+  psf_origin:
+  - 1
+  - 1
+  noise_model: poisson
+  gain: 30.0
+  background: 0.2
+params:
+  epsilon: 1.0e-12
+  initial_value: 0.5
+stopping_policy:
+  max_iterations: 50
+  tolerance: 0.003
+problem_constraints:
+  nonnegative: true
+evaluation:
+  reference:
+    path: input.npz
+    key: reference
+  data_range: 0.9

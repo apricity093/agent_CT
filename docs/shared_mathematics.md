@@ -42,4 +42,4 @@ Haar 和各向同性 TV 的间隙证书先以组范数上界将当前对偶数�
 
 `solvers/composite.quadratic_composite` 仅用于小规模二次数据项的数值验证，未注册为三域任务能力。其目标是 `0.5||Ax-y||² + sum lambda_j R_j(x) + indicator_C(x)`。采用 x 与全部辅助变量组成的两块 ADMM，各分支固定正 rho；正规系统、阈值 `lambda_j/rho_j`、原始残差和加权伴随对偶残差一致。零权重分支在构造时移除。结果沿用 `SolveResult`，记录目标分解与逐次 CG 精度证据。
 
-公开三域适配、非二次联合目标、七种方法公开调用和 Agent 适配仍按后续阶段实施。这里的数学小问题证据不表示上述能力已交付。
+三域公开任务已提供 ADMM、PDHG、FISTA 和 Landweber、CGLS、LSQR、CG 入口，分别见[可组合求解器](composable_solvers.md)与[二次问题基线](quadratic_baselines.md)。公开 ADMM 支持 TV+Haar 联合正则；保真项、几何和数据条件以[公开组合规则](composition.md)为准，不能由内部二次数值验证推广到任意非二次联合目标。Agent 可通过[任务 API](agent_algorithm_api.md)查询能力并执行任务，算法选择与后续实验调度由调用者负责。

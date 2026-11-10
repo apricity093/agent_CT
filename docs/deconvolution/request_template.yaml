@@ -1,0 +1,29 @@
+# 用户数据配置：已知 PSF 的 Poisson Richardson-Lucy。与最小示例独立。
+# 复制到自己的任务目录，并按真实观测修改 PSF 原点、增益、背景和边界。
+modality: deconvolution
+task_type: reconstruction
+algorithm: richardson_lucy
+device: cpu
+inputs:
+  observation: {path: data/observation.npy} # 非负计数，二维 (H,W)
+  psf: {path: data/psf.npy} # 非负、正和；这里配置假定 3x3 PSF
+model:
+  axes: [y, x]
+  boundary: periodic # 如采用零延拓改为 zero；必须匹配实际建模
+  psf_origin: [1, 1] # 零位移索引，按真实 PSF 修改，不根据最大值推断
+  noise_model: poisson
+  gain: 1.0 # 正数；mean=gain*H(x)+background，填写实际标定值
+  background: 0.0 # 非负期望计数；填写实际背景
+params:
+  epsilon: 1.0e-12
+  initial_value: 0.5 # 正初值，按对象尺度选择
+stopping_policy:
+  max_iterations: 50
+  tolerance: 0.003 # 相对迭代变化，不是恢复质量门槛
+problem_constraints:
+  nonnegative: true # RL 固有约束，不能关闭
+# 输出已经是该模型的对象 x，不统一再次扣背景或除 gain。
+# 可选参考评价：需要时整体取消注释。
+# evaluation:
+#   reference: {path: data/reference.npy} # 与对象 x 同 shape、同尺度
+#   data_range: 1.0 # 必须按评价协议填写

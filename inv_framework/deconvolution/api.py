@@ -13,6 +13,8 @@ class DeconvolutionTaskRequest:
     task_type: str = "reconstruction"
     device: str = "cpu"
     fidelity: str | None = None
+    stopping_policy: dict[str, Any] | None = None
+    problem_constraints: dict[str, Any] | None = None
 
 
 DeconvolutionTaskResult = ExperimentResult
@@ -23,10 +25,10 @@ def list_capabilities(context=None):
     return planned_capabilities("deconvolution", context=context)
 
 
-def run_deconvolution_task(request: DeconvolutionTaskRequest | dict) -> DeconvolutionTaskResult:
+def _run_deconvolution_task(request: DeconvolutionTaskRequest | dict) -> DeconvolutionTaskResult:
     import time
     import numpy as np
-    from inv_framework.experiments import read_array, resolve_parameters
+    from inv_framework.experiments import read_array
     from .operators import Convolution
     from .solvers import wiener_hunt, richardson_lucy
     if isinstance(request, dict):
@@ -38,7 +40,8 @@ def run_deconvolution_task(request: DeconvolutionTaskRequest | dict) -> Deconvol
     result = DeconvolutionTaskResult("failed", "deconvolution", request.algorithm)
     started = time.perf_counter()
     try:
-        params = resolve_parameters("deconvolution", request.algorithm, request.params)
+        from inv_framework.experiments import resolve_execution_parameters
+        params = resolve_execution_parameters("deconvolution", request, result)
         from inv_framework.experiments import resolve_fidelity
         record = next(r for r in list_capabilities()["algorithms"] if r["name"] == request.algorithm)
         fidelity = resolve_fidelity(record, request.fidelity, request.model, request.inputs)
@@ -146,3 +149,10 @@ def run_deconvolution_task(request: DeconvolutionTaskRequest | dict) -> Deconvol
         result.error = {"code": code, "message": str(error)}
     result.runtime_sec = time.perf_counter()-started
     return result
+
+
+def run_deconvolution_task(request: DeconvolutionTaskRequest | dict) -> DeconvolutionTaskResult:
+    from inv_framework.experiments import describe_outputs
+    if isinstance(request, dict):
+        request = DeconvolutionTaskRequest(**request)
+    return describe_outputs(_run_deconvolution_task(request), request.model)
